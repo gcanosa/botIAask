@@ -16,22 +16,25 @@ import (
 
 // Bot represents the IRC bot instance using the ergochat/irc-go library.
 type Bot struct {
-	cfg          *config.Config
-	aiClient     *ai.Client
-	conn         *ircevent.Connection
-	prefix       string
-	cmdName      string
-	adminEnabled bool
+	cfg            *config.Config
+	aiClient       *ai.Client
+	conn           *ircevent.Connection
+	prefix         string
+	cmdName        string
+	adminEnabled   bool
+	startTime      time.Time
+	connectionTime time.Time
 }
 
 // NewBot creates a new IRC bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	return &Bot{
-		cfg:          cfg,
-		aiClient:     aiClient,
-		prefix:       cfg.Bot.CommandPrefix,
-		cmdName:      cfg.Bot.CommandName,
-		adminEnabled: true,
+		cfg:            cfg,
+		aiClient:       aiClient,
+		prefix:         cfg.Bot.CommandPrefix,
+		cmdName:        cfg.Bot.CommandName,
+		adminEnabled:   true,
+		startTime:      time.Now(),
 	}
 }
 
@@ -53,6 +56,7 @@ func (b *Bot) Start() error {
 	// Handle connection established event
 	b.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("Connected to %s! Joining channels...", serverAddr)
+		b.connectionTime = time.Now()
 		for _, channel := range b.cfg.IRC.Channels {
 			b.conn.Join(channel)
 		}
@@ -133,6 +137,21 @@ func (b *Bot) handleCommand(target, message, sender, identity string, e ircmsg.M
 		return
 	}
 
+	// Handle !uptime command
+	if strings.HasPrefix(message, b.prefix+"uptime") {
+		// Calculate uptime durations
+		appUptime := time.Since(b.startTime)
+		sessionUptime := time.Since(b.connectionTime)
+
+		// Format durations
+		appUptimeStr := formatDuration(appUptime)
+		sessionUptimeStr := formatDuration(sessionUptime)
+
+		// Send response to IRC
+		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		return
+	}
+
 	// Handle !ask command
 	if strings.HasPrefix(message, b.prefix+b.cmdName) {
 		if b.cfg.Bot.Debug {
@@ -166,6 +185,23 @@ func (b *Bot) handleCommand(target, message, sender, identity string, e ircmsg.M
 		}
 
 		b.conn.Privmsg(target, formattedResponse)
+	}
+}
+
+// formatDuration formats a time.Duration into a human-readable string.
+func formatDuration(d time.Duration) string {
+	// Calculate hours, minutes, and seconds
+	hours := int64(d.Hours())
+	minutes := int64(d.Minutes()) % 60
+	seconds := int64(d.Seconds()) % 60
+
+	// Format the duration
+	if hours > 0 {
+		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
+	} else if minutes > 0 {
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	} else {
+		return fmt.Sprintf("%ds", seconds)
 	}
 }
 
