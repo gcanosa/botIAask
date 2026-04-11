@@ -33,6 +33,7 @@ type AIConfig struct {
 type BotConfig struct {
 	CommandPrefix string `yaml:"command_prefix"`
 	CommandName   string `yaml:"command_name"`
+	Debug         bool   `yaml:"debug"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.

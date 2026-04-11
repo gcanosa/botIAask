@@ -19,9 +19,11 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	fmt.Printf("Starting Bot with config from: %s\n", configPath)
-	fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
-	fmt.Printf("AI Endpoint: %s\n", cfg.AI.LMStudioURL)
+	if cfg.Bot.Debug {
+		fmt.Printf("Starting Bot with config from: %s\n", configPath)
+		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
+		fmt.Printf("AI Endpoint: %s\n", cfg.AI.LMStudioURL)
+	}
 
 	// Initialize AI Client
 	aiClient := ai.NewClient(cfg.AI.LMStudioURL, cfg.AI.Model)
@@ -30,7 +32,9 @@ func main() {
 	bot := irc.NewBot(cfg, aiClient)
 
 	// Start the bot
-	fmt.Println("Connecting to IRC...")
+	if cfg.Bot.Debug {
+		fmt.Println("Connecting to IRC...")
+	}
 	err = bot.Start()
 	if err != nil {
 		log.Fatalf("Bot error: %v", err)
