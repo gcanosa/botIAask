@@ -9,9 +9,10 @@ import (
 
 // Config represents the application configuration structure.
 type Config struct {
-	IRC IRCConfig `yaml:"irc"`
-	AI  AIConfig  `yaml:"ai"`
-	Bot BotConfig `yaml:"bot"`
+	IRC   IRCConfig   `yaml:"irc"`
+	AI    AIConfig    `yaml:"ai"`
+	Bot   BotConfig   `yaml:"bot"`
+	Admin AdminConfig `yaml:"admin"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -34,6 +35,11 @@ type BotConfig struct {
 	CommandPrefix string `yaml:"command_prefix"`
 	CommandName   string `yaml:"command_name"`
 	Debug         bool   `yaml:"debug"`
+}
+
+// AdminConfig holds settings for administrative users.
+type AdminConfig struct {
+	Admins []string `yaml:"admins"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.

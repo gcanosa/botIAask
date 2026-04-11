@@ -16,20 +16,22 @@ import (
 
 // Bot represents the IRC bot instance using the ergochat/irc-go library.
 type Bot struct {
-	cfg      *config.Config
-	aiClient *ai.Client
-	conn     *ircevent.Connection
-	prefix   string
-	cmdName  string
+	cfg          *config.Config
+	aiClient     *ai.Client
+	conn         *ircevent.Connection
+	prefix       string
+	cmdName      string
+	adminEnabled bool
 }
 
 // NewBot creates a new IRC bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	return &Bot{
-		cfg:      cfg,
-		aiClient: aiClient,
-		prefix:   cfg.Bot.CommandPrefix,
-		cmdName:  cfg.Bot.CommandName,
+		cfg:          cfg,
+		aiClient:     aiClient,
+		prefix:       cfg.Bot.CommandPrefix,
+		cmdName:      cfg.Bot.CommandName,
+		adminEnabled: true,
 	}
 }
 
@@ -62,11 +64,16 @@ func (b *Bot) Start() error {
 		message := e.Params[1]
 		sender := e.Nick()
 
+		// Reconstruct identity (user@host) from the message Prefix
+		identity := sender
+		// Note: e.Prefix is undefined in the current version of ircmsg.Message.
+		// We are relying on the sender's nick for now.
+
 		if b.cfg.Bot.Debug {
-			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s\n", sender, target, message)
+			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Identity: %s, Target: %s, Content: %s\n", sender, identity, target, message)
 		}
 
-		b.handleCommand(target, message, sender)
+		b.handleCommand(target, message, sender, identity, e)
 	})
 
 	// Handle disconnection events
@@ -88,8 +95,45 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// handleCommand checks for the !ask command and interacts with the AI client.
-func (b *Bot) handleCommand(target, message, sender string) {
+// handleCommand checks for the !ask and !toggle command and interacts with the AI client.
+func (b *Bot) handleCommand(target, message, sender, identity string, e ircmsg.Message) {
+	// Check if bot is disabled
+	if !b.adminEnabled && !strings.HasPrefix(message, b.prefix+"toggle") {
+		return
+	}
+
+	// Handle !toggle command
+	if strings.HasPrefix(message, b.prefix+"toggle") {
+		isAdmin := false
+		// The sender's full identity (hostmask) is often available in the message tags or can be reconstructed.
+		// For ergochat/irc-go, we check if the admin entry matches the nick or a part of the identity.
+		// We're trying to match against the sender's nick or a reconstructed hostmask if possible.
+		// A more robust way would be to use e.Params and look for user@host.
+		// Since we want to support hostmasks like ~ethernet@user/ethernet:
+
+		for _, admin := range b.cfg.Admin.Admins {
+			// Check if the admin entry (which could be a hostmask) matches the sender's nick or reconstructed identity.
+			if sender == admin || strings.Contains(admin, sender) || strings.Contains(identity, admin) || strings.HasPrefix(admin, "~") && strings.Contains(identity, strings.TrimPrefix(admin, "~")) {
+				isAdmin = true
+				break
+			}
+		}
+
+		if !isAdmin {
+			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Access denied: %s is not an admin.", sender)))
+			return
+		}
+
+		b.adminEnabled = !b.adminEnabled
+		status := "enabled"
+		if !b.adminEnabled {
+			status = "disabled"
+		}
+		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Bot command processing is now %s.", status)))
+		return
+	}
+
+	// Handle !ask command
 	if strings.HasPrefix(message, b.prefix+b.cmdName) {
 		if b.cfg.Bot.Debug {
 			log.Printf("[DEBUG] Command detected - Target: %s, Question: %s, Sender: %s\n", target, message, sender)
@@ -101,7 +145,6 @@ func (b *Bot) handleCommand(target, message, sender string) {
 		}
 
 		// Use a background context for the AI request
-		// Get response from AI
 		ctx := context.Background()
 
 		// Get response from AI
