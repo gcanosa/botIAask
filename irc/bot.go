@@ -11,6 +11,7 @@ import (
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
+	"github.com/ergochat/irc-go/ircutils"
 )
 
 // Bot represents the IRC bot instance using the ergochat/irc-go library.
@@ -116,23 +117,10 @@ func (b *Bot) handleCommand(target, message, sender string) {
 	}
 }
 
-// sanitize cleans a string for IRC compatibility by removing control characters
-// and collapsing all whitespace into single spaces.
+// sanitize cleans a string for IRC compatibility using ircutils.
+// It removes null bytes, converts newlines to spaces, and ensures UTF-8 safe truncation.
 func (b *Bot) sanitize(s string) string {
-	// Replace newlines and carriage returns with spaces
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-
-	// Remove other control characters (ASCII 0-31 and 127)
-	var builder strings.Builder
-	for _, r := range s {
-		if r >= 32 && r != 127 {
-			builder.WriteRune(r)
-		} else {
-			builder.WriteRune(' ')
-		}
-	}
-
-	// Collapse multiple spaces/tabs into a single space and trim edges
-	return strings.Join(strings.Fields(builder.String()), " ")
+	// Use 512 as the standard IRC message limit (including overhead).
+	// We use a slightly smaller limit for the text content itself to allow for prefixing.
+	return ircutils.SanitizeText(s, 450)
 }
