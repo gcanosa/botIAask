@@ -44,7 +44,7 @@ func (b *Bot) Start() error {
 		User:        b.cfg.IRC.Nickname,
 		RealName:    b.cfg.IRC.Nickname,
 		UseTLS:      b.cfg.IRC.UseSSL,
-		Debug:       true, // Set to true for development/debugging
+		Debug:       b.cfg.Bot.Debug,
 		RequestCaps: []string{"server-time", "message-tags"},
 	}
 
@@ -62,14 +62,18 @@ func (b *Bot) Start() error {
 		message := e.Params[1]
 		sender := e.Nick()
 
-		log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s\n", sender, target, message)
+		if b.cfg.Bot.Debug {
+			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s\n", sender, target, message)
+		}
 
 		b.handleCommand(target, message, sender)
 	})
 
 	// Handle disconnection events
 	b.conn.AddDisconnectCallback(func(e ircmsg.Message) {
-		log.Println("Disconnected from IRC server")
+		if b.cfg.Bot.Debug {
+			log.Println("Disconnected from IRC server")
+		}
 	})
 
 	// Connect and run the event loop
@@ -87,7 +91,9 @@ func (b *Bot) Start() error {
 // handleCommand checks for the !ask command and interacts with the AI client.
 func (b *Bot) handleCommand(target, message, sender string) {
 	if strings.HasPrefix(message, b.prefix+b.cmdName) {
-		log.Printf("[DEBUG] Command detected - Target: %s, Question: %s, Sender: %s\n", target, message, sender)
+		if b.cfg.Bot.Debug {
+			log.Printf("[DEBUG] Command detected - Target: %s, Question: %s, Sender: %s\n", target, message, sender)
+		}
 
 		question := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+b.cmdName))
 		if question == "" {
@@ -95,12 +101,15 @@ func (b *Bot) handleCommand(target, message, sender string) {
 		}
 
 		// Use a background context for the AI request
+		// Get response from AI
 		ctx := context.Background()
 
 		// Get response from AI
 		response, err := b.aiClient.Ask(ctx, question)
 		if err != nil {
-			log.Printf("Error contacting AI: %v\n", err)
+			if b.cfg.Bot.Debug {
+				log.Printf("Error contacting AI: %v\n", err)
+			}
 			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Error contacting AI: %v", err)))
 			return
 		}
