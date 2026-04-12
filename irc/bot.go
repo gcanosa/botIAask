@@ -246,9 +246,12 @@ func (b *Bot) handleCommand(target, message, sender string) {
 		// Format the response to mention the sender and sanitize it for IRC compatibility
 		formattedResponse := b.sanitize(fmt.Sprintf("@%s: %s", sender, response))
 
-		// IRC has a limit on message length (usually 512 chars). We should split if necessary.
-		if len(formattedResponse) > 400 {
-			formattedResponse = formattedResponse[:397] + "..."
+		// Handle long responses by truncating to prevent IRC limits (512 bytes max)
+		if len(formattedResponse) > 500 {
+			// Truncate to prevent exceeding 520-byte IRC limit (including prefixing)
+			if len(formattedResponse) > 520 {
+				formattedResponse = formattedResponse[:517] + "..."
+			}
 		}
 
 		b.conn.Privmsg(target, formattedResponse)
