@@ -32,9 +32,18 @@ type AIConfig struct {
 
 // BotConfig holds settings for the bot's behavior.
 type BotConfig struct {
-	CommandPrefix string `yaml:"command_prefix"`
-	CommandName   string `yaml:"command_name"`
-	Debug         bool   `yaml:"debug"`
+	CommandPrefix string           `yaml:"command_prefix"`
+	CommandName   string           `yaml:"command_name"`
+	Debug         bool             `yaml:"debug"`
+	RateLimiting  *RateLimitConfig `yaml:"rate_limiting,omitempty"`
+}
+
+// RateLimitConfig holds settings for rate limiting.
+type RateLimitConfig struct {
+	Enabled     bool `yaml:"enabled"`
+	Limit       int  `yaml:"limit"`      // commands per minute
+	Burst       int  `yaml:"burst"`      // burst allowance
+	Window      int  `yaml:"window"`     // window in seconds (default 60)
 }
 
 // AdminConfig holds settings for administrative users.
