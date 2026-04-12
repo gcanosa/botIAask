@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"botIAask/ai"
@@ -25,11 +26,100 @@ type Bot struct {
 	adminEnabled   bool
 	startTime      time.Time
 	connectionTime time.Time
+
+	// Rate limiting fields
+	rateLimiter    *RateLimiter
+}
+
+// RateLimiter implements rate limiting for IRC commands
+type RateLimiter struct {
+	mu        sync.RWMutex
+	limits    map[string]*UserRateLimit
+	window    time.Duration
+}
+
+// UserRateLimit tracks rate limits for a specific user in a specific channel
+type UserRateLimit struct {
+	lastReset time.Time
+	counts    map[string]int // channel -> count
+}
+
+// NewRateLimiter creates a new rate limiter with the given window
+func NewRateLimiter(window time.Duration) *RateLimiter {
+	return &RateLimiter{
+		limits: make(map[string]*UserRateLimit),
+		window: window,
+	}
+}
+
+// Allow checks if a command from user in channel is allowed
+func (rl *RateLimiter) Allow(user, channel string, limit, burst int) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	key := user + ":" + channel
+
+	// Initialize or update the user rate limit
+	userLimit, exists := rl.limits[key]
+	if !exists {
+		userLimit = &UserRateLimit{
+			lastReset: now,
+			counts:    make(map[string]int),
+		}
+		rl.limits[key] = userLimit
+	}
+
+	// Check if we need to reset the counter based on window
+	if now.Sub(userLimit.lastReset) >= rl.window {
+		userLimit.lastReset = now
+		for k := range userLimit.counts {
+			delete(userLimit.counts, k)
+		}
+	}
+
+	// Check if the user has exceeded the burst limit
+	currentCount := userLimit.counts[channel]
+	if currentCount >= burst {
+		return false
+	}
+
+	// Check if the user has exceeded the regular limit within the window
+	if currentCount >= limit {
+		return false
+	}
+
+	// Allow the command and increment the count
+	userLimit.counts[channel]++
+	return true
+}
+
+// RemoveExpired removes expired rate limit entries to prevent memory leaks
+func (rl *RateLimiter) RemoveExpired() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	for key, userLimit := range rl.limits {
+		if now.Sub(userLimit.lastReset) >= rl.window*2 {
+			delete(rl.limits, key)
+		}
+	}
+}
+
+// InitializeRateLimiter initializes the rate limiter based on configuration
+func (b *Bot) InitializeRateLimiter() {
+	if b.cfg.Bot.RateLimiting != nil && b.cfg.Bot.RateLimiting.Enabled {
+		window := time.Duration(b.cfg.Bot.RateLimiting.Window) * time.Second
+		b.rateLimiter = NewRateLimiter(window)
+	} else {
+		b.rateLimiter = nil
+	}
 }
 
 // NewBot creates a new IRC bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
-	return &Bot{
+	bot := &Bot{
 		cfg:            cfg,
 		aiClient:       aiClient,
 		prefix:         cfg.Bot.CommandPrefix,
@@ -37,6 +127,11 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		adminEnabled:   true,
 		startTime:      time.Now(),
 	}
+
+	// Initialize rate limiter
+	bot.InitializeRateLimiter()
+
+	return bot
 }
 
 // Start connects to the IRC server and starts the bot event loop.
@@ -69,16 +164,14 @@ func (b *Bot) Start() error {
 		message := e.Params[1]
 		sender := e.Nick()
 
-		// Reconstruct identity (user@host) from the message Prefix
-		identity := sender
 		// Note: e.Prefix is undefined in the current version of ircmsg.Message.
 		// We are relying on the sender's nick for now.
 
 		if b.cfg.Bot.Debug {
-			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Identity: %s, Target: %s, Content: %s\n", sender, identity, target, message)
+			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s", sender, target, message)
 		}
 
-		b.handleCommand(target, message, sender, identity, e)
+		b.handleCommand(target, message, sender)
 	})
 
 	// Handle disconnection events
@@ -101,43 +194,7 @@ func (b *Bot) Start() error {
 }
 
 // handleCommand checks for the !ask and !toggle command and interacts with the AI client.
-func (b *Bot) handleCommand(target, message, sender, identity string, e ircmsg.Message) {
-	// Check if bot is disabled
-	if !b.adminEnabled && !strings.HasPrefix(message, b.prefix+"toggle") {
-		return
-	}
-
-	// Handle !toggle command
-	if strings.HasPrefix(message, b.prefix+"toggle") {
-		isAdmin := false
-		// The sender's full identity (hostmask) is often available in the message tags or can be reconstructed.
-		// For ergochat/irc-go, we check if the admin entry matches the nick or a part of the identity.
-		// We're trying to match against the sender's nick or a reconstructed hostmask if possible.
-		// A more robust way would be to use e.Params and look for user@host.
-		// Since we want to support hostmasks like ~ethernet@user/ethernet:
-
-		for _, admin := range b.cfg.Admin.Admins {
-			// Check if the admin entry (which could be a hostmask) matches the sender's nick or reconstructed identity.
-			if sender == admin || strings.Contains(admin, sender) || strings.Contains(identity, admin) || strings.HasPrefix(admin, "~") && strings.Contains(identity, strings.TrimPrefix(admin, "~")) {
-				isAdmin = true
-				break
-			}
-		}
-
-		if !isAdmin {
-			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Access denied: %s is not an admin.", sender)))
-			return
-		}
-
-		b.adminEnabled = !b.adminEnabled
-		status := "enabled"
-		if !b.adminEnabled {
-			status = "disabled"
-		}
-		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Bot command processing is now %s.", status)))
-		return
-	}
-
+func (b *Bot) handleCommand(target, message, sender string) {
 	// Handle !uptime command
 	if strings.HasPrefix(message, b.prefix+"uptime") {
 		// Calculate uptime durations
@@ -155,6 +212,15 @@ func (b *Bot) handleCommand(target, message, sender, identity string, e ircmsg.M
 
 	// Handle !ask command
 	if strings.HasPrefix(message, b.prefix+b.cmdName) {
+		// Check rate limiting if enabled
+		if b.rateLimiter != nil && !b.rateLimiter.Allow(sender, target, b.cfg.Bot.RateLimiting.Limit, b.cfg.Bot.RateLimiting.Burst) {
+			if b.cfg.Bot.Debug {
+				log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
+			}
+			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
+			return
+		}
+
 		if b.cfg.Bot.Debug {
 			log.Printf("[DEBUG] Command detected - Target: %s, Question: %s, Sender: %s\n", target, message, sender)
 		}
