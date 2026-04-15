@@ -27,109 +27,35 @@ type Bot struct {
 	startTime      time.Time
 	connectionTime time.Time
 
+	// Channel membership tracking: channel -> set of users
+	channelMembers map[string]map[string]struct{}
+	membersMu      sync.RWMutex
+
 	// Rate limiting fields
-	rateLimiter    *RateLimiter
+	rateLimiter *RateLimiter
+
+	// Version tracking
+	version string
 }
 
-// RateLimiter implements rate limiting for IRC commands
-type RateLimiter struct {
-	mu        sync.RWMutex
-	limits    map[string]*UserRateLimit
-	window    time.Duration
-}
-
-// UserRateLimit tracks rate limits for a specific user in a specific channel
-type UserRateLimit struct {
-	lastReset time.Time
-	counts    map[string]int // channel -> count
-}
-
-// NewRateLimiter creates a new rate limiter with the given window
-func NewRateLimiter(window time.Duration) *RateLimiter {
-	return &RateLimiter{
-		limits: make(map[string]*UserRateLimit),
-		window: window,
-	}
-}
-
-// Allow checks if a command from user in channel is allowed
-func (rl *RateLimiter) Allow(user, channel string, limit, burst int) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	key := user + ":" + channel
-
-	// Initialize or update the user rate limit
-	userLimit, exists := rl.limits[key]
-	if !exists {
-		userLimit = &UserRateLimit{
-			lastReset: now,
-			counts:    make(map[string]int),
-		}
-		rl.limits[key] = userLimit
-	}
-
-	// Check if we need to reset the counter based on window
-	if now.Sub(userLimit.lastReset) >= rl.window {
-		userLimit.lastReset = now
-		for k := range userLimit.counts {
-			delete(userLimit.counts, k)
-		}
-	}
-
-	// Check if the user has exceeded the burst limit
-	currentCount := userLimit.counts[channel]
-	if currentCount >= burst {
-		return false
-	}
-
-	// Check if the user has exceeded the regular limit within the window
-	if currentCount >= limit {
-		return false
-	}
-
-	// Allow the command and increment the count
-	userLimit.counts[channel]++
-	return true
-}
-
-// RemoveExpired removes expired rate limit entries to prevent memory leaks
-func (rl *RateLimiter) RemoveExpired() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	for key, userLimit := range rl.limits {
-		if now.Sub(userLimit.lastReset) >= rl.window*2 {
-			delete(rl.limits, key)
-		}
-	}
-}
-
-// InitializeRateLimiter initializes the rate limiter based on configuration
-func (b *Bot) InitializeRateLimiter() {
-	if b.cfg.Bot.RateLimiting != nil && b.cfg.Bot.RateLimiting.Enabled {
-		window := time.Duration(b.cfg.Bot.RateLimiting.Window) * time.Second
-		b.rateLimiter = NewRateLimiter(window)
-	} else {
-		b.rateLimiter = nil
-	}
-}
-
-// NewBot creates a new IRC bot instance.
+// NewBot initializes a new Bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	bot := &Bot{
 		cfg:            cfg,
 		aiClient:       aiClient,
 		prefix:         cfg.Bot.CommandPrefix,
 		cmdName:        cfg.Bot.CommandName,
-		adminEnabled:   true,
 		startTime:      time.Now(),
+		connectionTime: time.Now(),
+		channelMembers: make(map[string]map[string]struct{}),
+		version:        "1.0.0",
 	}
 
 	// Initialize rate limiter
-	bot.InitializeRateLimiter()
+	if cfg.Bot.RateLimiting != nil && cfg.Bot.RateLimiting.Enabled {
+		window := time.Duration(cfg.Bot.RateLimiting.Window) * time.Second
+		bot.rateLimiter = NewRateLimiter(window)
+	}
 
 	return bot
 }
@@ -154,6 +80,9 @@ func (b *Bot) Start() error {
 		log.Printf("Connected to %s! Joining channels...", serverAddr)
 		b.connectionTime = time.Now()
 		for _, channel := range b.cfg.IRC.Channels {
+			if b.cfg.Bot.Debug {
+				log.Printf("[DEBUG] Joining channel: %s", channel)
+			}
 			b.conn.Join(channel)
 		}
 	})
@@ -163,9 +92,6 @@ func (b *Bot) Start() error {
 		target := e.Params[0] // Channel or Nick
 		message := e.Params[1]
 		sender := e.Nick()
-
-		// Note: e.Prefix is undefined in the current version of ircmsg.Message.
-		// We are relying on the sender's nick for now.
 
 		if b.cfg.Bot.Debug {
 			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s", sender, target, message)
@@ -193,20 +119,24 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// handleCommand checks for the !ask and !toggle command and interacts with the AI client.
+// handleCommand checks for the !ask, !uptime, and !spec command and interacts with the AI client.
 func (b *Bot) handleCommand(target, message, sender string) {
 	// Handle !uptime command
 	if strings.HasPrefix(message, b.prefix+"uptime") {
-		// Calculate uptime durations
 		appUptime := time.Since(b.startTime)
 		sessionUptime := time.Since(b.connectionTime)
 
-		// Format durations
 		appUptimeStr := formatDuration(appUptime)
 		sessionUptimeStr := formatDuration(sessionUptime)
 
-		// Send response to IRC
 		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		return
+	}
+
+	// Handle !spec command (Restored)
+	if strings.HasPrefix(message, b.prefix+"spec") {
+		spec := "System Prompt: You are a helpful IRC bot. Keep responses concise and suitable for IRC."
+		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, spec)))
 		return
 	}
 
@@ -276,9 +206,55 @@ func formatDuration(d time.Duration) string {
 }
 
 // sanitize cleans a string for IRC compatibility using ircutils.
-// It removes null bytes, converts newlines to spaces, and ensures UTF-8 safe truncation.
 func (b *Bot) sanitize(s string) string {
 	// Use 512 as the standard IRC message limit (including overhead).
 	// We use a slightly smaller limit for the text content itself to allow for prefixing.
 	return ircutils.SanitizeText(s, 450)
+}
+
+// RateLimiter implements rate limiting for IRC commands
+type RateLimiter struct {
+	mu     sync.RWMutex
+	limits map[string]*UserRateLimit
+	window time.Duration
+}
+
+// UserRateLimit tracks rate limits for a specific user in a specific channel
+type UserRateLimit struct {
+	lastReset time.Time
+	counts    map[string]int // channel -> count
+}
+
+// NewRateLimiter creates a new rate limiter with the given window
+func NewRateLimiter(window time.Duration) *RateLimiter {
+	return &RateLimiter{
+		limits: make(map[string]*UserRateLimit),
+		window: window,
+	}
+}
+
+// Allow checks if a command is allowed under rate limiting rules
+func (rl *RateLimiter) Allow(sender, target string, limit, burst int) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	key := fmt.Sprintf("%s:%s", sender, target)
+	now := time.Now()
+
+	userLimit, exists := rl.limits[key]
+	if !exists {
+		userLimit = &UserRateLimit{
+			lastReset: now,
+			counts:    make(map[string]int),
+		}
+		rl.limits[key] = userLimit
+	}
+
+	if now.Sub(userLimit.lastReset) > rl.window {
+		userLimit.lastReset = now
+		userLimit.counts[target] = 0
+	}
+
+	userLimit.counts[target]++
+	return userLimit.counts[target] <= burst
 }
