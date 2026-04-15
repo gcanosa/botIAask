@@ -13,6 +13,7 @@ type Config struct {
 	AI    AIConfig    `yaml:"ai"`
 	Bot   BotConfig   `yaml:"bot"`
 	Admin AdminConfig `yaml:"admin"`
+	Web   WebConfig   `yaml:"web,omitempty"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -40,15 +41,30 @@ type BotConfig struct {
 
 // RateLimitConfig holds settings for rate limiting.
 type RateLimitConfig struct {
-	Enabled     bool `yaml:"enabled"`
-	Limit       int  `yaml:"limit"`      // commands per minute
-	Burst       int  `yaml:"burst"`      // burst allowance
-	Window      int  `yaml:"window"`     // window in seconds (default 60)
+	Enabled bool `yaml:"enabled"`
+	Limit   int  `yaml:"limit"`      // commands per minute
+	Burst   int  `yaml:"burst"`      // allowance
+	Window  int  `yaml:"window"`     // window in seconds (default 60)
 }
 
 // AdminConfig holds settings for administrative users.
 type AdminConfig struct {
 	Admins []string `yaml:"admins"`
+}
+
+// WebConfig holds settings for the web dashboard server.
+type WebConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Port    int      `yaml:"port"`
+	Host    string   `yaml:"host"`
+	Auth    AuthConfig `yaml:"auth,omitempty"`
+}
+
+// AuthConfig holds authentication settings for the web dashboard.
+type AuthConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.

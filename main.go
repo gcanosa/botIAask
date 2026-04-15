@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 
@@ -10,6 +11,10 @@ import (
 )
 
 func main() {
+	// Command-line flag for web server
+	webServer := flag.Bool("web-server", false, "Start the web dashboard server")
+	flag.Parse()
+
 	// Path to the configuration file
 	configPath := "config/config.yaml"
 
@@ -22,7 +27,7 @@ func main() {
 	if cfg.Bot.Debug {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
 		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
-		fmt.Printf("AI Endpoint: %s\n", cfg.AI.LMStudioURL)
+		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
 	}
 
 	// Initialize AI Client
@@ -31,7 +36,12 @@ func main() {
 	// Initialize IRC Bot
 	bot := irc.NewBot(cfg, aiClient)
 
-	// Start the bot
+	// Start the web server if requested or configured
+	if *webServer || cfg.Web.Enabled {
+		go startWebServer(cfg, bot)
+	}
+
+	// Start the IRC bot
 	if cfg.Bot.Debug {
 		fmt.Println("Connecting to IRC...")
 	}
@@ -39,4 +49,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Bot error: %v", err)
 	}
+}
+
+func startWebServer(cfg *config.Config, bot *irc.Bot) {
+	// TODO: Implement the web server logic here
+	// This will be implemented in subsequent steps
+	log.Println("Web server would start here")
 }
