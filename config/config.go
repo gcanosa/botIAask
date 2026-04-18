@@ -9,11 +9,13 @@ import (
 
 // Config represents the application configuration structure.
 type Config struct {
-	IRC   IRCConfig   `yaml:"irc"`
-	AI    AIConfig    `yaml:"ai"`
-	Bot   BotConfig   `yaml:"bot"`
-	Admin AdminConfig `yaml:"admin"`
-	Web   WebConfig   `yaml:"web,omitempty"`
+	IRC       IRCConfig       `yaml:"irc"`
+	AI        AIConfig        `yaml:"ai"`
+	Bot       BotConfig       `yaml:"bot"`
+	Admin     AdminConfig     `yaml:"admin"`
+	Web       WebConfig       `yaml:"web,omitempty"`
+	Daemon    DaemonConfig    `yaml:"daemon,omitempty"`
+	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -50,6 +52,12 @@ type RateLimitConfig struct {
 // AdminConfig holds settings for administrative users.
 type AdminConfig struct {
 	Admins []string `yaml:"admins"`
+}
+
+// DaemonConfig holds settings for daemon/background mode.
+type DaemonConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	PIDFile string `yaml:"pid_file"`
 }
 
 // WebConfig holds settings for the web dashboard server.
