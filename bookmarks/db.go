@@ -42,20 +42,45 @@ func NewDatabase(dbPath string) (*Database, error) {
 	return &Database{db: db}, nil
 }
 
-func (d *Database) AddBookmark(url, nickname, hostname string) error {
-	_, err := d.db.Exec("INSERT INTO bookmarks (url, nickname, hostname) VALUES (?, ?, ?)",
+func (d *Database) AddBookmark(url, nickname, hostname string) (int64, error) {
+	res, err := d.db.Exec("INSERT INTO bookmarks (url, nickname, hostname) VALUES (?, ?, ?)",
 		url, nickname, hostname)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
-func (d *Database) GetBookmarksCount() (int, error) {
+func (d *Database) GetBookmarksCount(query string) (int, error) {
 	var count int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM bookmarks").Scan(&count)
+	var err error
+	if query == "" {
+		err = d.db.QueryRow("SELECT COUNT(*) FROM bookmarks").Scan(&count)
+	} else {
+		q := "%" + query + "%"
+		err = d.db.QueryRow(`
+			SELECT COUNT(*) FROM bookmarks 
+			WHERE id = ? OR url LIKE ? OR nickname LIKE ? OR hostname LIKE ?
+		`, query, q, q, q).Scan(&count)
+	}
 	return count, err
 }
 
-func (d *Database) GetBookmarks(limit, offset int) ([]Bookmark, error) {
-	rows, err := d.db.Query("SELECT id, url, nickname, hostname, timestamp FROM bookmarks ORDER BY timestamp DESC LIMIT ? OFFSET ?", limit, offset)
+func (d *Database) GetBookmarks(limit, offset int, query string) ([]Bookmark, error) {
+	var rows *sql.Rows
+	var err error
+
+	if query == "" {
+		rows, err = d.db.Query("SELECT id, url, nickname, hostname, timestamp FROM bookmarks ORDER BY timestamp DESC LIMIT ? OFFSET ?", limit, offset)
+	} else {
+		q := "%" + query + "%"
+		rows, err = d.db.Query(`
+			SELECT id, url, nickname, hostname, timestamp FROM bookmarks 
+			WHERE id = ? OR url LIKE ? OR nickname LIKE ? OR hostname LIKE ?
+			ORDER BY timestamp DESC LIMIT ? OFFSET ?
+		`, query, q, q, q, limit, offset)
+	}
+
 	if err != nil {
 		return nil, err
 	}

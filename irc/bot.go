@@ -574,7 +574,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			hostname = source[idx+1:]
 		}
 
-		err := b.bookmarksDB.AddBookmark(url, nickname, hostname)
+		id, err := b.bookmarksDB.AddBookmark(url, nickname, hostname)
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: URL already bookmarked.", sender))
@@ -584,7 +584,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			return
 		}
 
-		b.sendPrivmsg(target, fmt.Sprintf("@%s: Bookmark added successfully!", sender))
+		prefix := "\x0303,01[BOOKMARK]\x03"
+		b.sendPrivmsg(target, fmt.Sprintf("%s @%s: Bookmark added successfully! (ID: %d)", prefix, sender, id))
 		return
 	}
 
