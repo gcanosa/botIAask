@@ -428,8 +428,9 @@ function toggleBookmarks() {
 
 async function fetchBookmarks(page) {
     bookmarkPage = page;
+    const query = document.getElementById('bookmark-search')?.value || '';
     try {
-        const res = await fetch(`/api/bookmarks?page=${page}`);
+        const res = await fetch(`/api/bookmarks?page=${page}&q=${encodeURIComponent(query)}`);
         if (!res.ok) throw new Error('Bookmarks fetch failed');
         const data = await res.json();
         
@@ -485,6 +486,14 @@ function changeBookmarkPage(delta) {
     if (newPage >= 1 && newPage <= totalBookmarkPages) {
         fetchBookmarks(newPage);
     }
+}
+
+let searchTimeout = null;
+function debounceSearch() {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        fetchBookmarks(1);
+    }, 300);
 }
 
 // Initial load

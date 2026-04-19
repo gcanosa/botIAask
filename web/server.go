@@ -318,6 +318,7 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageStr := r.URL.Query().Get("page")
+	query := r.URL.Query().Get("q")
 	page := 1
 	if p, err := fmt.Sscanf(pageStr, "%d", &page); err == nil && p > 0 {
 		if page < 1 {
@@ -328,13 +329,13 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	limit := 10
 	offset := (page - 1) * limit
 
-	total, err := s.bookmarksDB.GetBookmarksCount()
+	total, err := s.bookmarksDB.GetBookmarksCount(query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	items, err := s.bookmarksDB.GetBookmarks(limit, offset)
+	items, err := s.bookmarksDB.GetBookmarks(limit, offset, query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
