@@ -16,6 +16,7 @@ type Config struct {
 	Web         WebConfig       `yaml:"web,omitempty"`
 	Daemon      DaemonConfig    `yaml:"daemon,omitempty"`
 	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
+	Logger      LoggerConfig    `yaml:"logger,omitempty"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -73,6 +74,11 @@ type AuthConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+// LoggerConfig holds settings for log rotation.
+type LoggerConfig struct {
+	RotationDays int `yaml:"rotation_days"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.
