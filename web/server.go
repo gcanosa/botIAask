@@ -17,6 +17,7 @@ import (
 	"botIAask/config"
 	"botIAask/irc"
 	"botIAask/rss"
+	"botIAask/stats"
 )
 
 //go:embed templates/*
@@ -26,22 +27,24 @@ var templatesFS embed.FS
 type Server struct {
 	cfg        *config.Config
 	bot        *irc.Bot
-	rssFetcher *rss.Fetcher
-	templates  *template.Template
+	rssFetcher   *rss.Fetcher
+	statsTracker *stats.Tracker
+	templates    *template.Template
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/index.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
 
 	return &Server{
-		cfg:        cfg,
-		bot:        bot,
-		rssFetcher: rssFetcher,
-		templates:  tmpl,
+		cfg:          cfg,
+		bot:          bot,
+		rssFetcher:   rssFetcher,
+		statsTracker: statsTracker,
+		templates:    tmpl,
 	}
 }
 
@@ -53,6 +56,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
+	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
+	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -85,6 +90,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_status":   "Online",
 		"ai_requests": s.bot.GetAIRequestCount(),
 		"rss_enabled": s.rssFetcher.IsEnabled(),
+		"stats_enabled": s.statsTracker.IsEnabled(),
 		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
 	}
 
@@ -220,4 +226,53 @@ func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"rss_enabled": enabled})
+}
+
+func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	enabled := !s.statsTracker.IsEnabled()
+	s.statsTracker.SetEnabled(enabled)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"stats_enabled": enabled})
+}
+
+func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Subscribe to stats updates
+	statsChan := s.statsTracker.Subscribe()
+	defer s.statsTracker.Unsubscribe(statsChan)
+
+	// Send initial data if available (could fetch last entries from DB here)
+	// For now, just wait for next tick
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry := <-statsChan:
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+		}
+	}
 }

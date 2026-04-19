@@ -7,6 +7,7 @@
     <!-- Tailwind CSS v4 Play CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style type="text/tailwindcss">
         @theme {
             --color-bg: #0f172a;
@@ -33,6 +34,10 @@
                 <button id="news-toggle" onclick="toggleNews()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full" id="news-indicator"></span>
                     News Fetcher: <span id="news-status-text">OFF</span>
+                </button>
+                <button id="stats-toggle" onclick="toggleStats()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full" id="stats-indicator"></span>
+                    Stats: <span id="stats-status-text">OFF</span>
                 </button>
                 <div id="status-badge" class="px-3 py-1 bg-primary/10 text-primary border border-primary/20 rounded-full text-xs font-bold uppercase tracking-wider">
                     Connecting...
@@ -65,6 +70,21 @@
             <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-4 font-semibold">Active Channels (Click to view logs)</h2>
             <div id="channels" class="flex flex-wrap gap-2">
                 <!-- Channels will be injected here -->
+            </div>
+        </div>
+
+        <!-- Real-time Statistics -->
+        <div id="stats-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">Real-time Activity (Last Hour)</h2>
+                <div class="flex gap-4 text-[10px] mono text-slate-500">
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-primary"></span> Messages</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-accent"></span> AI Requests</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span> Users</span>
+                </div>
+            </div>
+            <div class="h-[250px] w-full">
+                <canvas id="activityChart"></canvas>
             </div>
         </div>
 
