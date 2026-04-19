@@ -14,13 +14,18 @@ async function fetchStatus() {
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
         document.getElementById('ai_model').textContent = data.ai_model || 'Unknown';
         
-        updateNewsStatus(data.rss_enabled);
-        updateStatsStatus(data.stats_enabled);
+        updateNewsStatus(data.rss_enabled, data.is_admin);
+        updateStatsStatus(data.stats_enabled, data.is_admin);
+        updateAdminControls(data.is_admin);
         
         const badge = document.getElementById('status-badge');
         badge.textContent = 'Online';
         badge.classList.remove('bg-primary/10', 'text-primary');
         badge.classList.add('bg-green-500/10', 'text-green-500');
+
+        if (data.needs_password_change && data.is_admin) {
+            showForcePassword();
+        }
 
         const channelsContainer = document.getElementById('channels');
         channelsContainer.innerHTML = '';
@@ -162,10 +167,13 @@ function closeAllLogs() {
     document.getElementById('log-container').classList.add('hidden');
 }
 
-function updateNewsStatus(enabled) {
+function updateNewsStatus(enabled, isAdmin) {
     const btn = document.getElementById('news-toggle');
     const indicator = document.getElementById('news-indicator');
     const text = document.getElementById('news-status-text');
+
+    btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
+    btn.style.opacity = isAdmin ? '1' : '0.7';
 
     if (enabled) {
         btn.classList.remove('border-white/20', 'text-slate-400');
@@ -194,11 +202,14 @@ async function toggleNews() {
 }
 
 // Statistics Logic
-function updateStatsStatus(enabled) {
+function updateStatsStatus(enabled, isAdmin) {
     const btn = document.getElementById('stats-toggle');
     const indicator = document.getElementById('stats-indicator');
     const text = document.getElementById('stats-status-text');
     const container = document.getElementById('stats-container');
+
+    btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
+    btn.style.opacity = isAdmin ? '1' : '0.7';
 
     if (enabled) {
         btn.classList.remove('border-white/20', 'text-slate-400');
@@ -561,8 +572,252 @@ function updateAdminsUI(nicks, chans) {
             `;
             presenceList.appendChild(card);
         });
+    }
+}
+
+function showForcePassword() {
+    const modal = document.getElementById('force-password-modal');
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        document.getElementById('force-password-modal-content').classList.remove('scale-95');
+    }, 10);
+}
+
+async function updatePassword() {
+    const password = document.getElementById('new-password-input').value;
+    const errorDiv = document.getElementById('force-password-error');
+    if (!password) { errorDiv.textContent = "Password cannot be empty"; errorDiv.classList.remove('hidden'); return; }
+
+    try {
+        const res = await fetch('/api/users/password', {
+            method: 'POST',
+            body: JSON.stringify({ password }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (res.ok) {
+            const modal = document.getElementById('force-password-modal');
+            modal.classList.add('opacity-0');
+            setTimeout(() => modal.classList.add('hidden'), 300);
+            fetchStatus();
+        } else {
+            errorDiv.textContent = "Failed to update password";
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (e) {
+        errorDiv.textContent = "Server error";
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+function showResetPassword(id, username) {
+    document.getElementById('reset-user-id').value = id;
+    document.getElementById('reset-username-display').textContent = username;
+    const modal = document.getElementById('reset-password-modal');
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        document.getElementById('reset-password-modal-content').classList.remove('scale-95');
+    }, 10);
+}
+
+function hideResetPassword() {
+    const modal = document.getElementById('reset-password-modal');
+    modal.classList.add('opacity-0');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+async function adminResetPassword() {
+    const id = document.getElementById('reset-user-id').value;
+    const password = document.getElementById('reset-password-input').value;
+    const errorDiv = document.getElementById('reset-password-error');
+
+    try {
+        const res = await fetch('/api/users', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, new_password: password })
+        });
+
+        if (res.ok) {
+            hideResetPassword();
+            alert('Password reset successfully!');
+        } else {
+            errorDiv.textContent = "Failed to reset password";
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (e) {
+        errorDiv.textContent = "Server error";
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+// Authentication & User Management UI
+function updateAdminControls(isAdmin) {
+    const loginBtn = document.getElementById('login-btn');
+    const adminControls = document.getElementById('admin-controls');
+    const usersContainer = document.getElementById('users-container');
+    const adminsContainer = document.getElementById('admins-container');
+
+    if (isAdmin) {
+        loginBtn.classList.add('hidden');
+        adminControls.classList.remove('hidden');
+        adminsContainer.classList.remove('hidden');
     } else {
-        presenceList.innerHTML = '<div class="text-[10px] text-slate-600 italic">No admins currently present in monitored channels.</div>';
+        loginBtn.classList.remove('hidden');
+        adminControls.classList.add('hidden');
+        usersContainer.classList.add('hidden');
+        adminsContainer.classList.add('hidden');
+    }
+}
+
+function showLogin() {
+    const modal = document.getElementById('login-modal');
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        document.getElementById('login-modal-content').classList.remove('scale-95');
+    }, 10);
+}
+
+function hideLogin() {
+    const modal = document.getElementById('login-modal');
+    modal.classList.add('opacity-0');
+    document.getElementById('login-modal-content').classList.add('scale-95');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+    document.getElementById('login-error').classList.add('hidden');
+}
+
+async function login() {
+    const username = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+    const errorDiv = document.getElementById('login-error');
+
+    try {
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            hideLogin();
+            fetchStatus();
+            if (data.needs_password_change) {
+                showForcePassword();
+            }
+        } else {
+            errorDiv.textContent = "Invalid username or password";
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (e) {
+        errorDiv.textContent = "Server error, try again";
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+async function logout() {
+    await fetch('/api/logout', { method: 'POST' });
+    location.reload();
+}
+
+function toggleUsers() {
+    const container = document.getElementById('users-container');
+    const isHidden = container.classList.contains('hidden');
+    
+    if (isHidden) {
+        container.classList.remove('hidden');
+        fetchUsers();
+    } else {
+        container.classList.add('hidden');
+    }
+}
+
+async function fetchUsers() {
+    try {
+        const res = await fetch('/api/users');
+        const users = await res.json();
+        
+        const list = document.getElementById('users-list');
+        list.innerHTML = '';
+        
+        users.forEach(u => {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors';
+            
+            const date = new Date(u.created_at).toLocaleString();
+            
+            tr.innerHTML = `
+                <td class="py-4 text-slate-500">${u.id}</td>
+                <td class="py-4 text-slate-200 font-bold">${u.username}</td>
+                <td class="py-4"><span class="px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded text-[9px] uppercase font-bold">${u.role}</span></td>
+                <td class="py-4 text-slate-500">${date}</td>
+                <td class="py-4 text-right flex justify-end gap-2">
+                    <button onclick="showResetPassword(${u.id}, '${u.username}')" class="text-accent hover:text-accent/80 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Reset Pwd</button>
+                    <button onclick="deleteUser(${u.id})" class="text-red-500 hover:text-red-400 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Delete</button>
+                </td>
+            `;
+            list.appendChild(tr);
+        });
+    } catch (e) {
+        console.error("Failed to fetch users", e);
+    }
+}
+
+function showAddUser() {
+    const modal = document.getElementById('adduser-modal');
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        document.getElementById('adduser-modal-content').classList.remove('scale-95');
+    }, 10);
+}
+
+function hideAddUser() {
+    const modal = document.getElementById('adduser-modal');
+    modal.classList.add('opacity-0');
+    document.getElementById('adduser-modal-content').classList.add('scale-95');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+}
+
+async function addUser() {
+    const username = document.getElementById('add-username').value;
+    const password = document.getElementById('add-password').value;
+    const errorDiv = document.getElementById('add-error');
+
+    try {
+        const res = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+
+        if (res.ok) {
+            hideAddUser();
+            fetchUsers();
+        } else {
+            const txt = await res.text();
+            errorDiv.textContent = txt || "Failed to add user";
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (e) {
+        errorDiv.textContent = "Server error";
+        errorDiv.classList.remove('hidden');
+    }
+}
+
+async function deleteUser(id) {
+    if (!confirm('Are you sure you want to remove this admin?')) return;
+    
+    try {
+        const res = await fetch(`/api/users?id=${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            fetchUsers();
+        }
+    } catch (e) {
+        console.error("Failed to delete user", e);
     }
 }
 
