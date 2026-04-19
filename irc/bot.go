@@ -332,8 +332,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec", 
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off", 
-				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick]", 
+				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		} else if isAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
 		}
@@ -415,6 +415,33 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.conn.QuitMessage = reason
 			b.conn.Quit()
 			return
+		}
+
+		// Operator and Voice management
+		if strings.HasPrefix(target, "#") {
+			parts := strings.Fields(message)
+			if len(parts) > 0 {
+				cmd := strings.ToLower(parts[0])
+				targetNick := sender
+				if len(parts) > 1 {
+					targetNick = parts[1]
+				}
+
+				switch cmd {
+				case b.prefix + "op":
+					b.conn.Send("MODE", target, "+o", targetNick)
+					return
+				case b.prefix + "deop":
+					b.conn.Send("MODE", target, "-o", targetNick)
+					return
+				case b.prefix + "voice":
+					b.conn.Send("MODE", target, "+v", targetNick)
+					return
+				case b.prefix + "devoice":
+					b.conn.Send("MODE", target, "-v", targetNick)
+					return
+				}
+			}
 		}
 	}
 
