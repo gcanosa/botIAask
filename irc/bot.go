@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"botIAask/ai"
+	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -58,6 +59,9 @@ type Bot struct {
 
 	// RSS Database for !news
 	rssDB *rss.Database
+
+	// Bookmarks Database
+	bookmarksDB *bookmarks.Database
 }
 
 // NewBot initializes a new Bot instance.
@@ -87,6 +91,11 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 // SetRSSDatabase sets the RSS database for the bot
 func (b *Bot) SetRSSDatabase(db *rss.Database) {
 	b.rssDB = db
+}
+
+// SetBookmarksDatabase sets the bookmarks database for the bot
+func (b *Bot) SetBookmarksDatabase(db *bookmarks.Database) {
+	b.bookmarksDB = db
 }
 
 // SetStatsTracker sets the stats tracker for the bot
@@ -320,7 +329,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %suptime, %sspec", b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec", 
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -519,6 +529,62 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, msg)
 			time.Sleep(1 * time.Second) // Throttling
 		}
+		return
+	}
+
+	// Handle !bookmark command
+	if strings.HasPrefix(message, b.prefix+"bookmark") {
+		if b.bookmarksDB == nil {
+			b.sendPrivmsg(target, "Bookmarks database not initialized.")
+			return
+		}
+
+		parts := strings.Fields(message)
+		if len(parts) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark <URL> [nickname]", b.prefix))
+			return
+		}
+
+		url := parts[1]
+		nickname := ""
+		if len(parts) > 2 {
+			nickname = parts[2]
+		}
+
+		// Rate limiting: 3 within 10 minutes
+		if !isAdmin {
+			tenMinutesAgo := time.Now().Add(-10 * time.Minute)
+			count, err := b.bookmarksDB.CountUserBookmarksSince(sender, tenMinutesAgo)
+			if err != nil {
+				log.Printf("Error checking bookmark rate limit: %v", err)
+			} else if count >= 3 {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Rate limit reached. You can only add 3 bookmarks every 10 minutes.", sender))
+				return
+			}
+		}
+
+		// Use sender's nickname if none provided
+		if nickname == "" {
+			nickname = sender
+		}
+
+		// Get hostname of the user (from source)
+		hostname := "unknown"
+		if idx := strings.Index(source, "@"); idx != -1 {
+			hostname = source[idx+1:]
+		}
+
+		err := b.bookmarksDB.AddBookmark(url, nickname, hostname)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: URL already bookmarked.", sender))
+			} else {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error adding bookmark: %v", sender, err))
+			}
+			return
+		}
+
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: Bookmark added successfully!", sender))
 		return
 	}
 
