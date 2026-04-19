@@ -172,8 +172,10 @@ function updateNewsStatus(enabled, isAdmin) {
     const indicator = document.getElementById('news-indicator');
     const text = document.getElementById('news-status-text');
 
-    btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
-    btn.style.opacity = isAdmin ? '1' : '0.7';
+    if (isAdmin !== undefined) {
+        btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
+        btn.style.opacity = isAdmin ? '1' : '0.7';
+    }
 
     if (enabled) {
         btn.classList.remove('border-white/20', 'text-slate-400');
@@ -208,8 +210,10 @@ function updateStatsStatus(enabled, isAdmin) {
     const text = document.getElementById('stats-status-text');
     const container = document.getElementById('stats-container');
 
-    btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
-    btn.style.opacity = isAdmin ? '1' : '0.7';
+    if (isAdmin !== undefined) {
+        btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
+        btn.style.opacity = isAdmin ? '1' : '0.7';
+    }
 
     if (enabled) {
         btn.classList.remove('border-white/20', 'text-slate-400');
