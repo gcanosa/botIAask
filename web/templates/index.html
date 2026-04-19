@@ -75,8 +75,17 @@
 
         <!-- Real-time Statistics -->
         <div id="stats-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">Real-time Activity (Last Hour)</h2>
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                <div>
+                    <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold mb-3">Activity Analytics</h2>
+                    <div class="flex flex-wrap gap-2" id="timeframe-selector">
+                        <button onclick="changeTimeframe('1h')" data-time="1h" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn active">1H</button>
+                        <button onclick="changeTimeframe('6h')" data-time="6h" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">6H</button>
+                        <button onclick="changeTimeframe('1d')" data-time="1d" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">1D</button>
+                        <button onclick="changeTimeframe('5d')" data-time="5d" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">5D</button>
+                        <button onclick="changeTimeframe('1m')" data-time="1m" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">1M</button>
+                    </div>
+                </div>
                 <div class="flex gap-4 text-[10px] mono text-slate-500">
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-primary"></span> Messages</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-accent"></span> AI Requests</span>
@@ -90,16 +99,25 @@
 
         <!-- Log Viewer Context -->
         <div id="log-container" class="hidden animate-in fade-in slide-in-from-top-4 duration-500">
-            <div class="bg-card rounded-xl border border-white/5 shadow-lg overflow-hidden flex flex-col h-[500px]">
-                <div class="bg-slate-800/50 px-6 py-3 border-b border-white/5 flex justify-between items-center transition-all">
-                    <div class="flex items-center gap-3">
-                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                        <h3 id="current-channel-title" class="mono font-bold text-primary">#channel</h3>
+            <div class="bg-card rounded-xl border border-white/5 shadow-lg overflow-hidden flex flex-col h-[600px]">
+                <div class="bg-slate-800/50 px-4 py-2 border-b border-white/5 flex flex-col gap-2 transition-all">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center gap-3">
+                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                            <h3 id="current-channel-title" class="mono font-bold text-primary">Log Viewer</h3>
+                        </div>
+                        <button onclick="closeAllLogs()" class="text-slate-500 hover:text-white text-xs transition-colors cursor-pointer uppercase tracking-widest font-bold">Close All</button>
                     </div>
-                    <button onclick="closeLogs()" class="text-slate-400 hover:text-white text-sm transition-colors cursor-pointer">Close</button>
+                    
+                    <!-- Tabs Bar -->
+                    <div id="log-tabs" class="flex flex-wrap gap-1 mt-1">
+                        <!-- Tabs will be injected here -->
+                    </div>
                 </div>
-                <div id="log-output" class="p-6 overflow-y-auto mono text-sm space-y-1 bg-slate-950/30 flex-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                    <!-- Logs will stream here -->
+                
+                <!-- Wrapper for multiple log outputs -->
+                <div id="log-outputs-wrapper" class="flex-1 relative overflow-hidden bg-slate-950/30">
+                    <!-- Individual log output divs will be injected here -->
                 </div>
             </div>
         </div>
