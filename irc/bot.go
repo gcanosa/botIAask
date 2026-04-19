@@ -148,9 +148,9 @@ func (b *Bot) Start() error {
 
 		if strings.HasPrefix(message, "\x01ACTION ") && strings.HasSuffix(message, "\x01") {
 			actionMsg := message[8 : len(message)-1]
-			logger.LogChannelEvent(target, logger.EventAction, sender, actionMsg, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventAction, sender, actionMsg, "")
 		} else {
-			logger.LogChannelEvent(target, logger.EventMessage, sender, message, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, sender, message, "")
 			b.handleCommand(target, message, sender, e.Source)
 		}
 	})
@@ -162,7 +162,7 @@ func (b *Bot) Start() error {
 		target := e.Params[0]
 		message := e.Params[1]
 		sender := e.Nick()
-		logger.LogChannelEvent(target, logger.EventNotice, sender, message, "")
+		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventNotice, sender, message, "")
 	})
 
 	b.conn.AddCallback("JOIN", func(e ircmsg.Message) {
@@ -171,7 +171,7 @@ func (b *Bot) Start() error {
 		}
 		target := e.Params[0] // Channel
 		sender := e.Nick()
-		logger.LogChannelEvent(target, logger.EventJoin, sender, "", "")
+		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventJoin, sender, "", "")
 	})
 
 	b.conn.AddCallback("PART", func(e ircmsg.Message) {
@@ -184,7 +184,7 @@ func (b *Bot) Start() error {
 		if len(e.Params) > 1 {
 			message = e.Params[1]
 		}
-		logger.LogChannelEvent(target, logger.EventPart, sender, message, "")
+		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventPart, sender, message, "")
 	})
 
 	b.conn.AddCallback("KICK", func(e ircmsg.Message) {
@@ -198,7 +198,7 @@ func (b *Bot) Start() error {
 		if len(e.Params) > 2 {
 			message = e.Params[2]
 		}
-		logger.LogChannelEvent(target, logger.EventKick, sender, message, kicked)
+		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventKick, sender, message, kicked)
 	})
 
 	// QUIT and NICK are not channel-specific, we'll log them globally or skip.
@@ -210,7 +210,7 @@ func (b *Bot) Start() error {
 		}
 		// For quits, we log to all configured channels as we might not have a full state tracker
 		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(channel, logger.EventQuit, sender, message, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventQuit, sender, message, "")
 		}
 	})
 
@@ -221,7 +221,7 @@ func (b *Bot) Start() error {
 		sender := e.Nick()
 		newNick := e.Params[0]
 		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(channel, logger.EventNick, sender, newNick, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventNick, sender, newNick, "")
 		}
 	})
 
@@ -369,7 +369,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 // sendPrivmsg wraps conn.Privmsg and also logs the bot's own outbound messages
 func (b *Bot) sendPrivmsg(target, message string) {
 	b.conn.Privmsg(target, message)
-	logger.LogChannelEvent(target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
+	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
 }
 
 // formatDuration formats a time.Duration into a human-readable string.

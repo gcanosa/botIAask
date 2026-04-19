@@ -12,6 +12,7 @@ import (
 	"botIAask/ai"
 	"botIAask/config"
 	"botIAask/irc"
+	"botIAask/logger"
 	"botIAask/web"
 )
 
@@ -127,6 +128,11 @@ func main() {
 
 	// Initialize IRC Bot
 	bot := irc.NewBot(cfg, aiClient)
+
+	// Start Log Rotator
+	if cfg.Logger.RotationDays > 0 {
+		logger.StartLogRotator(cfg.Logger.RotationDays)
+	}
 
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {

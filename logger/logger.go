@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,9 +30,9 @@ const (
 	EventNotice
 )
 
-// LogChannelMessage logs an event to the daily channel log file.
+// LogChannelEvent logs an event to the daily channel log file.
 // Format resembles traditional IRC logs.
-func LogChannelEvent(channel string, eventType EventType, sender, message, target string) {
+func LogChannelEvent(serverName, channel string, eventType EventType, sender, message, target string) {
 	if channel == "" || (channel[0] != '#' && channel[0] != '&') {
 		// Possibly a private message, you can choose to log this or not.
 		// For PMs, we use the "channel" as the target nick.
@@ -49,6 +51,8 @@ func LogChannelEvent(channel string, eventType EventType, sender, message, targe
 	safeChannel := strings.ReplaceAll(channel, "/", "_")
 	if len(safeChannel) > 0 && (safeChannel[0] == '#' || safeChannel[0] == '&') {
 		safeChannel = safeChannel[1:]
+	} else if len(safeChannel) == 0 || (safeChannel[0] != '#' && safeChannel[0] != '&') {
+		safeChannel = serverName
 	}
 
 	filename := fmt.Sprintf("%s_%s.log", safeChannel, dateStr)
@@ -94,4 +98,86 @@ func LogChannelEvent(channel string, eventType EventType, sender, message, targe
 	}
 
 	f.WriteString(logLine)
+}
+
+// StartLogRotator runs in the background and rotates logs periodically.
+func StartLogRotator(rotationDays int) {
+	if rotationDays <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(24 * time.Hour)
+	go func() {
+		rotateLogs(rotationDays) // run once initially
+		for range ticker.C {
+			rotateLogs(rotationDays)
+		}
+	}()
+}
+
+func rotateLogs(days int) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		fmt.Printf("Error reading logs directory for rotation: %v\n", err)
+		return
+	}
+
+	archiveDir := filepath.Join(logsDir, "archive")
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		fmt.Printf("Error creating archive directory: %v\n", err)
+		return
+	}
+
+	threshold := time.Now().AddDate(0, 0, -days)
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.ModTime().Before(threshold) {
+			oldPath := filepath.Join(logsDir, entry.Name())
+			newPath := filepath.Join(archiveDir, entry.Name()+".gz")
+
+			if err := compressAndMoveLog(oldPath, newPath); err != nil {
+				fmt.Printf("Error rotating log %s: %v\n", entry.Name(), err)
+			}
+		}
+	}
+}
+
+func compressAndMoveLog(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+
+	out, err := os.Create(dst)
+	if err != nil {
+		in.Close()
+		return err
+	}
+
+	gz := gzip.NewWriter(out)
+
+	if _, err := io.Copy(gz, in); err != nil {
+		gz.Close()
+		out.Close()
+		in.Close()
+		return err
+	}
+
+	gz.Close()
+	out.Close()
+	in.Close()
+
+	return os.Remove(src)
 }
