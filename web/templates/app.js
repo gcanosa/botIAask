@@ -395,6 +395,98 @@ function stopStatsStream() {
     }
 }
 
+// Bookmarks Logic
+let bookmarkPage = 1;
+let totalBookmarkPages = 1;
+
+function updateBookmarksUI(show) {
+    const btn = document.getElementById('bookmarks-toggle');
+    const indicator = document.getElementById('bookmarks-indicator');
+    const container = document.getElementById('bookmarks-container');
+
+    if (show) {
+        btn.classList.add('border-accent/50', 'text-white', 'bg-accent/5');
+        btn.classList.remove('border-white/10', 'text-slate-400');
+        indicator.classList.add('bg-accent', 'animate-pulse');
+        indicator.classList.remove('bg-slate-500');
+        container.classList.remove('hidden');
+        fetchBookmarks(1);
+    } else {
+        btn.classList.remove('border-accent/50', 'text-white', 'bg-accent/5');
+        btn.classList.add('border-white/10', 'text-slate-400');
+        indicator.classList.remove('bg-accent', 'animate-pulse');
+        indicator.classList.add('bg-slate-500');
+        container.classList.add('hidden');
+    }
+}
+
+function toggleBookmarks() {
+    const container = document.getElementById('bookmarks-container');
+    const isHidden = container.classList.contains('hidden');
+    updateBookmarksUI(isHidden);
+}
+
+async function fetchBookmarks(page) {
+    bookmarkPage = page;
+    try {
+        const res = await fetch(`/api/bookmarks?page=${page}`);
+        if (!res.ok) throw new Error('Bookmarks fetch failed');
+        const data = await res.json();
+        
+        totalBookmarkPages = data.total_pages;
+        document.getElementById('bookmarks-count').textContent = `${data.total_count} items`;
+        
+        const list = document.getElementById('bookmarks-list');
+        list.innerHTML = '';
+        
+        if (data.bookmarks && data.bookmarks.length > 0) {
+            data.bookmarks.forEach(b => {
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors group';
+                
+                const date = new Date(b.timestamp).toLocaleString([], { 
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                });
+
+                // Shorten URL for display if too long
+                let displayUrl = b.url;
+                if (displayUrl.length > 50) {
+                    displayUrl = displayUrl.substring(0, 47) + '...';
+                }
+
+                tr.innerHTML = `
+                    <td class="py-4 text-slate-300 font-bold">${b.nickname}</td>
+                    <td class="py-4 text-slate-500 text-[10px]">${b.hostname}</td>
+                    <td class="py-4">
+                        <a href="${b.url}" target="_blank" class="text-primary hover:text-accent transition-colors flex items-center gap-2">
+                            ${displayUrl}
+                            <svg class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                        </a>
+                    </td>
+                    <td class="py-4 text-right text-slate-500 text-[10px]">${date}</td>
+                `;
+                list.appendChild(tr);
+            });
+        } else {
+            list.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-slate-500 italic">No bookmarks found yet. Use !bookmark &lt;URL&gt; in IRC!</td></tr>';
+        }
+        
+        // Update pagination buttons
+        document.getElementById('prev-page').disabled = bookmarkPage <= 1;
+        document.getElementById('next-page').disabled = bookmarkPage >= totalBookmarkPages;
+        
+    } catch (e) {
+        console.error("Failed to load bookmarks", e);
+    }
+}
+
+function changeBookmarkPage(delta) {
+    const newPage = bookmarkPage + delta;
+    if (newPage >= 1 && newPage <= totalBookmarkPages) {
+        fetchBookmarks(newPage);
+    }
+}
+
 // Initial load
 fetchStatus();
 // Refresh status metadata every 30 seconds

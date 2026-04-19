@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/irc"
 	"botIAask/rss"
@@ -29,11 +30,12 @@ type Server struct {
 	bot        *irc.Bot
 	rssFetcher   *rss.Fetcher
 	statsTracker *stats.Tracker
+	bookmarksDB  *bookmarks.Database
 	templates    *template.Template
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/index.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -44,6 +46,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		bot:          bot,
 		rssFetcher:   rssFetcher,
 		statsTracker: statsTracker,
+		bookmarksDB:  bookmarksDB,
 		templates:    tmpl,
 	}
 }
@@ -59,6 +62,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
+	mux.HandleFunc("/api/bookmarks", s.handleBookmarks)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -305,4 +309,46 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
+	if s.bookmarksDB == nil {
+		http.Error(w, "Bookmarks database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	pageStr := r.URL.Query().Get("page")
+	page := 1
+	if p, err := fmt.Sscanf(pageStr, "%d", &page); err == nil && p > 0 {
+		if page < 1 {
+			page = 1
+		}
+	}
+
+	limit := 10
+	offset := (page - 1) * limit
+
+	total, err := s.bookmarksDB.GetBookmarksCount()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	items, err := s.bookmarksDB.GetBookmarks(limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	response := map[string]interface{}{
+		"bookmarks":   items,
+		"page":        page,
+		"total_pages": totalPages,
+		"total_count": total,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
