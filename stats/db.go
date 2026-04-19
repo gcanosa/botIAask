@@ -80,6 +80,29 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 	return entries, nil
 }
 
+func (d *Database) GetStatsSince(since time.Time) ([]StatEntry, error) {
+	rows, err := d.db.Query(`
+		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts
+		FROM bot_stats
+		WHERE timestamp >= ?
+		ORDER BY timestamp ASC
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []StatEntry
+	for rows.Next() {
+		var e StatEntry
+		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
 func (d *Database) Cleanup(days int) error {
 	if days <= 0 {
 		return nil

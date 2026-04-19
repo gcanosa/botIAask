@@ -159,6 +159,14 @@ func (t *Tracker) snapshot() {
 	t.broadcast(entry)
 }
 
+// GetHistory retrieves historical stats from the database.
+func (t *Tracker) GetHistory(since time.Time) ([]StatEntry, error) {
+	if t.db == nil {
+		return nil, nil
+	}
+	return t.db.GetStatsSince(since)
+}
+
 func (t *Tracker) IsEnabled() bool {
 	t.subMu.RLock()
 	defer t.subMu.RUnlock()

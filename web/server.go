@@ -58,6 +58,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
+	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -239,6 +240,35 @@ func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"stats_enabled": enabled})
+}
+
+func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
+	timeframe := r.URL.Query().Get("timeframe")
+	var since time.Time
+
+	switch timeframe {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour)
+	case "6h":
+		since = time.Now().Add(-6 * time.Hour)
+	case "1d":
+		since = time.Now().AddDate(0, 0, -1)
+	case "5d":
+		since = time.Now().AddDate(0, 0, -5)
+	case "1m":
+		since = time.Now().AddDate(0, -1, 0)
+	default:
+		since = time.Now().Add(-1 * time.Hour)
+	}
+
+	history, err := s.statsTracker.GetHistory(since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
 }
 
 func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {

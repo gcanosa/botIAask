@@ -1,4 +1,5 @@
-let currentLogSource = null;
+let logSources = {};
+let activeLogChannel = null;
 let currentStatsSource = null;
 let activityChart = null;
 
@@ -42,22 +43,41 @@ async function fetchStatus() {
 
 function openLogs(channel) {
     const container = document.getElementById('log-container');
-    const output = document.getElementById('log-output');
-    const title = document.getElementById('current-channel-title');
-    
     container.classList.remove('hidden');
-    title.textContent = channel;
-    output.innerHTML = '<div class="text-slate-500 italic">Initializing stream...</div>';
 
-    // Close existing stream
-    if (currentLogSource) {
-        currentLogSource.close();
+    // If already open, just switch
+    if (logSources[channel]) {
+        switchTab(channel);
+        return;
     }
 
-    // Start new stream
-    currentLogSource = new EventSource(`/api/logs/stream?channel=${encodeURIComponent(channel)}`);
-    
-    currentLogSource.onmessage = (event) => {
+    // Create Tab
+    const tabsContainer = document.getElementById('log-tabs');
+    const tab = document.createElement('div');
+    tab.id = `tab-${channel.replace('#', '')}`;
+    tab.className = 'flex items-center gap-2 px-3 py-1.5 rounded-t-lg bg-slate-900 border border-b-0 border-white/5 cursor-pointer transition-all hover:bg-slate-800';
+    tab.innerHTML = `
+        <span class="mono text-xs font-bold text-slate-400">${channel}</span>
+        <button onclick="event.stopPropagation(); closeTab('${channel}')" class="text-slate-600 hover:text-red-400 transition-colors">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+    `;
+    tab.onclick = () => switchTab(channel);
+    tabsContainer.appendChild(tab);
+
+    // Create Output Div
+    const wrapper = document.getElementById('log-outputs-wrapper');
+    const output = document.createElement('div');
+    output.id = `output-${channel.replace('#', '')}`;
+    output.className = 'absolute inset-0 p-6 overflow-y-auto mono text-sm space-y-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent hidden';
+    output.innerHTML = '<div class="text-slate-500 italic">Initializing stream...</div>';
+    wrapper.appendChild(output);
+
+    // Start Stream
+    const source = new EventSource(`/api/logs/stream?channel=${encodeURIComponent(channel)}`);
+    logSources[channel] = source;
+
+    source.onmessage = (event) => {
         const line = document.createElement('div');
         line.className = 'hover:bg-white/5 px-2 py-0.5 rounded transition-colors';
         
@@ -72,20 +92,69 @@ function openLogs(channel) {
         output.scrollTop = output.scrollHeight;
     };
 
-    currentLogSource.onerror = (err) => {
-        console.error("SSE error", err);
+    source.onerror = (err) => {
+        console.error(`SSE error for ${channel}`, err);
         const errDiv = document.createElement('div');
         errDiv.className = 'text-red-400 text-xs italic bg-red-400/5 p-2 rounded mt-2';
-        errDiv.textContent = "Connection to log stream lost. Retrying...";
+        errDiv.textContent = "Connection lost. Retrying...";
         output.appendChild(errDiv);
     };
+
+    switchTab(channel);
 }
 
-function closeLogs() {
-    if (currentLogSource) {
-        currentLogSource.close();
-        currentLogSource = null;
+function switchTab(channel) {
+    activeLogChannel = channel;
+    
+    // Update Tab Styles
+    document.querySelectorAll('#log-tabs > div').forEach(tab => {
+        const isSelected = tab.id === `tab-${channel.replace('#', '')}`;
+        if (isSelected) {
+            tab.classList.remove('bg-slate-900', 'border-white/5');
+            tab.classList.add('bg-card', 'border-primary/20', 'z-10');
+            tab.querySelector('span').classList.remove('text-slate-400');
+            tab.querySelector('span').classList.add('text-primary');
+        } else {
+            tab.classList.remove('bg-card', 'border-primary/20', 'z-10');
+            tab.classList.add('bg-slate-900', 'border-white/5');
+            tab.querySelector('span').classList.remove('text-primary');
+            tab.querySelector('span').classList.add('text-slate-400');
+        }
+    });
+
+    // Update Output Visibility
+    document.querySelectorAll('#log-outputs-wrapper > div').forEach(div => {
+        const isSelected = div.id === `output-${channel.replace('#', '')}`;
+        div.classList.toggle('hidden', !isSelected);
+    });
+
+    document.getElementById('current-channel-title').textContent = `Logs: ${channel}`;
+}
+
+function closeTab(channel) {
+    if (logSources[channel]) {
+        logSources[channel].close();
+        delete logSources[channel];
     }
+
+    const tab = document.getElementById(`tab-${channel.replace('#', '')}`);
+    const output = document.getElementById(`output-${channel.replace('#', '')}`);
+    
+    if (tab) tab.remove();
+    if (output) output.remove();
+
+    if (activeLogChannel === channel) {
+        const remainingChannels = Object.keys(logSources);
+        if (remainingChannels.length > 0) {
+            switchTab(remainingChannels[remainingChannels.length - 1]);
+        } else {
+            closeAllLogs();
+        }
+    }
+}
+
+function closeAllLogs() {
+    Object.keys(logSources).forEach(closeTab);
     document.getElementById('log-container').classList.add('hidden');
 }
 
@@ -173,7 +242,8 @@ function initChart() {
                     backgroundColor: 'rgba(56, 189, 248, 0.1)',
                     borderWidth: 2,
                     tension: 0.4,
-                    fill: true
+                    fill: true,
+                    pointRadius: 2
                 },
                 {
                     label: 'AI Requests',
@@ -182,7 +252,8 @@ function initChart() {
                     backgroundColor: 'rgba(192, 132, 252, 0.1)',
                     borderWidth: 2,
                     tension: 0.4,
-                    fill: true
+                    fill: true,
+                    pointRadius: 2
                 },
                 {
                     label: 'Users',
@@ -191,7 +262,8 @@ function initChart() {
                     backgroundColor: 'rgba(34, 197, 94, 0.1)',
                     borderWidth: 2,
                     tension: 0.4,
-                    fill: true
+                    fill: true,
+                    pointRadius: 2
                 }
             ]
         },
@@ -202,39 +274,107 @@ function initChart() {
                 y: {
                     beginAtZero: true,
                     grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                    ticks: { color: '#94a3b8', font: { family: 'JetBrains Mono' } }
+                    ticks: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 10 } }
                 },
                 x: {
                     grid: { display: false },
-                    ticks: { color: '#94a3b8', font: { family: 'JetBrains Mono' } }
+                    ticks: { 
+                        color: '#94a3b8', 
+                        font: { family: 'JetBrains Mono', size: 10 },
+                        autoSkip: true,
+                        maxTicksLimit: 10
+                    }
                 }
             },
             plugins: {
-                legend: { display: false }
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e293b',
+                    titleFont: { family: 'Inter' },
+                    bodyFont: { family: 'JetBrains Mono' },
+                    borderColor: 'rgba(255,255,255,0.1)',
+                    borderWidth: 1
+                }
             },
             interaction: {
                 intersect: false,
                 mode: 'index'
-            },
-            animation: {
-                duration: 1000,
-                easing: 'easeOutQuart'
             }
         }
     });
 }
 
+let currentTimeframe = '1h';
+
+async function fetchHistory(timeframe = '1h') {
+    initChart();
+    try {
+        const res = await fetch(`/api/stats/history?timeframe=${timeframe}`);
+        if (!res.ok) throw new Error('History fetch failed');
+        const data = await res.json();
+        
+        activityChart.data.labels = [];
+        activityChart.data.datasets.forEach(ds => ds.data = []);
+        
+        data.forEach(entry => {
+            const time = formatTimestamp(entry.timestamp, timeframe);
+            activityChart.data.labels.push(time);
+            activityChart.data.datasets[0].data.push(entry.messages);
+            activityChart.data.datasets[1].data.push(entry.ai_requests);
+            activityChart.data.datasets[2].data.push(entry.user_count);
+        });
+        
+        activityChart.update();
+    } catch (e) {
+        console.error("Failed to load history", e);
+    }
+}
+
+function formatTimestamp(ts, timeframe) {
+    const date = new Date(ts);
+    if (timeframe === '1h' || timeframe === '6h') {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' });
+}
+
+async function changeTimeframe(tf) {
+    currentTimeframe = tf;
+    
+    // Update UI
+    document.querySelectorAll('.timeframe-btn').forEach(btn => {
+        if (btn.dataset.time === tf) {
+            btn.classList.add('active', 'border-primary/50', 'text-primary', 'bg-primary/5');
+            btn.classList.remove('border-white/5', 'bg-slate-800', 'text-slate-400');
+        } else {
+            btn.classList.remove('active', 'border-primary/50', 'text-primary', 'bg-primary/5');
+            btn.classList.add('border-white/5', 'bg-slate-800', 'text-slate-400');
+        }
+    });
+    
+    await fetchHistory(tf);
+    
+    // Reset stream if viewing last hour, else maybe stop it to avoid confusion?
+    // Actually, keep it running but only add to chart if it's the current timeframe
+}
+
 function startStatsStream() {
     if (currentStatsSource) return;
-    initChart();
+    
+    fetchHistory(currentTimeframe);
     
     currentStatsSource = new EventSource('/api/stats/stream');
     currentStatsSource.onmessage = (event) => {
         const entry = JSON.parse(event.data);
-        const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
-        // Keep last 30 entries
-        if (activityChart.data.labels.length > 30) {
+        // Only append to chart if we are in "recent" view (1h)
+        // Otherwise, it might look weird to add a single point to a 30-day chart
+        if (currentTimeframe !== '1h') return;
+
+        const time = formatTimestamp(entry.timestamp, currentTimeframe);
+        
+        // Match keeping logic (e.g. last 60 points for 1h if interval is 1m)
+        if (activityChart.data.labels.length > 60) {
             activityChart.data.labels.shift();
             activityChart.data.datasets.forEach(ds => ds.data.shift());
         }
@@ -244,7 +384,7 @@ function startStatsStream() {
         activityChart.data.datasets[1].data.push(entry.ai_requests);
         activityChart.data.datasets[2].data.push(entry.user_count);
         
-        activityChart.update();
+        activityChart.update('none'); // Update without animation for smooth streaming
     };
 }
 
