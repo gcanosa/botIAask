@@ -12,6 +12,7 @@ import (
 	"botIAask/config"
 	"botIAask/logger"
 	"botIAask/rss"
+	"botIAask/stats"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -46,6 +47,7 @@ type Bot struct {
 	// Stats
 	aiRequests int
 	statsMu    sync.Mutex
+	tracker    *stats.Tracker
 
 	// Connection status
 	connected bool
@@ -80,6 +82,11 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 // SetRSSDatabase sets the RSS database for the bot
 func (b *Bot) SetRSSDatabase(db *rss.Database) {
 	b.rssDB = db
+}
+
+// SetStatsTracker sets the stats tracker for the bot
+func (b *Bot) SetStatsTracker(t *stats.Tracker) {
+	b.tracker = t
 }
 
 // GetUptime returns the human-readable uptime of the bot.
@@ -180,8 +187,14 @@ func (b *Bot) Start() error {
 		if strings.HasPrefix(message, "\x01ACTION ") && strings.HasSuffix(message, "\x01") {
 			actionMsg := message[8 : len(message)-1]
 			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventAction, sender, actionMsg, "")
+			if b.tracker != nil {
+				b.tracker.LogAction(sender)
+			}
 		} else {
 			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, sender, message, "")
+			if b.tracker != nil {
+				b.tracker.LogMessage(sender)
+			}
 			b.handleCommand(target, message, sender, e.Source)
 		}
 	})
@@ -203,6 +216,9 @@ func (b *Bot) Start() error {
 		target := e.Params[0] // Channel
 		sender := e.Nick()
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventJoin, sender, "", "")
+		if b.tracker != nil {
+			b.tracker.LogJoin()
+		}
 	})
 
 	b.conn.AddCallback("PART", func(e ircmsg.Message) {
@@ -216,6 +232,9 @@ func (b *Bot) Start() error {
 			message = e.Params[1]
 		}
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventPart, sender, message, "")
+		if b.tracker != nil {
+			b.tracker.LogPart()
+		}
 	})
 
 	b.conn.AddCallback("KICK", func(e ircmsg.Message) {
@@ -242,6 +261,9 @@ func (b *Bot) Start() error {
 		// For quits, we log to all configured channels as we might not have a full state tracker
 		for _, channel := range b.cfg.IRC.Channels {
 			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventQuit, sender, message, "")
+		}
+		if b.tracker != nil {
+			b.tracker.LogPart()
 		}
 	})
 
@@ -431,6 +453,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		b.statsMu.Lock()
 		b.aiRequests++
 		b.statsMu.Unlock()
+		if b.tracker != nil {
+			b.tracker.LogAIRequest()
+		}
 
 		// Get response from AI
 		response, err := b.aiClient.Ask(ctx, question)

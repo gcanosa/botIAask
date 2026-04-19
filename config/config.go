@@ -18,6 +18,7 @@ type Config struct {
 	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
 	Logger      LoggerConfig    `yaml:"logger,omitempty"`
 	RSS         RSSConfig       `yaml:"rss,omitempty"`
+	Stats       StatsConfig     `yaml:"stats,omitempty"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -87,6 +88,14 @@ type RSSConfig struct {
 	Enabled         bool     `yaml:"enabled"`
 	IntervalMinutes int      `yaml:"interval_minutes"`
 	Channels        []string `yaml:"channels"`
+}
+
+// StatsConfig holds settings for real-time statistics collection.
+type StatsConfig struct {
+	Enabled       bool `yaml:"enabled"`
+	Interval      int  `yaml:"interval"` // in seconds
+	SaveToDB      bool `yaml:"save_to_db"`
+	RetentionDays int  `yaml:"retention_days"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.
