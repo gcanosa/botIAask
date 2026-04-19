@@ -50,6 +50,10 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !news on/off     - Toggle news in current channel (session only)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !stats           - View bot statistics\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !op [nick]       - Give operator status to self or nick\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !deop [nick]     - Remove operator status from self or nick\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !voice [nick]    - Give voice status to self or nick\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !devoice [nick]  - Remove voice status from self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Disconnect and shutdown bot\n")
 	}
 	flag.Parse()
