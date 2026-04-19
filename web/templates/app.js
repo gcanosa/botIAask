@@ -33,6 +33,10 @@ async function fetchStatus() {
                 channelsContainer.appendChild(btn);
             });
         }
+
+        if (data.admin_nicknames) {
+            updateAdminsUI(data.admin_nicknames, data.channel_admins);
+        }
     } catch (e) {
         console.error("Failed to load status", e);
         const badge = document.getElementById('status-badge');
@@ -264,6 +268,26 @@ function initChart() {
                     tension: 0.4,
                     fill: true,
                     pointRadius: 2
+                },
+                {
+                    label: 'Admin Cmds',
+                    data: [],
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 2
+                },
+                {
+                    label: 'Auth Fails',
+                    data: [],
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 2
                 }
             ]
         },
@@ -322,6 +346,8 @@ async function fetchHistory(timeframe = '1h') {
             activityChart.data.datasets[0].data.push(entry.messages);
             activityChart.data.datasets[1].data.push(entry.ai_requests);
             activityChart.data.datasets[2].data.push(entry.user_count);
+            activityChart.data.datasets[3].data.push(entry.admin_commands || 0);
+            activityChart.data.datasets[4].data.push(entry.failed_auths || 0);
         });
         
         activityChart.update();
@@ -383,6 +409,12 @@ function startStatsStream() {
         activityChart.data.datasets[0].data.push(entry.messages);
         activityChart.data.datasets[1].data.push(entry.ai_requests);
         activityChart.data.datasets[2].data.push(entry.user_count);
+        activityChart.data.datasets[3].data.push(entry.admin_commands || 0);
+        activityChart.data.datasets[4].data.push(entry.failed_auths || 0);
+
+        if (entry.admin_nicknames) {
+            updateAdminsUI(entry.admin_nicknames, entry.channel_admins);
+        }
         
         activityChart.update('none'); // Update without animation for smooth streaming
     };
@@ -494,6 +526,44 @@ function debounceSearch() {
     searchTimeout = setTimeout(() => {
         fetchBookmarks(1);
     }, 300);
+}
+
+// Administrators UI Update
+function updateAdminsUI(nicks, chans) {
+    const container = document.getElementById('admins-container');
+    const globalList = document.getElementById('admins-list');
+    const presenceList = document.getElementById('admins-by-channel');
+
+    if (!nicks || nicks.length === 0) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    container.classList.remove('hidden');
+    globalList.innerHTML = '';
+    nicks.forEach(nick => {
+        const span = document.createElement('span');
+        span.className = 'px-3 py-1 bg-accent/20 text-accent border border-accent/30 rounded-md mono text-[10px] font-bold';
+        span.textContent = nick;
+        globalList.appendChild(span);
+    });
+
+    presenceList.innerHTML = '';
+    if (chans) {
+        Object.entries(chans).forEach(([channel, admins]) => {
+            const card = document.createElement('div');
+            card.className = 'bg-slate-900/50 border border-white/5 rounded-lg p-3';
+            card.innerHTML = `
+                <div class="mono text-xs font-bold text-primary mb-2">${channel}</div>
+                <div class="flex flex-wrap gap-1">
+                    ${admins.map(a => `<span class="text-[9px] px-1.5 py-0.5 bg-slate-800 rounded text-slate-300 border border-white/5">${a}</span>`).join('')}
+                </div>
+            `;
+            presenceList.appendChild(card);
+        });
+    } else {
+        presenceList.innerHTML = '<div class="text-[10px] text-slate-600 italic">No admins currently present in monitored channels.</div>';
+    }
 }
 
 // Initial load

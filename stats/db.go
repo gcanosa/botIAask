@@ -13,13 +13,18 @@ type Database struct {
 }
 
 type StatEntry struct {
-	Timestamp   time.Time `json:"timestamp"`
-	Messages    int       `json:"messages"`
-	Actions     int       `json:"actions"`
-	AIRequests  int       `json:"ai_requests"`
-	UserCount   int       `json:"user_count"`
-	Joins       int       `json:"joins"`
-	Parts       int       `json:"parts"`
+	Timestamp        time.Time `json:"timestamp"`
+	Messages         int       `json:"messages"`
+	Actions          int       `json:"actions"`
+	AIRequests       int       `json:"ai_requests"`
+	UserCount        int       `json:"user_count"`
+	Joins            int       `json:"joins"`
+	Parts            int       `json:"parts"`
+	AdminCommands    int       `json:"admin_commands"`
+	LoggedInAdmins   int       `json:"logged_in_admins"`
+	FailedAuths      int       `json:"failed_auths"`
+	AdminNicknames   []string  `json:"admin_nicknames,omitempty"`
+	ChannelAdmins    map[string][]string `json:"channel_admins,omitempty"`
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
@@ -37,7 +42,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 			ai_requests INTEGER DEFAULT 0,
 			user_count INTEGER DEFAULT 0,
 			joins INTEGER DEFAULT 0,
-			parts INTEGER DEFAULT 0
+			parts INTEGER DEFAULT 0,
+			admin_commands INTEGER DEFAULT 0,
+			logged_in_admins INTEGER DEFAULT 0,
+			failed_auths INTEGER DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_stats_timestamp ON bot_stats(timestamp);
 	`)
@@ -50,15 +58,15 @@ func NewDatabase(dbPath string) (*Database, error) {
 
 func (d *Database) SaveEntry(e StatEntry) error {
 	_, err := d.db.Exec(`
-		INSERT INTO bot_stats (timestamp, messages, actions, ai_requests, user_count, joins, parts)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, e.Timestamp, e.Messages, e.Actions, e.AIRequests, e.UserCount, e.Joins, e.Parts)
+		INSERT INTO bot_stats (timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, e.Timestamp, e.Messages, e.Actions, e.AIRequests, e.UserCount, e.Joins, e.Parts, e.AdminCommands, e.LoggedInAdmins, e.FailedAuths)
 	return err
 }
 
 func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 	rows, err := d.db.Query(`
-		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts
+		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
 		FROM bot_stats
 		ORDER BY timestamp DESC
 		LIMIT ?
@@ -71,7 +79,7 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 	var entries []StatEntry
 	for rows.Next() {
 		var e StatEntry
-		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts); err != nil {
+		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
 		// Prepend to maintain chronological order in the result slice
@@ -82,7 +90,7 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 
 func (d *Database) GetStatsSince(since time.Time) ([]StatEntry, error) {
 	rows, err := d.db.Query(`
-		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts
+		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
 		FROM bot_stats
 		WHERE timestamp >= ?
 		ORDER BY timestamp ASC
@@ -95,7 +103,7 @@ func (d *Database) GetStatsSince(since time.Time) ([]StatEntry, error) {
 	var entries []StatEntry
 	for rows.Next() {
 		var e StatEntry
-		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts); err != nil {
+		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)

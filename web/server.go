@@ -99,6 +99,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
 	}
 
+	if s.statsTracker.IsEnabled() {
+		nicks, chans := s.statsTracker.GetAdmins()
+		status["admin_nicknames"] = nicks
+		status["channel_admins"] = chans
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
