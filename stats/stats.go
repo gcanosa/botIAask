@@ -21,7 +21,14 @@ type Tracker struct {
 	aiRequests int
 	joins      int
 	parts      int
+	adminCmds  int
+	failedAuth int
 	users      map[string]struct{}
+
+	// Global Admin Nicknames & Presence
+	adminNicks []string
+	chanAdmins map[string][]string
+	adminMu    sync.RWMutex
 
 	// Broadcaster
 	subscribers map[chan StatEntry]bool
@@ -126,6 +133,41 @@ func (t *Tracker) LogPart() {
 	t.parts++
 }
 
+// LogAdminCommand records an administrative command execution.
+func (t *Tracker) LogAdminCommand() {
+	if !t.IsEnabled() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.adminCmds++
+}
+
+// LogFailedAuth records a failed admin login attempt.
+func (t *Tracker) LogFailedAuth() {
+	if !t.IsEnabled() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failedAuth++
+}
+
+// UpdateAdminData updates the list of currently logged-in admin nicknames and their channel presence.
+func (t *Tracker) UpdateAdminData(nicknames []string, channelAdmins map[string][]string) {
+	t.adminMu.Lock()
+	defer t.adminMu.Unlock()
+	t.adminNicks = nicknames
+	t.chanAdmins = channelAdmins
+}
+
+// GetAdmins returns the current logged-in admins and their channel presence.
+func (t *Tracker) GetAdmins() ([]string, map[string][]string) {
+	t.adminMu.RLock()
+	defer t.adminMu.RUnlock()
+	return t.adminNicks, t.chanAdmins
+}
+
 func (t *Tracker) snapshot() {
 	t.mu.Lock()
 	entry := StatEntry{
@@ -133,10 +175,19 @@ func (t *Tracker) snapshot() {
 		Messages:   t.messages,
 		Actions:    t.actions,
 		AIRequests: t.aiRequests,
-		UserCount:  len(t.users),
 		Joins:      t.joins,
 		Parts:      t.parts,
+		UserCount:  len(t.users),
 	}
+
+	// Get current admins for real-time broadcast
+	t.adminMu.RLock()
+	entry.AdminNicknames = t.adminNicks
+	entry.ChannelAdmins = t.chanAdmins
+	entry.AdminCommands = t.adminCmds
+	entry.LoggedInAdmins = len(t.adminNicks)
+	entry.FailedAuths = t.failedAuth
+	t.adminMu.RUnlock()
 
 	// Reset counters for next window
 	t.messages = 0
@@ -144,7 +195,8 @@ func (t *Tracker) snapshot() {
 	t.aiRequests = 0
 	t.joins = 0
 	t.parts = 0
-	// Keep users list or clear it? Usually we clear it for "active users in window"
+	t.adminCmds = 0
+	t.failedAuth = 0
 	t.users = make(map[string]struct{})
 	t.mu.Unlock()
 

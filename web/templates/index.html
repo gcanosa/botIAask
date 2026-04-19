@@ -76,6 +76,22 @@
                 <!-- Channels will be injected here -->
             </div>
         </div>
+        <!-- Active Administrators -->
+        <div id="admins-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-4 font-semibold">Active Administrators</h2>
+            <div id="admins-global" class="mb-4">
+                <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Global Session</div>
+                <div id="admins-list" class="flex flex-wrap gap-2">
+                    <!-- Global admins -->
+                </div>
+            </div>
+            <div id="admins-presence">
+                <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Channel Presence</div>
+                <div id="admins-by-channel" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Per-channel admins -->
+                </div>
+            </div>
+        </div>
 
         <!-- Real-time Statistics -->
         <div id="stats-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -94,6 +110,8 @@
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-primary"></span> Messages</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-accent"></span> AI Requests</span>
                     <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span> Users</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span> Admin Cmds</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Auth Fails</span>
                 </div>
             </div>
             <div class="h-[250px] w-full">

@@ -235,8 +235,17 @@ func (b *Bot) Start() error {
 		target := e.Params[0] // Channel
 		sender := e.Nick()
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventJoin, sender, "", "")
+		
+		b.membersMu.Lock()
+		if _, exists := b.channelMembers[target]; !exists {
+			b.channelMembers[target] = make(map[string]struct{})
+		}
+		b.channelMembers[target][sender] = struct{}{}
+		b.membersMu.Unlock()
+
 		if b.tracker != nil {
 			b.tracker.LogJoin()
+			b.updateTrackerAdmins()
 		}
 	})
 
@@ -251,8 +260,16 @@ func (b *Bot) Start() error {
 			message = e.Params[1]
 		}
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventPart, sender, message, "")
+		
+		b.membersMu.Lock()
+		if members, exists := b.channelMembers[target]; exists {
+			delete(members, sender)
+		}
+		b.membersMu.Unlock()
+
 		if b.tracker != nil {
 			b.tracker.LogPart()
+			b.updateTrackerAdmins()
 		}
 	})
 
@@ -268,6 +285,16 @@ func (b *Bot) Start() error {
 			message = e.Params[2]
 		}
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventKick, sender, message, kicked)
+		
+		b.membersMu.Lock()
+		if members, exists := b.channelMembers[target]; exists {
+			delete(members, kicked)
+		}
+		b.membersMu.Unlock()
+		
+		if b.tracker != nil {
+			b.updateTrackerAdmins()
+		}
 	})
 
 	// QUIT and NICK are not channel-specific, we'll log them globally or skip.
@@ -281,8 +308,16 @@ func (b *Bot) Start() error {
 		for _, channel := range b.cfg.IRC.Channels {
 			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventQuit, sender, message, "")
 		}
+
+		b.membersMu.Lock()
+		for _, members := range b.channelMembers {
+			delete(members, sender)
+		}
+		b.membersMu.Unlock()
+
 		if b.tracker != nil {
 			b.tracker.LogPart()
+			b.updateTrackerAdmins()
 		}
 	})
 
@@ -294,6 +329,26 @@ func (b *Bot) Start() error {
 		newNick := e.Params[0]
 		for _, channel := range b.cfg.IRC.Channels {
 			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventNick, sender, newNick, "")
+		}
+
+		b.membersMu.Lock()
+		for _, members := range b.channelMembers {
+			if _, exists := members[sender]; exists {
+				delete(members, sender)
+				members[newNick] = struct{}{}
+			}
+		}
+		b.membersMu.Unlock()
+
+		b.loginsMu.Lock()
+		if b.loggedInAdmins[sender] {
+			delete(b.loggedInAdmins, sender)
+			b.loggedInAdmins[newNick] = true
+		}
+		b.loginsMu.Unlock()
+
+		if b.tracker != nil {
+			b.updateTrackerAdmins()
 		}
 	})
 
@@ -348,14 +403,23 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.loginsMu.Lock()
 			delete(b.loggedInAdmins, sender)
 			b.loginsMu.Unlock()
+			if b.tracker != nil {
+				b.updateTrackerAdmins()
+			}
 			b.sendPrivmsg(target, fmt.Sprintf("%s logged out of admin session.", sender))
 		} else {
 			if isAdmin {
 				b.loginsMu.Lock()
 				b.loggedInAdmins[sender] = true
 				b.loginsMu.Unlock()
+				if b.tracker != nil {
+					b.updateTrackerAdmins()
+				}
 				b.sendPrivmsg(target, fmt.Sprintf("%s logged in to admin session.", sender))
 			} else {
+				if b.tracker != nil {
+					b.tracker.LogFailedAuth()
+				}
 				b.sendPrivmsg(target, fmt.Sprintf("%s not authorized.", sender))
 			}
 		}
@@ -368,6 +432,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			channel := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
 			if channel != "" {
 				b.conn.Join(channel)
+				if b.tracker != nil {
+					b.tracker.LogAdminCommand()
+				}
 				b.sendPrivmsg(target, fmt.Sprintf("Joining %s...", channel))
 			}
 			return
@@ -379,6 +446,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				channel = parts[1]
 			}
 			b.conn.Part(channel)
+			if b.tracker != nil {
+				b.tracker.LogAdminCommand()
+			}
 			return
 		}
 		if strings.HasPrefix(message, b.prefix+"ignore ") {
@@ -387,6 +457,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				b.ignoreMu.Lock()
 				b.ignoreList[strings.ToLower(user)] = true
 				b.ignoreMu.Unlock()
+				if b.tracker != nil {
+					b.tracker.LogAdminCommand()
+				}
 				b.sendPrivmsg(target, fmt.Sprintf("Now ignoring %s", user))
 			}
 			return
@@ -395,6 +468,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.statsMu.Lock()
 			count := b.aiRequests
 			b.statsMu.Unlock()
+			if b.tracker != nil {
+				b.tracker.LogAdminCommand()
+			}
 			b.sendPrivmsg(target, fmt.Sprintf("Stats: AI Requests=%d, Uptime=%s", count, b.GetUptime()))
 			return
 		}
@@ -404,6 +480,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				ch := parts[1]
 				msg := parts[2]
 				b.sendPrivmsg(ch, msg)
+				if b.tracker != nil {
+					b.tracker.LogAdminCommand()
+				}
 			}
 			return
 		}
@@ -411,6 +490,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			reason := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"quit"))
 			if reason == "" {
 				reason = "Shutting down"
+			}
+			if b.tracker != nil {
+				b.tracker.LogAdminCommand()
 			}
 			b.conn.QuitMessage = reason
 			b.conn.Quit()
@@ -430,16 +512,45 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				switch cmd {
 				case b.prefix + "op":
 					b.conn.Send("MODE", target, "+o", targetNick)
+					if b.tracker != nil {
+						b.tracker.LogAdminCommand()
+					}
 					return
 				case b.prefix + "deop":
 					b.conn.Send("MODE", target, "-o", targetNick)
+					if b.tracker != nil {
+						b.tracker.LogAdminCommand()
+					}
 					return
 				case b.prefix + "voice":
 					b.conn.Send("MODE", target, "+v", targetNick)
+					if b.tracker != nil {
+						b.tracker.LogAdminCommand()
+					}
 					return
 				case b.prefix + "devoice":
 					b.conn.Send("MODE", target, "-v", targetNick)
+					if b.tracker != nil {
+						b.tracker.LogAdminCommand()
+					}
 					return
+				}
+			}
+		}
+	} else if isAdmin {
+		// Log failed attempts to use admin commands without session
+		if strings.HasPrefix(message, b.prefix) {
+			adminCmds := []string{"join", "part", "ignore", "stats", "say", "quit", "op", "deop", "voice", "devoice"}
+			parts := strings.Fields(message)
+			if len(parts) > 0 {
+				cmd := strings.TrimPrefix(parts[0], b.prefix)
+				for _, ac := range adminCmds {
+					if cmd == ac {
+						if b.tracker != nil {
+							b.tracker.LogFailedAuth()
+						}
+						break
+					}
 				}
 			}
 		}
@@ -733,6 +844,39 @@ func (b *Bot) sanitize(s string) string {
 	// Use 512 as the standard IRC message limit (including overhead).
 	// We use a slightly smaller limit for the text content itself to allow for prefixing.
 	return ircutils.SanitizeText(s, 450)
+}
+
+func (b *Bot) updateTrackerAdmins() {
+	if b.tracker == nil {
+		return
+	}
+
+	b.loginsMu.RLock()
+	admins := make([]string, 0, len(b.loggedInAdmins))
+	for nick := range b.loggedInAdmins {
+		admins = append(admins, nick)
+	}
+	b.loginsMu.RUnlock()
+
+	b.membersMu.RLock()
+	chanPresence := make(map[string][]string)
+	for channel, members := range b.channelMembers {
+		chanAdmins := []string{}
+		for nick := range members {
+			b.loginsMu.RLock()
+			loggedIn := b.loggedInAdmins[nick]
+			b.loginsMu.RUnlock()
+			if loggedIn {
+				chanAdmins = append(chanAdmins, nick)
+			}
+		}
+		if len(chanAdmins) > 0 {
+			chanPresence[channel] = chanAdmins
+		}
+	}
+	b.membersMu.RUnlock()
+
+	b.tracker.UpdateAdminData(admins, chanPresence)
 }
 
 // RateLimiter implements rate limiting for IRC commands
