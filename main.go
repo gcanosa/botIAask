@@ -30,8 +30,28 @@ func main() {
 	news := flag.Bool("news", false, "Enable RSS news fetcher")
 	updateNews := flag.Bool("updatenews", false, "Backfill RSS database (fetch last X items) and exit")
 	dropNews := flag.Bool("dropnews", false, "Clear all news from the local database and exit")
-	flag.Parse()
 
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage of botIAask:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Commands (prefix configurable, default '!'):\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !ask <query>     - Ask the AI a question\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !news [limit]    - Fetch recent Hacker News\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !uptime          - Show bot uptime\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !spec            - Show system prompt spec\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !help            - Show this help message in IRC\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !admin off       - Log out of admin session\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel   - Join a channel\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !part [#channel] - Leave a channel\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !ignore <nick>   - Ignore a user\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !news on/off     - Toggle news in current channel (session only)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !stats           - View bot statistics\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Disconnect and shutdown bot\n")
+	}
+	flag.Parse()
 	// Handle version and about flags
 	if *version {
 		fmt.Println("botIAask v1.0.0")

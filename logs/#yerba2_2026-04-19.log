@@ -58,3 +58,19 @@
 [22:59:49] *** EtherIAIBot has joined ##yerba2
 [23:04:26] *** EtherIAIBot has joined ##yerba2
 [23:07:26] *** EtherIAIBot has joined ##yerba2
+[23:20:46] *** EtherIAIBot has joined ##yerba2
+[23:20:53] <EtherNet> !say ##yerba2 testing
+[23:20:56] <EtherNet> !auth
+[23:20:59] <EtherNet> !say ##yerba2 testing
+[23:21:13] <EtherNet> !stats
+[23:21:22] <EtherNet> !admin
+[23:21:22] <EtherIAIBot> EtherNet logged in to admin session.
+[23:21:25] <EtherNet> !stats
+[23:21:25] <EtherIAIBot> Stats: AI Requests=0, Uptime=53s
+[23:21:31] <EtherNet> !say ##yerba2 testing
+[23:21:31] <EtherIAIBot> testing
+[23:21:40] <EtherNet> !admin off
+[23:21:40] <EtherIAIBot> EtherNet logged out of admin session.
+[23:21:43] <EtherNet> !help
+[23:21:43] <EtherIAIBot> @EtherNet: Commands: !ask <query>, !news [limit], !uptime, !spec | Admin: Auth required using !admin
+[23:21:50] <EtherNet> !stats

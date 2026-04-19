@@ -44,6 +44,10 @@ type Bot struct {
 	ignoreList map[string]bool
 	ignoreMu   sync.RWMutex
 
+	// Session management for admins
+	loggedInAdmins map[string]bool
+	loginsMu       sync.RWMutex
+
 	// Stats
 	aiRequests int
 	statsMu    sync.Mutex
@@ -68,6 +72,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		channelMembers: make(map[string]map[string]struct{}),
 		version:        "1.0.0",
 		ignoreList:     make(map[string]bool),
+		loggedInAdmins: make(map[string]bool),
 	}
 
 	// Initialize rate limiter
@@ -304,8 +309,46 @@ func (b *Bot) Start() error {
 func (b *Bot) handleCommand(target, message, sender, source string) {
 	isAdmin := b.IsAdmin(source)
 
+	b.loginsMu.RLock()
+	isLoggedInAdmin := b.loggedInAdmins[sender]
+	b.loginsMu.RUnlock()
+
+	// !help command
+	if strings.HasPrefix(message, b.prefix+"help") {
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %suptime, %sspec", b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix)
+		if isAdmin && isLoggedInAdmin {
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off", 
+				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		} else if isAdmin {
+			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
+		}
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, helpMsg)))
+		return
+	}
+
+	// Session commands
+	if strings.HasPrefix(message, b.prefix+"admin") {
+		parts := strings.Fields(message)
+		if len(parts) > 1 && parts[1] == "off" {
+			b.loginsMu.Lock()
+			delete(b.loggedInAdmins, sender)
+			b.loginsMu.Unlock()
+			b.sendPrivmsg(target, fmt.Sprintf("%s logged out of admin session.", sender))
+		} else {
+			if isAdmin {
+				b.loginsMu.Lock()
+				b.loggedInAdmins[sender] = true
+				b.loginsMu.Unlock()
+				b.sendPrivmsg(target, fmt.Sprintf("%s logged in to admin session.", sender))
+			} else {
+				b.sendPrivmsg(target, fmt.Sprintf("%s not authorized.", sender))
+			}
+		}
+		return
+	}
+
 	// Admin commands
-	if isAdmin {
+	if isAdmin && isLoggedInAdmin {
 		if strings.HasPrefix(message, b.prefix+"join ") {
 			channel := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
 			if channel != "" {
@@ -340,6 +383,24 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("Stats: AI Requests=%d, Uptime=%s", count, b.GetUptime()))
 			return
 		}
+        if strings.HasPrefix(message, b.prefix+"say ") {
+			parts := strings.SplitN(message, " ", 3)
+			if len(parts) >= 3 {
+				ch := parts[1]
+				msg := parts[2]
+				b.sendPrivmsg(ch, msg)
+			}
+			return
+		}
+		if strings.HasPrefix(message, b.prefix+"quit") {
+			reason := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"quit"))
+			if reason == "" {
+				reason = "Shutting down"
+			}
+			b.conn.QuitMessage = reason
+			b.conn.Quit()
+			return
+		}
 	}
 
 	// Check if user is ignored
@@ -364,16 +425,54 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// Handle !news command
 	if strings.HasPrefix(message, b.prefix+"news") {
+		parts := strings.Fields(message)
+		
+		// In-memory news toggling
+		if len(parts) > 1 && (parts[1] == "on" || parts[1] == "off") {
+			if isAdmin && isLoggedInAdmin {
+				if parts[1] == "on" {
+					found := false
+					b.membersMu.Lock()
+					for _, ch := range b.cfg.RSS.Channels {
+						if strings.EqualFold(ch, target) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						b.cfg.RSS.Channels = append(b.cfg.RSS.Channels, target)
+					}
+					b.membersMu.Unlock()
+					b.sendPrivmsg(target, fmt.Sprintf("News enabled for %s (current session only).", target))
+				} else {
+					b.membersMu.Lock()
+					for i, ch := range b.cfg.RSS.Channels {
+						if strings.EqualFold(ch, target) {
+							b.cfg.RSS.Channels = append(b.cfg.RSS.Channels[:i], b.cfg.RSS.Channels[i+1:]...)
+							break
+						}
+					}
+					b.membersMu.Unlock()
+					b.sendPrivmsg(target, fmt.Sprintf("News disabled for %s (current session only).", target))
+				}
+			} else {
+				b.sendPrivmsg(target, "Not authorized or session expired.")
+			}
+			return
+		}
+
 		// Check if news enabled for this channel
 		isNewsChannel := false
+		b.membersMu.RLock()
 		for _, ch := range b.cfg.RSS.Channels {
 			if strings.EqualFold(ch, target) {
 				isNewsChannel = true
 				break
 			}
 		}
+		b.membersMu.RUnlock()
 
-		if !isNewsChannel && !b.IsAdmin(source) {
+		if !isNewsChannel && !(isAdmin && isLoggedInAdmin) {
 			return
 		}
 
@@ -383,7 +482,6 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 
 		limit := 5
-		parts := strings.Fields(message)
 		if len(parts) > 1 {
 			if l, err := fmt.Sscanf(parts[1], "%d", &limit); err == nil && l > 0 {
 				if limit > 10 {
