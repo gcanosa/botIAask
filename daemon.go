@@ -11,12 +11,6 @@ import (
 	"botIAask/config"
 )
 
-// DaemonConfig holds daemon-specific configuration.
-type DaemonConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	PIDFile  string `yaml:"pid_file"`
-}
-
 // WritePIDFile writes the current process ID to the specified file.
 func WritePIDFile(pidFile string) error {
 	pid := os.Getpid()
@@ -82,73 +76,77 @@ func IsProcessRunning(pid int) bool {
 }
 
 // Daemonize forks the current process into daemon mode.
-func Daemonize() error {
-	// Check if already running by trying to lock the PID file.
+func Daemonize(cfg *config.Config) error {
+	// Create a new command that will run the same binary with same arguments
 	cmd := exec.Command(os.Args[0], os.Args[1:]...)
+
+	// Redirect std streams to prevent issues
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
+	// Start the process in background
 	err := cmd.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	// Give the child process a moment to write its PID file.
-	// If it fails to write, the parent should clean up.
-	go func() {
-		time.Sleep(2 * time.Second)
-		// If the child is still running and has a PID file, we're good.
-		// Otherwise, clean up our own PID file if it exists.
-		absPath, _ := filepath.Abs(config.Daemon.PIDFile)
-		if _, err := os.Stat(absPath); err == nil {
-			pid, err := ReadPIDFile(config.Daemon.PIDFile)
-			if err == nil && IsProcessRunning(pid) {
-				return // Child is running fine, exit parent.
-			}
-		}
-		// Child failed to start properly, clean up.
-		os.Remove(absPath)
-	}()
+	// The parent exits immediately after starting the child
+	// This is how proper daemons work - we don't wait for the child
 
-	// Exit the parent process immediately.
-	os.Exit(0)
+	fmt.Println("Bot started in daemon mode with PID:", cmd.Process.Pid)
+	return nil
 }
 
 // StartDaemon handles starting the bot in daemon mode.
-func StartDaemon() error {
-	if !config.Daemon.Enabled {
+func StartDaemon(cfg *config.Config) error {
+	if !cfg.Daemon.Enabled {
 		return fmt.Errorf("daemon mode is not enabled in configuration")
 	}
 
 	// Check if already running.
-	pid, err := ReadPIDFile(config.Daemon.PIDFile)
+	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
 	if err == nil {
 		if IsProcessRunning(pid) {
 			return fmt.Errorf("bot is already running (PID: %d)", pid)
 		}
 		// Stale PID file, remove it.
-		DeletePIDFile(config.Daemon.PIDFile)
+		DeletePIDFile(cfg.Daemon.PIDFile)
 	}
 
-	err = Daemonize()
+	// Fork the process using exec to create a proper daemon
+	cmd := exec.Command(os.Args[0], append([]string{"-daemon"}, os.Args[1:]...)...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	err = cmd.Start()
 	if err != nil {
-		return fmt.Errorf("failed to daemonize: %w", err)
+		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	fmt.Println("Bot started in daemon mode")
+	// Write PID file after starting the daemon process
+	err = WritePIDFile(cfg.Daemon.PIDFile)
+	if err != nil {
+		// If we can't write PID file, kill the process and return error
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	fmt.Println("Bot started in daemon mode with PID:", cmd.Process.Pid)
 	return nil
 }
 
 // StopDaemon handles stopping the bot by sending SIGTERM to the PID.
-func StopDaemon() error {
-	pid, err := ReadPIDFile(config.Daemon.PIDFile)
+func StopDaemon(cfg *config.Config) error {
+	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
 	if err != nil {
+		// If we can't read PID file, try to find process by other means
 		return fmt.Errorf("failed to read PID file: %w", err)
 	}
 
 	if !IsProcessRunning(pid) {
-		DeletePIDFile(config.Daemon.PIDFile)
+		DeletePIDFile(cfg.Daemon.PIDFile)
 		return fmt.Errorf("bot is not running (stale PID file removed)")
 	}
 
@@ -171,14 +169,14 @@ func StopDaemon() error {
 		case <-ticker.C:
 			err := process.Signal(syscall.Signal(0))
 			if err != nil {
-				DeletePIDFile(config.Daemon.PIDFile)
+				DeletePIDFile(cfg.Daemon.PIDFile)
 				fmt.Println("Bot stopped")
 				return nil
 			}
 		case <-timeout:
 			// Force kill if still running.
 			process.Signal(syscall.SIGKILL)
-			DeletePIDFile(config.Daemon.PIDFile)
+			DeletePIDFile(cfg.Daemon.PIDFile)
 			fmt.Println("Bot force killed")
 			return nil
 		}
@@ -186,8 +184,8 @@ func StopDaemon() error {
 }
 
 // RestartDaemon stops and starts the bot.
-func RestartDaemon() error {
-	err := StopDaemon()
+func RestartDaemon(cfg *config.Config) error {
+	err := StopDaemon(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to stop bot: %w", err)
 	}
@@ -195,5 +193,5 @@ func RestartDaemon() error {
 	// Brief pause between stop and start.
 	time.Sleep(1 * time.Second)
 
-	return StartDaemon()
+	return StartDaemon(cfg)
 }

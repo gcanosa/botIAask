@@ -51,30 +51,6 @@ func main() {
 		log.Fatalf("Invalid mode: %s. Must be 'start', 'stop', 'restart', or empty", *mode)
 	}
 
-	// Handle mode flags (start, stop, restart) - these functions are defined in daemon.go
-	if *mode != "" {
-		switch *mode {
-		case "start":
-			err := StartDaemon()
-			if err != nil {
-				log.Fatalf("Failed to start daemon: %v", err)
-			}
-			return
-		case "stop":
-			err := StopDaemon()
-			if err != nil {
-				log.Fatalf("Failed to stop daemon: %v", err)
-			}
-			return
-		case "restart":
-			err := RestartDaemon()
-			if err != nil {
-				log.Fatalf("Failed to restart daemon: %v", err)
-			}
-			return
-		}
-	}
-
 	// Path to the configuration file
 	configPath := "config/config.yaml"
 
@@ -93,6 +69,30 @@ func main() {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
 		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
+	}
+
+	// Handle mode flags (start, stop, restart) - these functions are defined in daemon.go
+	if *mode != "" {
+		switch *mode {
+		case "start":
+			err := StartDaemon(cfg)
+			if err != nil {
+				log.Fatalf("Failed to start daemon: %v", err)
+			}
+			return
+		case "stop":
+			err := StopDaemon(cfg)
+			if err != nil {
+				log.Fatalf("Failed to stop daemon: %v", err)
+			}
+			return
+		case "restart":
+			err := RestartDaemon(cfg)
+			if err != nil {
+				log.Fatalf("Failed to restart daemon: %v", err)
+			}
+			return
+		}
 	}
 
 	// Initialize AI Client
