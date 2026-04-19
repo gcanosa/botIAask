@@ -31,6 +31,7 @@ type Server struct {
 	rssFetcher   *rss.Fetcher
 	statsTracker *stats.Tracker
 	bookmarksDB  *bookmarks.Database
+	authDB       *AuthDatabase
 	templates    *template.Template
 }
 
@@ -41,12 +42,22 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
 
+	authDB, err := NewAuthDatabase("web_auth.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize auth database: %v", err)
+	}
+
+	if err := authDB.CheckAndSeedInitialAdmin(cfg); err != nil {
+		log.Printf("Warning: failed to seed initial admin: %v", err)
+	}
+
 	return &Server{
 		cfg:          cfg,
 		bot:          bot,
 		rssFetcher:   rssFetcher,
 		statsTracker: statsTracker,
 		bookmarksDB:  bookmarksDB,
+		authDB:       authDB,
 		templates:    tmpl,
 	}
 }
@@ -63,6 +74,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
 	mux.HandleFunc("/api/bookmarks", s.handleBookmarks)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/logout", s.handleLogout)
+	mux.HandleFunc("/api/users", s.handleUsers)
+	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -85,6 +100,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	isAdmin, needsChange := s.checkAuth(r)
 	status := map[string]interface{}{
 		"uptime":      s.bot.GetUptime(),
 		"connected":   true,
@@ -97,9 +113,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"rss_enabled": s.rssFetcher.IsEnabled(),
 		"stats_enabled": s.statsTracker.IsEnabled(),
 		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
+		"is_admin":    isAdmin,
+		"needs_password_change": needsChange,
 	}
 
-	if s.statsTracker.IsEnabled() {
+	if isAdmin && s.statsTracker.IsEnabled() {
 		nicks, chans := s.statsTracker.GetAdmins()
 		status["admin_nicknames"] = nicks
 		status["channel_admins"] = chans
@@ -227,6 +245,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -240,6 +263,11 @@ func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -358,4 +386,167 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) checkAuth(r *http.Request) (bool, bool) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return false, false
+	}
+	_, needsChange, err := s.authDB.ValidateSession(cookie.Value)
+	return err == nil, needsChange
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	userID, needsChange, err := s.authDB.Authenticate(creds.Username, creds.Password)
+	if err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := s.authDB.CreateSession(userID)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(24 * time.Hour),
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "needs_password_change": needsChange})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("admin_session")
+	if err == nil {
+		s.authDB.DeleteSession(cookie.Value)
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		users, err := s.authDB.GetUsers()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(users)
+
+	case http.MethodPost:
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		if err := s.authDB.AddUser(req.Username, req.Password); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+
+	case http.MethodPatch:
+		var req struct {
+			ID          string `json:"id"`
+			NewPassword string `json:"new_password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		if err := s.authDB.UpdateUserPassword(req.ID, req.NewPassword); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "ID required", http.StatusBadRequest)
+			return
+		}
+		if err := s.authDB.RemoveUser(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+
+	}
+}
+
+func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	userID, _, err := s.authDB.ValidateSession(cookie.Value)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.authDB.UpdatePassword(userID, req.Password); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
