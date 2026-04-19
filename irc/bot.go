@@ -70,7 +70,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		startTime:      time.Now(),
 		connectionTime: time.Now(),
 		channelMembers: make(map[string]map[string]struct{}),
-		version:        "1.0.0",
+		version:        "0.2.1",
 		ignoreList:     make(map[string]bool),
 		loggedInAdmins: make(map[string]bool),
 	}
@@ -189,11 +189,16 @@ func (b *Bot) Start() error {
 			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s", sender, target, message)
 		}
 
-		if strings.HasPrefix(message, "\x01ACTION ") && strings.HasSuffix(message, "\x01") {
-			actionMsg := message[8 : len(message)-1]
-			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventAction, sender, actionMsg, "")
-			if b.tracker != nil {
-				b.tracker.LogAction(sender)
+		if strings.HasPrefix(message, "\x01") && strings.HasSuffix(message, "\x01") {
+			ctcpContent := message[1 : len(message)-1]
+			if strings.HasPrefix(ctcpContent, "ACTION ") {
+				actionMsg := ctcpContent[7:]
+				logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventAction, sender, actionMsg, "")
+				if b.tracker != nil {
+					b.tracker.LogAction(sender)
+				}
+			} else {
+				b.handleCTCPRequest(sender, target, ctcpContent)
 			}
 		} else {
 			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, sender, message, "")
@@ -577,6 +582,32 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 
 		b.sendPrivmsg(target, formattedResponse)
+	}
+}
+
+// handleCTCPRequest handles CTCP requests and sends appropriate responses via NOTICE.
+func (b *Bot) handleCTCPRequest(sender, target, content string) {
+	parts := strings.Fields(content)
+	if len(parts) == 0 {
+		return
+	}
+
+	command := strings.ToUpper(parts[0])
+	
+	if b.cfg.Bot.Debug {
+		log.Printf("[DEBUG] CTCP Request - Sender: %s, Command: %s", sender, command)
+	}
+
+	switch command {
+	case "VERSION":
+		response := fmt.Sprintf("\x01VERSION botIAask:%s:Go/ergochat\x01", b.version)
+		b.conn.Notice(sender, response)
+	case "TIME":
+		response := fmt.Sprintf("\x01TIME %s\x01", time.Now().Format(time.RFC1123))
+		b.conn.Notice(sender, response)
+	case "UPTIME":
+		response := fmt.Sprintf("\x01UPTIME %s\x01", b.GetUptime())
+		b.conn.Notice(sender, response)
 	}
 }
 

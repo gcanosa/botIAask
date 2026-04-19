@@ -54,13 +54,13 @@ func main() {
 	flag.Parse()
 	// Handle version and about flags
 	if *version {
-		fmt.Println("botIAask v1.0.0")
+		fmt.Println("botIAask v0.2.1")
 		return
 	}
 
 	if *about {
 		fmt.Println("botIAask - An IRC bot powered by AI")
-		fmt.Println("Version: 1.0.0")
+		fmt.Println("Version: 0.2.1")
 		fmt.Println("Programmer: Gerardo Canosa (gera.canosa@gmail.com)")
 		fmt.Println("Features:")
 		fmt.Println("  - AI-powered responses via LM Studio")
