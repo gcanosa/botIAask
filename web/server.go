@@ -13,12 +13,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"crypto/rand"
+	"encoding/hex"
 
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/irc"
 	"botIAask/rss"
 	"botIAask/stats"
+	"botIAask/uploads"
 )
 
 //go:embed templates/*
@@ -32,12 +35,13 @@ type Server struct {
 	statsTracker *stats.Tracker
 	bookmarksDB  *bookmarks.Database
 	authDB       *AuthDatabase
+	uploadsDB    *uploads.Database
 	templates    *template.Template
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database) *Server {
-	tmpl, err := template.ParseFS(templatesFS, "templates/index.html")
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) *Server {
+	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
@@ -58,6 +62,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		statsTracker: statsTracker,
 		bookmarksDB:  bookmarksDB,
 		authDB:       authDB,
+		uploadsDB:    uploadsDB,
 		templates:    tmpl,
 	}
 }
@@ -78,6 +83,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
+
+	// Upload/Paste routes
+	mux.HandleFunc("/upload", s.handleUpload)
+	mux.HandleFunc("/upload/cancel", s.handleUploadCancel)
+	mux.HandleFunc("/p/", s.handlePasteView)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -549,4 +559,136 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Token is required", http.StatusBadRequest)
+		return
+	}
+
+	upload, err := s.uploadsDB.GetUploadByToken(token)
+	if err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusNotFound)
+		return
+	}
+
+	if upload.Status != "pending_form" {
+		http.Error(w, "This token has already been used", http.StatusBadRequest)
+		return
+	}
+
+	// Check 30 min expiration
+	if time.Since(upload.CreatedAt) > 30*time.Minute {
+		http.Error(w, "This token has expired", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		s.templates.ExecuteTemplate(w, "upload.html", map[string]interface{}{
+			"Upload":  upload,
+			"BaseURL": s.cfg.Web.BaseURL,
+		})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		title := r.FormValue("title")
+		desc := r.FormValue("description")
+		content := r.FormValue("content")
+		expiresStr := r.FormValue("expires")
+
+		expiresDays := 7
+		fmt.Sscanf(expiresStr, "%d", &expiresDays)
+
+		// Create ticket ID
+		ticketID := generateHex(4)
+
+		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Notify IRC channel and admins
+		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New ticket pending approval: %s (by %s)", ticketID, upload.Username))
+		s.bot.NotifyAdmins(fmt.Sprintf("\x0307[TICKET]\x03 New pending approval: %s. Use !ticket approve %s to publish.", ticketID, ticketID))
+
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>")
+		fmt.Fprintf(w, "<h1 style='color:#38bdf8;'>Successfully submitted</h1>")
+		fmt.Fprintf(w, "<p>Ticket ID: <strong>%s</strong></p>", ticketID)
+		fmt.Fprintf(w, "<p>Please wait for admin approval in IRC.</p>")
+		fmt.Fprintf(w, "</body></html>")
+	}
+}
+
+func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := r.FormValue("token")
+	username, channel, err := s.uploadsDB.CancelUploadByToken(token)
+	if err != nil {
+		http.Error(w, "Error cancelling", http.StatusInternalServerError)
+		return
+	}
+	s.bot.SendMessage(channel, fmt.Sprintf("\x0304[CANCEL]\x03 User %s cancelled their upload session.", username))
+	
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>")
+	fmt.Fprintf(w, "<h1 style='color:#f87171;'>Session Cancelled</h1>")
+	fmt.Fprintf(w, "<p>The bot has been notified.</p>")
+	fmt.Fprintf(w, "</body></html>")
+}
+
+func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
+	ticketID := strings.TrimPrefix(r.URL.Path, "/p/")
+	if ticketID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if upload.Status != "approved" {
+		http.Error(w, "This paste is pending approval or was cancelled", http.StatusForbidden)
+		return
+	}
+
+	// Check expiration if days > 0
+	if upload.ExpiresInDays > 0 {
+		if upload.ApprovedAt.Valid && time.Since(upload.ApprovedAt.Time) > time.Duration(upload.ExpiresInDays)*24*time.Hour {
+			http.Error(w, "This paste has expired", http.StatusGone)
+			return
+		}
+	}
+
+	content, err := os.ReadFile(upload.ContentPath)
+	if err != nil {
+		http.Error(w, "Error reading content", http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		Upload  *uploads.Upload
+		Content string
+	}{
+		Upload:  upload,
+		Content: string(content),
+	}
+
+	s.templates.ExecuteTemplate(w, "paste.html", data)
+}
+
+func generateHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

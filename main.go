@@ -17,6 +17,7 @@ import (
 	"botIAask/logger"
 	"botIAask/rss"
 	"botIAask/stats"
+	"botIAask/uploads"
 	"botIAask/web"
 )
 
@@ -40,6 +41,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !news [limit]    - Fetch recent Hacker News\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !uptime          - Show bot uptime\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !spec            - Show system prompt spec\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !paste           - Upload a text paste/log\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !help            - Show this help message in IRC\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
@@ -54,6 +56,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !deop [nick]     - Remove operator status from self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !voice [nick]    - Give voice status to self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !devoice [nick]  - Remove voice status from self or nick\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !ticket approve/cancel <ID> - Manage pending pastes\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Disconnect and shutdown bot\n")
 	}
 	flag.Parse()
@@ -240,7 +243,6 @@ func main() {
 	statsTracker := stats.NewTracker(cfg, statsDB)
 	go statsTracker.Start()
 	bot.SetStatsTracker(statsTracker)
-
 	// Initialize Bookmarks Database
 	bookmarksDB, err := bookmarks.NewDatabase("bookmarks.db")
 	if err != nil {
@@ -248,6 +250,15 @@ func main() {
 	} else {
 		defer bookmarksDB.Close()
 		bot.SetBookmarksDatabase(bookmarksDB)
+	}
+	
+	// Initialize Uploads Database
+	uploadsDB, err := uploads.NewDatabase("uploads.db", "pastes")
+	if err != nil {
+		log.Printf("Warning: Failed to initialize uploads database: %v", err)
+	} else {
+		defer uploadsDB.Close()
+		bot.SetUploadsDatabase(uploadsDB)
 	}
 
 	// Start Log Rotator
@@ -258,17 +269,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) error {
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
 	err := WritePIDFile(pidFile)
@@ -278,7 +289,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
 	}
 
 	// Start the IRC bot
@@ -323,14 +334,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
 	}
 
 	// Start the IRC bot
@@ -367,8 +378,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database) {
-	ws := web.NewServer(cfg, bot, rf, st, bdb)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database) {
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb)
 	if err := ws.Start(); err != nil {
 		log.Printf("Web server error: %v", err)
 	}

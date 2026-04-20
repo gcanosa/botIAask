@@ -68,6 +68,7 @@ type WebConfig struct {
 	Enabled bool       `yaml:"enabled"`
 	Port    int        `yaml:"port"`
 	Host    string     `yaml:"host"`
+	BaseURL string     `yaml:"base_url"`
 	Auth    AuthConfig `yaml:"auth,omitempty"`
 }
 

@@ -2,6 +2,8 @@ package irc
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"botIAask/logger"
 	"botIAask/rss"
 	"botIAask/stats"
+	"botIAask/uploads"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -62,6 +65,9 @@ type Bot struct {
 
 	// Bookmarks Database
 	bookmarksDB *bookmarks.Database
+
+	// Uploads Database
+	uploadsDB *uploads.Database
 }
 
 // NewBot initializes a new Bot instance.
@@ -101,6 +107,11 @@ func (b *Bot) SetBookmarksDatabase(db *bookmarks.Database) {
 // SetStatsTracker sets the stats tracker for the bot
 func (b *Bot) SetStatsTracker(t *stats.Tracker) {
 	b.tracker = t
+}
+
+// SetUploadsDatabase sets the uploads database for the bot
+func (b *Bot) SetUploadsDatabase(db *uploads.Database) {
+	b.uploadsDB = db
 }
 
 // GetUptime returns the human-readable uptime of the bot.
@@ -384,11 +395,11 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec", 
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste", 
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick]", 
-				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket approve/cancel <ID>", 
+				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		} else if isAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
 		}
@@ -734,6 +745,56 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Ticket commands (Admin only)
+	if strings.HasPrefix(message, b.prefix+"ticket") {
+		if !isAdmin || !isLoggedInAdmin {
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: Authorized admins only.", sender))
+			return
+		}
+		parts := strings.Fields(message)
+		if len(parts) < 3 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket approve/cancel <ID>", b.prefix))
+			return
+		}
+		cmd := parts[1]
+		ticketID := parts[2]
+
+		if cmd == "approve" {
+			err := b.uploadsDB.ApproveTicket(ticketID)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("Error approving ticket: %v", err))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s/p/%s", ticketID, b.cfg.Web.BaseURL, ticketID))
+		} else if cmd == "cancel" {
+			err := b.uploadsDB.CancelTicket(ticketID)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("Error cancelling ticket: %v", err))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s cancelled.", ticketID))
+		}
+		return
+	}
+
+	// Paste command
+	if strings.HasPrefix(message, b.prefix+"paste") {
+		if b.uploadsDB == nil {
+			b.sendPrivmsg(target, "Pastes system not initialized.")
+			return
+		}
+		token := generateToken(16)
+		err := b.uploadsDB.CreateUploadSession(token, sender, target)
+		if err != nil {
+			b.sendPrivmsg(target, fmt.Sprintf("Error creating paste session: %v", err))
+			return
+		}
+		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.cfg.Web.BaseURL, token)
+		b.sendPrivmsg(sender, fmt.Sprintf("Paste requested. Fill the form here (expires in 30m): %s", uploadURL))
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the paste link.", sender))
+		return
+	}
+
 	// Handle !ask command
 	if strings.HasPrefix(message, b.prefix+b.cmdName) {
 		// Check rate limiting if enabled
@@ -814,6 +875,20 @@ func (b *Bot) handleCTCPRequest(sender, target, content string) {
 		response := fmt.Sprintf("\x01UPTIME %s\x01", b.GetUptime())
 		b.conn.Notice(sender, response)
 	}
+}
+
+// NotifyAdmins sends a private message to all logged-in administrators.
+func (b *Bot) NotifyAdmins(message string) {
+	b.loginsMu.RLock()
+	defer b.loginsMu.RUnlock()
+	for nick := range b.loggedInAdmins {
+		b.sendPrivmsg(nick, message)
+	}
+}
+
+// SendMessage sends a message to a channel or user (used by web server).
+func (b *Bot) SendMessage(target, message string) {
+	b.sendPrivmsg(target, message)
 }
 
 // sendPrivmsg wraps conn.Privmsg and also logs the bot's own outbound messages
@@ -924,4 +999,12 @@ func (rl *RateLimiter) Allow(sender, target string, limit, burst int) bool {
 
 	userLimit.counts[target]++
 	return userLimit.counts[target] <= burst
+}
+
+func generateToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
