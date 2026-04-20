@@ -893,7 +893,8 @@ async function fetchPastes(page) {
                     <td class="py-4 text-slate-400">${p.Username}</td>
                     <td class="py-4 text-slate-500">${p.Channel}</td>
                     <td class="py-4 text-slate-500 text-[10px]">${date}</td>
-                    <td class="py-4 text-right">
+                    <td class="py-4 text-right flex justify-end gap-2">
+                        <button onclick="copyToClipboard('${window.location.origin}/p/${p.TicketID}', this)" class="text-primary hover:text-accent font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Copy Link</button>
                         ${lastIsAdmin ? `<button onclick="deletePaste('${p.TicketID}')" class="text-red-500 hover:text-red-400 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Delete</button>` : ''}
                     </td>
                 `;
@@ -929,5 +930,24 @@ async function deletePaste(ticketID) {
         }
     } catch (e) {
         console.error("Delete failed", e);
+    }
+}
+
+async function copyToClipboard(text, btn) {
+    try {
+        await navigator.clipboard.writeText(text);
+        if (btn) {
+            const originalText = btn.innerText;
+            btn.innerText = 'COPIED!';
+            btn.classList.add('text-green-500');
+            btn.classList.remove('text-primary');
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.classList.remove('text-green-500');
+                btn.classList.add('text-primary');
+            }, 2000);
+        }
+    } catch (err) {
+        console.error('Failed to copy: ', err);
     }
 }
