@@ -253,8 +253,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.templates.Execute(w, nil)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	err := s.templates.ExecuteTemplate(w, "index.html", nil)
 	if err != nil {
+		log.Printf("ExecuteTemplate index.html error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -591,10 +593,15 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
-		s.templates.ExecuteTemplate(w, "upload.html", map[string]interface{}{
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		err := s.templates.ExecuteTemplate(w, "upload.html", map[string]interface{}{
 			"Upload":  upload,
 			"BaseURL": s.cfg.Web.BaseURL,
 		})
+		if err != nil {
+			log.Printf("ExecuteTemplate upload.html error: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -689,7 +696,12 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 		Content: string(content),
 	}
 
-	s.templates.ExecuteTemplate(w, "paste.html", data)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	err = s.templates.ExecuteTemplate(w, "paste.html", data)
+	if err != nil {
+		log.Printf("ExecuteTemplate paste.html error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
