@@ -6,6 +6,7 @@
     <title>botIAask | AI Intelligence Hub</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lipis/flag-icons@7.3.2/css/flag-icons.min.css" crossorigin="anonymous">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -153,25 +154,39 @@
             </section>
 
             <!-- Finance Panel -->
-            <section id="panel-finance" class="panel">
+            <section id="panel-finance" class="panel finance-section">
                 <div class="section-header">
                     <h1 class="section-title">Financial Markets</h1>
                     <p class="section-subtitle">Live tracking of top cryptocurrencies and global forex rates.</p>
                 </div>
                 <div class="grid grid-2">
-                     <div class="card">
-                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem;">
-                            <h3 class="card-title" style="margin: 0;">Top Cryptocurrencies</h3>
-                            <span id="crypto-last-update" class="mono" style="font-size: 0.65rem; color: var(--text-muted);"></span>
+                     <div class="card finance-card">
+                        <div class="finance-card-head">
+                            <h3 class="card-title finance-card-title">Top Cryptocurrencies</h3>
+                            <span id="crypto-last-update" class="finance-last-update mono"></span>
                         </div>
-                        <div id="crypto-prices"></div>
+                        <div class="crypto-chart-stack">
+                            <p id="crypto-chart-subtitle" class="crypto-chart-subtitle"></p>
+                            <div class="crypto-range-btns" role="group" aria-label="Chart time range">
+                                <button type="button" class="btn btn-ghost crypto-range-btn" data-range="6h">6H</button>
+                                <button type="button" class="btn btn-ghost crypto-range-btn" data-range="1d">1D</button>
+                                <button type="button" class="btn btn-ghost crypto-range-btn" data-range="3d">3D</button>
+                                <button type="button" class="btn btn-ghost crypto-range-btn active" data-range="1w">1W</button>
+                                <button type="button" class="btn btn-ghost crypto-range-btn" data-range="3m">3M</button>
+                                <button type="button" class="btn btn-ghost crypto-range-btn" data-range="1y">1Y</button>
+                            </div>
+                            <div class="crypto-chart-canvas-wrap">
+                                <canvas id="cryptoMarketChart"></canvas>
+                            </div>
+                        </div>
+                        <div id="crypto-prices" class="finance-list finance-list--grid"></div>
                     </div>
-                    <div class="card">
-                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem;">
-                            <h3 class="card-title" style="margin: 0;">Exchange Rates</h3>
-                            <span id="forex-last-update" class="mono" style="font-size: 0.65rem; color: var(--text-muted);"></span>
+                    <div class="card finance-card">
+                        <div class="finance-card-head">
+                            <h3 class="card-title finance-card-title">Exchange Rates</h3>
+                            <span id="forex-last-update" class="finance-last-update mono"></span>
                         </div>
-                        <div id="forex-rates"></div>
+                        <div id="forex-rates" class="finance-list"></div>
                     </div>
                 </div>
             </section>
@@ -402,6 +417,7 @@
         </div>
     </div>
 
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" crossorigin="anonymous"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

@@ -2,6 +2,9 @@ let logSources = {};
 let activeLogChannel = null;
 let currentStatsSource = null;
 let activityChart = null;
+let cryptoMarketChart = null;
+let cryptoChartRange = '1w';
+const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
 
 // Routing logic
@@ -24,6 +27,9 @@ function showPanel(panelId) {
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
          fetchHistory(currentTimeframe);
+    }
+    if (panelId === 'finance') {
+        fetchCryptoChart();
     }
 }
 
@@ -55,6 +61,15 @@ document.addEventListener('DOMContentLoaded', () => {
             fetchNews(newsPage);
         }
     }, 5000);
+
+    document.querySelectorAll('.crypto-range-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const r = btn.getAttribute('data-range');
+            document.querySelectorAll('.crypto-range-btn').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            fetchCryptoChart(r);
+        });
+    });
 });
 
 async function fetchStatus() {
@@ -248,57 +263,257 @@ async function toggleNews() {
 }
 
 // FINANCE
+function financeEscapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function cryptoLucideIcon(symbol) {
+    const u = String(symbol || '').toUpperCase();
+    const map = {
+        BTC: 'bitcoin',
+        ETH: 'circle-dollar-sign',
+        USDT: 'circle-dollar-sign',
+        USDC: 'circle-dollar-sign',
+        BNB: 'coins',
+        SOL: 'coins',
+        XRP: 'coins',
+        ADA: 'coins',
+        DOGE: 'coins',
+        DOT: 'coins',
+        AVAX: 'coins',
+    };
+    return map[u] || 'coins';
+}
+
+function forexMeta(key) {
+    const meta = {
+        eur_usd: { label: 'EUR / USD', flags: ['eu', 'us'] },
+        usd_ars: { label: 'USD / ARS', flags: ['us', 'ar'], hint: 'Official' },
+        usd_ars_blue: { label: 'USD / ARS', flags: ['us', 'ar'], hint: 'Blue' },
+        eur_ars: { label: 'EUR / ARS', flags: ['eu', 'ar'] },
+    };
+    if (meta[key]) return meta[key];
+    return {
+        label: key.replace(/_/g, ' / ').toUpperCase(),
+        flags: [],
+    };
+}
+
+function refreshLucideFinanceIcons() {
+    try {
+        if (typeof lucide !== 'undefined' && typeof lucide.createIcons === 'function') {
+            lucide.createIcons();
+        }
+    } catch (e) {
+        console.warn('Lucide createIcons failed', e);
+    }
+}
+
+function normalizeForexObject(raw) {
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+        return {};
+    }
+    const out = {};
+    Object.entries(raw).forEach(([k, v]) => {
+        const n = typeof v === 'number' ? v : Number(v);
+        if (Number.isFinite(n)) {
+            out[k] = n;
+        }
+    });
+    return out;
+}
+
 async function fetchFinance() {
+    let data;
     try {
         const res = await fetch('/api/finance');
-        const data = await res.json();
-        
-        const cryptoDiv = document.getElementById('crypto-prices');
-        const cryptoUpdate = document.getElementById('crypto-last-update');
-        cryptoDiv.innerHTML = '';
-        
-        if (data.crypto_last_update && data.crypto_last_update !== '0001-01-01T00:00:00Z') {
-            cryptoUpdate.textContent = `Updated: ${new Date(data.crypto_last_update).toLocaleTimeString()}`;
+        data = await res.json();
+    } catch (e) {
+        console.error('Finance fetch error', e);
+        return;
+    }
+
+    const cryptoDiv = document.getElementById('crypto-prices');
+    const cryptoUpdate = document.getElementById('crypto-last-update');
+    const forexDiv = document.getElementById('forex-rates');
+    const forexUpdate = document.getElementById('forex-last-update');
+
+    try {
+        if (cryptoUpdate) {
+            if (data.crypto_last_update && data.crypto_last_update !== '0001-01-01T00:00:00Z') {
+                cryptoUpdate.textContent = `Updated: ${new Date(data.crypto_last_update).toLocaleTimeString()}`;
+            } else {
+                cryptoUpdate.textContent = '';
+            }
         }
-        
-        if (data.crypto) {
-            data.crypto.forEach(c => {
-            const up = c.change_24h >= 0;
-            cryptoDiv.innerHTML += `
-                <div class="price-tag">
-                    <span class="mono font-bold">${c.symbol.toUpperCase()}</span>
-                    <div>
-                        <span class="mono">$${c.price.toLocaleString()}</span>
-                        <span class="mono ${up ? 'price-up' : 'price-down'}" style="font-size: 0.7rem; margin-left: 0.5rem;">${up ? '▲' : '▼'} ${Math.abs(c.change_24h).toFixed(1)}%</span>
+
+        if (cryptoDiv) {
+            const cryptoList = Array.isArray(data.crypto) ? data.crypto : [];
+            if (cryptoList.length) {
+                cryptoDiv.innerHTML = cryptoList.map((c) => {
+                    const up = Number(c.change_24h) >= 0;
+                    const icon = cryptoLucideIcon(c.symbol);
+                    const sym = financeEscapeHtml(c.symbol);
+                    const name = financeEscapeHtml(c.name || '');
+                    const price = Number(c.price);
+                    const chg = Number(c.change_24h);
+                    const priceStr = Number.isFinite(price) ? price.toLocaleString() : '—';
+                    const chgStr = Number.isFinite(chg) ? Math.abs(chg).toFixed(1) : '0.0';
+                    return `
+                <div class="finance-row finance-row-crypto">
+                    <div class="finance-row-left">
+                        <span class="finance-icon-slot" aria-hidden="true"><i data-lucide="${icon}" class="finance-lucide"></i></span>
+                        <div class="finance-labels">
+                            <span class="finance-symbol mono">${sym.toUpperCase()}</span>
+                            <span class="finance-name">${name}</span>
+                        </div>
                     </div>
-                </div>
-            `;
-        });
+                    <div class="finance-row-right">
+                        <span class="finance-price mono">$${priceStr}</span>
+                        <span class="finance-change-pill mono ${up ? 'price-up' : 'price-down'}">${up ? '▲' : '▼'} ${chgStr}%</span>
+                    </div>
+                </div>`;
+                }).join('');
+            } else {
+                cryptoDiv.innerHTML = '';
+            }
+        }
+    } catch (e) {
+        console.error('Finance crypto render error', e);
+    }
+
+    try {
+        if (forexUpdate) {
+            if (data.forex_last_update) {
+                forexUpdate.textContent = `Updated: ${new Date(data.forex_last_update).toLocaleTimeString()}`;
+            } else {
+                forexUpdate.textContent = '';
+            }
         }
 
-        const forexDiv = document.getElementById('forex-rates');
-        const forexUpdate = document.getElementById('forex-last-update');
-        forexDiv.innerHTML = '';
-        
-        if (data.forex_last_update) {
-            forexUpdate.textContent = `Updated: ${new Date(data.forex_last_update).toLocaleTimeString()}`;
+        if (forexDiv) {
+            const fx = normalizeForexObject(data.forex);
+            const entries = Object.entries(fx);
+            if (entries.length) {
+                forexDiv.innerHTML = entries.map(([k, v]) => {
+                    const m = forexMeta(k);
+                    const flagsHtml = m.flags.length
+                        ? m.flags.map((f) => `<span class="fi fi-${f} fis finance-flag" aria-hidden="true"></span>`).join('')
+                        : '';
+                    const hint = m.hint ? `<span class="finance-hint">${financeEscapeHtml(m.hint)}</span>` : '';
+                    return `
+                <div class="finance-row finance-row-forex">
+                    <div class="finance-row-left">
+                        <div class="finance-flags">${flagsHtml}</div>
+                        <div class="finance-labels">
+                            <span class="finance-forex-pair mono">${financeEscapeHtml(m.label)}</span>
+                            ${hint}
+                        </div>
+                    </div>
+                    <span class="finance-price mono">$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>`;
+                }).join('');
+            } else {
+                forexDiv.innerHTML = '<div class="finance-row finance-row-forex"><span class="finance-price mono">Rates unavailable (retrying...)</span></div>';
+            }
+        }
+    } catch (e) {
+        console.error('Finance forex render error', e);
+    }
+
+    refreshLucideFinanceIcons();
+
+    const financePanel = document.getElementById('panel-finance');
+    if (financePanel && financePanel.classList.contains('active')) {
+        fetchCryptoChart();
+    }
+}
+
+function formatCryptoChartLabel(ms) {
+    const d = new Date(ms);
+    if (cryptoChartRange === '6h' || cryptoChartRange === '1d') {
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+async function fetchCryptoChart(range) {
+    if (range) {
+        cryptoChartRange = range;
+    }
+    const subEl = document.getElementById('crypto-chart-subtitle');
+    const canvas = document.getElementById('cryptoMarketChart');
+    if (!canvas) return;
+
+    try {
+        const res = await fetch(`/api/finance/crypto-chart?range=${encodeURIComponent(cryptoChartRange)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (subEl) {
+            subEl.textContent = data.subtitle || '';
         }
 
-        const labels = {
-            'eur_usd': 'EUR/USD',
-            'usd_ars': 'USD/ARS (Official)',
-            'usd_ars_blue': 'USD/ARS (Blue)',
-            'eur_ars': 'EUR/ARS'
-        };
-        Object.entries(data.forex).forEach(([k, v]) => {
-            forexDiv.innerHTML += `
-                <div class="price-tag">
-                    <span class="mono font-bold">${labels[k] || k.toUpperCase()}</span>
-                    <span class="mono">$${v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                </div>
-            `;
-        });
-    } catch (e) { console.error("Finance fetch error", e); }
+        const labels = (data.labels || []).map(formatCryptoChartLabel);
+        const datasets = (data.series || []).map((s, i) => ({
+            label: s.symbol,
+            data: (s.values || []).map((v) => (v == null ? null : v)),
+            borderColor: cryptoChartColors[i % cryptoChartColors.length],
+            backgroundColor: 'transparent',
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1.5,
+            spanGaps: true,
+        }));
+
+        if (!cryptoMarketChart) {
+            cryptoMarketChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: {
+                            ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 10 },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                        },
+                        y: {
+                            ticks: { color: '#94a3b8', callback: (v) => `${v}%` },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                        },
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom',
+                            labels: { color: '#94a3b8', boxWidth: 10, padding: 8, font: { size: 10 } },
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label(ctx) {
+                                    const v = ctx.parsed.y;
+                                    if (v == null) return `${ctx.dataset.label}: —`;
+                                    return `${ctx.dataset.label}: ${v.toFixed(2)}%`;
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+        } else {
+            cryptoMarketChart.data.labels = labels;
+            cryptoMarketChart.data.datasets = datasets;
+            cryptoMarketChart.update();
+        }
+    } catch (e) {
+        console.error('Crypto chart fetch error', e);
+    }
 }
 
 let currentTimeframe = '1h';

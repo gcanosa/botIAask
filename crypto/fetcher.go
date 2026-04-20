@@ -71,6 +71,7 @@ func (f *Fetcher) FetchAndSave() error {
 		entries = append(entries, PriceEntry{
 			Symbol:    strings.ToUpper(m.Symbol),
 			Name:      m.Name,
+			GeckoID:   m.ID,
 			PriceUSD:  m.CurrentPrice,
 			Change24h: m.PriceChangePercentage24h,
 			FetchedAt: now,

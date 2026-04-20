@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"crypto/rand"
 	"encoding/hex"
@@ -42,6 +43,14 @@ type Server struct {
 	templates    *template.Template
 	forexCache   map[string]float64
 	forexUpdate  time.Time
+
+	cryptoChartCache map[string]cryptoChartCacheEntry
+	cryptoChartMu    sync.Mutex
+}
+
+type cryptoChartCacheEntry struct {
+	at   time.Time
+	body []byte
 }
 
 // NewServer creates a new web server instance
@@ -98,6 +107,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/pastes/approve", s.handlePasteApprove)
 	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
 	mux.HandleFunc("/api/finance", s.handleFinance)
+	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -1055,8 +1065,9 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	}
 	data["crypto_last_update"] = cryptoLastUpdate.Format(time.RFC3339)
 
-	// Get Forex Rates with simple server-side caching (1 hour)
-	if s.forexCache == nil || time.Since(s.forexUpdate) > 1*time.Hour {
+	// Get Forex Rates with simple server-side caching (1 hour).
+	// If cache is empty, retry on every request until at least one rate is fetched.
+	if s.forexCache == nil || len(s.forexCache) == 0 || time.Since(s.forexUpdate) > 1*time.Hour {
 		forex := map[string]float64{}
 		
 		// EUR to USD
@@ -1090,15 +1101,117 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		s.forexCache = forex
-		s.forexUpdate = time.Now()
+		if len(forex) > 0 {
+			s.forexCache = forex
+			s.forexUpdate = time.Now()
+		}
 	}
 
-	data["forex"] = s.forexCache
+	forexOut := s.forexCache
+	if forexOut == nil {
+		forexOut = map[string]float64{}
+	}
+	data["forex"] = forexOut
 	data["forex_last_update"] = s.forexUpdate.Format(time.RFC3339)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (s *Server) handleCryptoChart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.cryptoDB == nil {
+		http.Error(w, "crypto unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rangeKey := crypto.NormalizeRangeKey(r.URL.Query().Get("range"))
+	if rangeKey == "" {
+		rangeKey = "1w"
+	}
+	if _, err := crypto.RangeToWindow(rangeKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	const chartTTL = 10 * time.Minute
+	s.cryptoChartMu.Lock()
+	if s.cryptoChartCache != nil {
+		if e, ok := s.cryptoChartCache[rangeKey]; ok && time.Since(e.at) < chartTTL {
+			s.cryptoChartMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(e.body)
+			return
+		}
+	}
+	s.cryptoChartMu.Unlock()
+
+	prices, err := s.cryptoDB.GetLatestPrices()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	days, err := crypto.RangeToCoinGeckoDays(rangeKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	var seriesMu sync.Mutex
+	raw := make([]crypto.MarketRawSeries, 0, len(prices))
+
+	for _, p := range prices {
+		if p.GeckoID == "" {
+			continue
+		}
+		p := p
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			pts, err := crypto.FetchMarketChart(client, p.GeckoID, days)
+			if err != nil || len(pts) < 2 {
+				return
+			}
+			seriesMu.Lock()
+			raw = append(raw, crypto.MarketRawSeries{
+				Symbol:  p.Symbol,
+				GeckoID: p.GeckoID,
+				Points:  pts,
+			})
+			seriesMu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	resp, err := crypto.BuildChartResponse(rangeKey, raw, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.cryptoChartMu.Lock()
+	if s.cryptoChartCache == nil {
+		s.cryptoChartCache = make(map[string]cryptoChartCacheEntry)
+	}
+	s.cryptoChartCache[rangeKey] = cryptoChartCacheEntry{at: time.Now(), body: body}
+	s.cryptoChartMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
 }
 
 func generateHex(n int) string {
