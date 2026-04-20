@@ -23,11 +23,19 @@ type Config struct {
 
 // IRCConfig holds settings for the IRC connection.
 type IRCConfig struct {
-	Server   string   `yaml:"server"`
-	Port     int      `yaml:"port"`
-	UseSSL   bool     `yaml:"use_ssl"`
-	Nickname string   `yaml:"nickname"`
-	Channels []string `yaml:"channels"`
+	Server   string         `yaml:"server"`
+	Port     int            `yaml:"port"`
+	UseSSL   bool           `yaml:"use_ssl"`
+	Nickname string         `yaml:"nickname"`
+	Channels []string       `yaml:"channels"`
+	Services ServicesConfig `yaml:"services"`
+}
+
+// ServicesConfig holds settings for IRC services authentication (SASL).
+type ServicesConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // AIConfig holds settings for the LM Studio connection.

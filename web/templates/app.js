@@ -17,6 +17,7 @@ async function fetchStatus() {
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
         updateAdminControls(data.is_admin);
+        updateIRCAuthStatus(data.irc_authenticated);
         lastIsAdmin = data.is_admin;
         
         const badge = document.getElementById('status-badge');
@@ -190,6 +191,26 @@ function updateNewsStatus(enabled, isAdmin) {
         indicator.classList.remove('bg-primary', 'animate-pulse');
         indicator.classList.add('bg-slate-600');
         text.textContent = 'OFF';
+    }
+}
+
+function updateIRCAuthStatus(authenticated) {
+    const badge = document.getElementById('irc-auth-badge');
+    const indicator = document.getElementById('irc-auth-indicator');
+    const text = document.getElementById('irc-auth-text');
+
+    if (authenticated) {
+        badge.classList.remove('bg-slate-800', 'text-slate-500', 'border-white/10');
+        badge.classList.add('bg-green-500/10', 'text-green-500', 'border-green-500/20');
+        indicator.classList.remove('bg-slate-600');
+        indicator.classList.add('bg-green-500', 'animate-pulse');
+        text.textContent = 'Identified';
+    } else {
+        badge.classList.add('bg-slate-800', 'text-slate-500', 'border-white/10');
+        badge.classList.remove('bg-green-500/10', 'text-green-500', 'border-green-500/20');
+        indicator.classList.add('bg-slate-600');
+        indicator.classList.remove('bg-green-500', 'animate-pulse');
+        text.textContent = 'Guest';
     }
 }
 

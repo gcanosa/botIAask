@@ -134,6 +134,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
 		"is_admin":    isAdmin,
 		"needs_password_change": needsChange,
+		"irc_authenticated": s.bot.IsAuthenticated(),
 	}
 
 	if isAdmin && s.statsTracker.IsEnabled() {

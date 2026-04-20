@@ -115,3 +115,5 @@ bot
 =======
 /scratch
 >>>>>>> 14810bc (feat: add crypto price tracking and currency exchange commands to the IRC bot)
+
+config/config.yaml
