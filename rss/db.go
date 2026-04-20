@@ -74,6 +74,9 @@ func (d *Database) IsSeen(guid string) (bool, error) {
 }
 
 func (d *Database) MarkSeen(entry NewsEntry) error {
+	if entry.GUID == "" {
+		return fmt.Errorf("cannot mark news as seen with empty GUID")
+	}
 	_, err := d.db.Exec("INSERT INTO seen_news (guid, title, link, short_link, pub_date) VALUES (?, ?, ?, ?, ?)",
 		entry.GUID, entry.Title, entry.Link, entry.ShortLink, entry.PubDate)
 	return err
