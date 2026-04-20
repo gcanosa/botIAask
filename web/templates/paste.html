@@ -116,6 +116,31 @@
             border-top: 1px solid var(--border);
             margin-top: 2rem;
         }
+
+        .copy-btn {
+            background: var(--primary);
+            color: var(--bg);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+        .copy-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+        .copy-btn.success {
+            background: #10b981;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -129,7 +154,8 @@
                     <span>Expires: <b>{{if eq .Upload.ExpiresInDays 0}}Never{{else}}{{.Upload.ExpiresInDays}} days{{end}}</b></span>
                 </div>
             </div>
-            <div>
+            <div class="flex items-center gap-3">
+                <button id="copy-btn" onclick="copyContent()" class="copy-btn">Copy Content</button>
                 <span class="badge">Approved</span>
             </div>
         </div>
@@ -150,5 +176,24 @@
     <footer>
         &copy; 2026 botIAask - Secure Paste Service
     </footer>
+
+    <script>
+        async function copyContent() {
+            const code = document.querySelector('code').innerText;
+            const btn = document.getElementById('copy-btn');
+            try {
+                await navigator.clipboard.writeText(code);
+                const originalText = btn.innerText;
+                btn.innerText = 'Copied!';
+                btn.classList.add('success');
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.classList.remove('success');
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy: ', err);
+            }
+        }
+    </script>
 </body>
 </html>
