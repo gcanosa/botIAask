@@ -100,6 +100,41 @@ func (d *Database) GetLastNews(limit int) ([]NewsEntry, error) {
 	return entries, nil
 }
 
+func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, error) {
+	var total int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM seen_news WHERE title LIKE ?", "%"+query+"%").Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := d.db.Query(`
+		SELECT guid, title, COALESCE(link, ''), COALESCE(short_link, ''), pub_date 
+		FROM seen_news 
+		WHERE title LIKE ? 
+		ORDER BY added_at DESC 
+		LIMIT ? OFFSET ?`, 
+		"%"+query+"%", limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var entries []NewsEntry
+	for rows.Next() {
+		var e NewsEntry
+		if err := rows.Scan(&e.GUID, &e.Title, &e.Link, &e.ShortLink, &e.PubDate); err != nil {
+			return nil, 0, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, total, nil
+}
+
+func (d *Database) DeleteEntry(guid string) error {
+	_, err := d.db.Exec("DELETE FROM seen_news WHERE guid = ?", guid)
+	return err
+}
+
 func (d *Database) Cleanup(keep int) error {
 	_, err := d.db.Exec(`
 		DELETE FROM seen_news 

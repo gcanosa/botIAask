@@ -25,6 +25,8 @@ type Fetcher struct {
 	mu       sync.Mutex
 	enabled  bool
 	stopChan chan struct{}
+	lastFetch time.Time
+	lfMu      sync.RWMutex
 }
 
 func NewFetcher(cfg *config.Config, bot BotInterface, db *Database) *Fetcher {
@@ -104,6 +106,16 @@ func (f *Fetcher) IsEnabled() bool {
 	return f.enabled
 }
 
+func (f *Fetcher) GetLastFetchTime() time.Time {
+	f.lfMu.RLock()
+	defer f.lfMu.RUnlock()
+	return f.lastFetch
+}
+
+func (f *Fetcher) GetDB() *Database {
+	return f.db
+}
+
 func (f *Fetcher) Fetch() {
 	if !f.bot.IsConnected() {
 		return
@@ -115,6 +127,10 @@ func (f *Fetcher) Fetch() {
 		log.Printf("[RSS] Error fetching feed: %v", err)
 		return
 	}
+
+	f.lfMu.Lock()
+	f.lastFetch = time.Now()
+	f.lfMu.Unlock()
 
 	var newEntries []NewsEntry
 	for _, item := range feed.Items {

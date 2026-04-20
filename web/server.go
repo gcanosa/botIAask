@@ -80,6 +80,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
+	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
+	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
@@ -294,6 +296,82 @@ func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"rss_enabled": enabled})
+}
+
+func (s *Server) handleRSSNews(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		pageStr := r.URL.Query().Get("page")
+		query := r.URL.Query().Get("q")
+		page := 1
+		fmt.Sscanf(pageStr, "%d", &page)
+		if page < 1 {
+			page = 1
+		}
+
+		limit := 15
+		offset := (page - 1) * limit
+
+		items, total, err := s.rssFetcher.GetDB().GetNews(limit, offset, query)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		lastFetch := s.rssFetcher.GetLastFetchTime()
+		
+		response := map[string]interface{}{
+			"news":        items,
+			"page":        page,
+			"total_pages": (total + limit - 1) / limit,
+			"total_count": total,
+			"last_fetch":  lastFetch.Format(time.RFC3339),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		isAdmin, _ := s.checkAuth(r)
+		if !isAdmin {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		guid := r.URL.Query().Get("guid")
+		if guid == "" {
+			http.Error(w, "GUID required", http.StatusBadRequest)
+			return
+		}
+
+		if err := s.rssFetcher.GetDB().DeleteEntry(guid); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleRSSFetchNow(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	go s.rssFetcher.Fetch()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "Fetching started"})
 }
 
 func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
