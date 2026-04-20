@@ -4,6 +4,8 @@ let currentStatsSource = null;
 let activityChart = null;
 let cryptoMarketChart = null;
 let cryptoChartRange = '1w';
+let forexHistoryChart = null;
+let forexChartRange = '1w';
 const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
 
@@ -30,6 +32,7 @@ function showPanel(panelId) {
     }
     if (panelId === 'finance') {
         fetchCryptoChart();
+        fetchForexChart();
     }
 }
 
@@ -62,12 +65,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 5000);
 
-    document.querySelectorAll('.crypto-range-btn').forEach((btn) => {
+    document.querySelectorAll('.crypto-range-btn:not(.forex-range-btn)').forEach((btn) => {
         btn.addEventListener('click', () => {
             const r = btn.getAttribute('data-range');
-            document.querySelectorAll('.crypto-range-btn').forEach((b) => b.classList.remove('active'));
+            document.querySelectorAll('.crypto-range-btn:not(.forex-range-btn)').forEach((b) => b.classList.remove('active'));
             btn.classList.add('active');
             fetchCryptoChart(r);
+        });
+    });
+    document.querySelectorAll('.forex-range-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const r = btn.getAttribute('data-range');
+            document.querySelectorAll('.forex-range-btn').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            fetchForexChart(r);
         });
     });
 });
@@ -431,12 +442,21 @@ async function fetchFinance() {
     const financePanel = document.getElementById('panel-finance');
     if (financePanel && financePanel.classList.contains('active')) {
         fetchCryptoChart();
+        fetchForexChart();
     }
 }
 
 function formatCryptoChartLabel(ms) {
     const d = new Date(ms);
     if (cryptoChartRange === '6h' || cryptoChartRange === '1d') {
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function formatForexChartLabel(ms) {
+    const d = new Date(ms);
+    if (forexChartRange === '6h' || forexChartRange === '1d') {
         return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -523,6 +543,97 @@ async function fetchCryptoChart(range) {
         }
     } catch (e) {
         console.error('Crypto chart fetch error', e);
+    }
+}
+
+async function fetchForexChart(range) {
+    if (range) {
+        forexChartRange = range;
+    }
+    const subEl = document.getElementById('forex-chart-subtitle');
+    const canvas = document.getElementById('forexHistoryChart');
+    if (!canvas) return;
+
+    try {
+        const res = await fetch(`/api/finance/forex-chart?range=${encodeURIComponent(forexChartRange)}`);
+        if (!res.ok) {
+            if (subEl) {
+                subEl.textContent = 'Chart unavailable.';
+            }
+            if (forexHistoryChart) {
+                forexHistoryChart.data.labels = [];
+                forexHistoryChart.data.datasets = [];
+                forexHistoryChart.update();
+            }
+            return;
+        }
+        const data = await res.json();
+        if (subEl) {
+            subEl.textContent = data.subtitle || '';
+        }
+
+        const labels = (data.labels || []).map(formatForexChartLabel);
+        const datasets = (data.series || []).map((s, i) => {
+            const m = forexMeta(s.symbol);
+            const pairLabel = m.hint ? `${m.label} (${m.hint})` : (m.label || s.symbol);
+            return {
+            label: pairLabel,
+            data: (s.values || []).map((v) => (v == null ? null : v)),
+            borderColor: cryptoChartColors[i % cryptoChartColors.length],
+            backgroundColor: 'transparent',
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 1.5,
+            spanGaps: true,
+        };
+        });
+
+        if (!forexHistoryChart) {
+            forexHistoryChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: {
+                            ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 10 },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                        },
+                        y: {
+                            ticks: {
+                                color: '#94a3b8',
+                                callback: (v) => (typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : v),
+                            },
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                        },
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom',
+                            labels: { color: '#94a3b8', boxWidth: 10, padding: 8, font: { size: 10 } },
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label(ctx) {
+                                    const v = ctx.parsed.y;
+                                    if (v == null) return `${ctx.dataset.label}: —`;
+                                    return `${ctx.dataset.label}: ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+        } else {
+            forexHistoryChart.data.labels = labels;
+            forexHistoryChart.data.datasets = datasets;
+            forexHistoryChart.update();
+        }
+    } catch (e) {
+        console.error('Forex chart fetch error', e);
     }
 }
 

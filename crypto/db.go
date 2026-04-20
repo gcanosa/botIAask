@@ -158,6 +158,36 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	return entries, nil
 }
 
+// ForexHistoryRow is one stored snapshot point for a currency pair.
+type ForexHistoryRow struct {
+	Key       string
+	Value     float64
+	FetchedAt time.Time
+}
+
+// GetForexHistorySince returns all forex snapshot rows at or after since, oldest first.
+func (d *Database) GetForexHistorySince(since time.Time) ([]ForexHistoryRow, error) {
+	rows, err := d.db.Query(`
+		SELECT rate_key, value, fetched_at FROM forex_rates
+		WHERE fetched_at >= ?
+		ORDER BY fetched_at ASC
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ForexHistoryRow
+	for rows.Next() {
+		var r ForexHistoryRow
+		if err := rows.Scan(&r.Key, &r.Value, &r.FetchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
 }
