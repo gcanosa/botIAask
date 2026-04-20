@@ -854,6 +854,7 @@ function updatePastesUI(show) {
         indicator.classList.remove('bg-primary', 'animate-pulse');
         indicator.classList.add('bg-slate-500');
         container.classList.add('hidden');
+        document.getElementById('pending-pastes-section').classList.add('hidden');
     }
 }
 
@@ -865,6 +866,14 @@ function togglePastes() {
 
 async function fetchPastes(page) {
     pastePage = page;
+    
+    // If admin, fetch pending ones too
+    if (lastIsAdmin) {
+        fetchPendingPastes();
+    } else {
+        document.getElementById('pending-pastes-section').classList.add('hidden');
+    }
+
     try {
         const res = await fetch(`/api/pastes?page=${page}`);
         if (!res.ok) throw new Error('Pastes fetch failed');
@@ -916,6 +925,75 @@ function changePastePage(delta) {
     const newPage = pastePage + delta;
     if (newPage >= 1 && newPage <= totalPastePages) {
         fetchPastes(newPage);
+    }
+}
+
+async function fetchPendingPastes() {
+    try {
+        const res = await fetch('/api/pastes/pending');
+        if (!res.ok) throw new Error('Pending fetch failed');
+        const pending = await res.json();
+        
+        const section = document.getElementById('pending-pastes-section');
+        const list = document.getElementById('pending-pastes-list');
+        list.innerHTML = '';
+        
+        if (pending && pending.length > 0) {
+            section.classList.remove('hidden');
+            pending.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-white/5 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group';
+                
+                const date = new Date(p.CreatedAt).toLocaleString([], { 
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                });
+
+                tr.innerHTML = `
+                    <td class="py-4 text-yellow-500 font-bold mono italic">${p.TicketID}</td>
+                    <td class="py-4 text-slate-200">${p.Title || '(No title)'}</td>
+                    <td class="py-4 text-slate-400">${p.Username}</td>
+                    <td class="py-4 text-slate-500">${p.Channel}</td>
+                    <td class="py-4 text-slate-500 text-[10px]">${date}</td>
+                    <td class="py-4 text-right flex justify-end gap-2">
+                        <button onclick="approvePaste('${p.TicketID}')" class="bg-green-500/20 hover:bg-green-500/30 text-green-500 font-bold px-3 py-1 rounded transition-all cursor-pointer text-[10px] uppercase">Approve</button>
+                        <button onclick="rejectPaste('${p.TicketID}')" class="bg-red-500/20 hover:bg-red-500/30 text-red-500 font-bold px-3 py-1 rounded transition-all cursor-pointer text-[10px] uppercase">Reject</button>
+                    </td>
+                `;
+                list.appendChild(tr);
+            });
+        } else {
+            section.classList.add('hidden');
+        }
+    } catch (e) {
+        console.error("Failed to load pending pastes", e);
+    }
+}
+
+async function approvePaste(ticketID) {
+    if (!confirm(`Approve and publish paste ${ticketID}?`)) return;
+    try {
+        const res = await fetch(`/api/pastes/approve?ticketID=${ticketID}`, { method: 'POST' });
+        if (res.ok) {
+            fetchPastes(1); // Refresh both
+        } else {
+            alert('Approval failed');
+        }
+    } catch (e) {
+        console.error("Approval error", e);
+    }
+}
+
+async function rejectPaste(ticketID) {
+    if (!confirm(`Are you sure you want to REJECT and cancel paste ${ticketID}?`)) return;
+    try {
+        const res = await fetch(`/api/pastes/reject?ticketID=${ticketID}`, { method: 'POST' });
+        if (res.ok) {
+            fetchPendingPastes(); // Just refresh pending
+        } else {
+            alert('Rejection failed');
+        }
+    } catch (e) {
+        console.error("Rejection error", e);
     }
 }
 

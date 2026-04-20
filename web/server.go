@@ -85,6 +85,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
 	mux.HandleFunc("/api/pastes", s.handlePastesList)
 	mux.HandleFunc("/api/pastes/delete", s.handlePasteDelete)
+	mux.HandleFunc("/api/pastes/pending", s.handlePendingPastes)
+	mux.HandleFunc("/api/pastes/approve", s.handlePasteApprove)
+	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -746,6 +749,92 @@ func (s *Server) handlePasteDelete(w http.ResponseWriter, r *http.Request) {
 	if err := s.uploadsDB.DeletePaste(ticketID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	items, err := s.uploadsDB.GetPendingTickets()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ticketID := r.URL.Query().Get("ticketID")
+	if ticketID == "" {
+		http.Error(w, "ticketID required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.uploadsDB.ApproveTicket(ticketID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Notify IRC as well
+	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err == nil {
+		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s/p/%s", ticketID, s.cfg.Web.BaseURL, ticketID))
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ticketID := r.URL.Query().Get("ticketID")
+	if ticketID == "" {
+		http.Error(w, "ticketID required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.uploadsDB.CancelTicket(ticketID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Notify IRC
+	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err == nil {
+		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
 	}
 
 	w.WriteHeader(http.StatusOK)
