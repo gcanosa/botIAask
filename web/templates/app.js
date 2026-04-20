@@ -828,8 +828,74 @@ async function deleteUser(id) {
 
 // Initial load
 fetchStatus();
-// Refresh status metadata every 30 seconds
+fetchFinance();
+
+// Refresh metadata
 setInterval(fetchStatus, 30000);
+setInterval(fetchFinance, 60000);
+
+// Finance UI Logic
+async function fetchFinance() {
+    try {
+        const res = await fetch('/api/finance');
+        if (!res.ok) throw new Error('Finance fetch failed');
+        const data = await res.json();
+        
+        updateFinanceUI(data);
+        const updated = document.getElementById('finance-updated');
+        if (updated) updated.textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+        console.error("Failed to load finance data", e);
+    }
+}
+
+function updateFinanceUI(data) {
+    const cryptoContainer = document.getElementById('crypto-prices');
+    const forexContainer = document.getElementById('forex-rates');
+    if (!cryptoContainer || !forexContainer) return;
+
+    // Update Crypto
+    cryptoContainer.innerHTML = '';
+    if (data.crypto && data.crypto.length > 0) {
+        data.crypto.forEach(coin => {
+            const card = document.createElement('div');
+            card.className = 'bg-slate-900/50 border border-white/5 rounded-lg p-3 hover:border-primary/30 transition-colors group';
+            
+            let symbolColor = 'text-slate-400';
+            if (coin.Symbol === 'BTC') symbolColor = 'text-yellow-500';
+            else if (coin.Symbol === 'ETH') symbolColor = 'text-blue-400';
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-1">
+                    <span class="mono text-[10px] font-bold ${symbolColor}">${coin.Symbol}</span>
+                </div>
+                <div class="mono text-xs font-bold text-slate-200">$${coin.PriceUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+            `;
+            cryptoContainer.appendChild(card);
+        });
+    }
+
+    // Update Forex
+    forexContainer.innerHTML = '';
+    if (data.forex) {
+        const pairs = [
+            { id: 'eur_usd', label: 'EUR/USD', value: data.forex.eur_usd, format: 4 },
+            { id: 'usd_ars', label: 'USD/ARS', value: data.forex.usd_ars, format: 2 },
+            { id: 'eur_ars', label: 'EUR/ARS', value: data.forex.eur_ars, format: 2 }
+        ];
+
+        pairs.forEach(pair => {
+            if (pair.value === undefined) return;
+            const card = document.createElement('div');
+            card.className = 'bg-slate-800/30 border border-white/5 rounded-lg p-3 hover:border-accent/30 transition-colors';
+            card.innerHTML = `
+                <div class="text-[9px] text-slate-500 uppercase tracking-widest font-bold mb-1">${pair.label}</div>
+                <div class="mono text-xs font-bold text-accent">${pair.value.toFixed(pair.format)}</div>
+            `;
+            forexContainer.appendChild(card);
+        });
+    }
+}
 
 // Pastes Logic
 let pastePage = 1;

@@ -84,6 +84,41 @@
             </div>
         </div>
 
+        <!-- Finance Panel -->
+        <div id="finance-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold flex items-center gap-2">
+                    Financial Markets
+                    <span class="text-[9px] lowercase bg-slate-800 text-slate-500 px-2 py-0.5 rounded-full border border-white/5">Real-time indicators</span>
+                </h2>
+                <span class="text-[10px] mono text-slate-500" id="finance-updated">Last update: --:--:--</span>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Crypto Prices -->
+                <div class="space-y-4">
+                    <h3 class="text-primary text-[10px] uppercase tracking-widest font-bold flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+                        Top Cryptocurrencies
+                    </h3>
+                    <div id="crypto-prices" class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <!-- Crypto items injected here -->
+                    </div>
+                </div>
+
+                <!-- Forex Rates -->
+                <div class="space-y-4">
+                    <h3 class="text-accent text-[10px] uppercase tracking-widest font-bold flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
+                        Exchange Rates
+                    </h3>
+                    <div id="forex-rates" class="grid grid-cols-2 gap-3">
+                        <!-- Forex items injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Channels & Interaction -->
         <div class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8">
             <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-4 font-semibold">Active Channels (Click to view logs)</h2>

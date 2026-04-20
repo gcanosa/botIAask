@@ -263,7 +263,8 @@ func main() {
 	}
 
 	// Initialize Crypto Database
-	cryptoDB, err := crypto.NewDatabase("crypto.db")
+	var cryptoDB *crypto.Database
+	cryptoDB, err = crypto.NewDatabase("crypto.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize crypto database: %v", err)
 	} else {
@@ -283,17 +284,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) error {
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
 	err := WritePIDFile(pidFile)
@@ -303,7 +304,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
 	}
 
 	// Start the IRC bot
@@ -348,14 +349,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
 	}
 
 	// Start the IRC bot
@@ -392,8 +393,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database) {
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database) {
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb)
 	if err := ws.Start(); err != nil {
 		log.Printf("Web server error: %v", err)
 	}

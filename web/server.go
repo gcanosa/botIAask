@@ -18,6 +18,7 @@ import (
 
 	"botIAask/bookmarks"
 	"botIAask/config"
+	"botIAask/crypto"
 	"botIAask/irc"
 	"botIAask/rss"
 	"botIAask/stats"
@@ -36,11 +37,12 @@ type Server struct {
 	bookmarksDB  *bookmarks.Database
 	authDB       *AuthDatabase
 	uploadsDB    *uploads.Database
+	cryptoDB     *crypto.Database
 	templates    *template.Template
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -63,6 +65,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		bookmarksDB:  bookmarksDB,
 		authDB:       authDB,
 		uploadsDB:    uploadsDB,
+		cryptoDB:     cryptoDB,
 		templates:    tmpl,
 	}
 }
@@ -88,6 +91,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/pastes/pending", s.handlePendingPastes)
 	mux.HandleFunc("/api/pastes/approve", s.handlePasteApprove)
 	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
+	mux.HandleFunc("/api/finance", s.handleFinance)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -848,8 +852,47 @@ func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
 	}
-
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{}
+
+	// Get Crypto Prices
+	if s.cryptoDB != nil {
+		prices, err := s.cryptoDB.GetLatestPrices()
+		if err == nil {
+			data["crypto"] = prices
+		}
+	}
+
+	// Get Forex Rates
+	forex := map[string]float64{}
+	
+	// EUR to USD
+	eurRates, err := irc.FetchRates("EUR")
+	if err == nil {
+		if rate, ok := eurRates.Rates["USD"]; ok {
+			forex["eur_usd"] = rate
+		}
+	}
+
+	// USD to ARS
+	usdRates, err := irc.FetchRates("USD")
+	if err == nil {
+		if rate, ok := usdRates.Rates["ARS"]; ok {
+			forex["usd_ars"] = rate
+		}
+		// Calculate EUR to ARS if we have both
+		if eurRate, ok := usdRates.Rates["EUR"]; ok && eurRate != 0 {
+			forex["eur_ars"] = usdRates.Rates["ARS"] / eurRate
+		}
+	}
+
+	data["forex"] = forex
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
 }
 
 func generateHex(n int) string {
