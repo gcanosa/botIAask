@@ -12,12 +12,14 @@ import (
 	"botIAask/ai"
 	"botIAask/config"
 	"botIAask/irc"
+	"botIAask/web"
 )
 
 func main() {
 	// Command-line flags
 	daemon := flag.Bool("daemon", false, "Run bot in daemon mode")
 	debug := flag.Bool("debug", true, "Enable debug mode with console output")
+	dashboard := flag.Bool("dashboard", false, "Run in daemon mode and enable web dashboard")
 	mode := flag.String("mode", "", "Operation mode: start, stop, restart, or empty for foreground")
 	version := flag.Bool("version", false, "Show version information")
 	about := flag.Bool("about", false, "Show about information")
@@ -58,9 +60,16 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// CLI flag overrides config file.
+	// CLI flag overrides.
 	if *debug {
 		cfg.Bot.Debug = true
+	}
+	if *dashboard {
+		*daemon = true
+		cfg.Web.Enabled = true
+		if cfg.Bot.Debug {
+			fmt.Println("Dashboard flag active: enabling web server and forcing daemon mode.")
+		}
 	}
 
 	if cfg.Bot.Debug {
@@ -81,6 +90,12 @@ func main() {
 
 		switch effectiveMode {
 		case "start":
+			if *dashboard {
+				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
+				fmt.Printf("\n--------------------------------------------------\n")
+				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
+				fmt.Printf("--------------------------------------------------\n\n")
+			}
 			err := StartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to start daemon: %v", err)
@@ -93,6 +108,12 @@ func main() {
 			}
 			return
 		case "restart":
+			if *dashboard {
+				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
+				fmt.Printf("\n--------------------------------------------------\n")
+				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
+				fmt.Printf("--------------------------------------------------\n\n")
+			}
 			err := RestartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to restart daemon: %v", err)
@@ -147,12 +168,26 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 	}()
 
 	// Wait for signals or shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	sig := <-c
+	c := make(chan os.Signal, 2)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	
+	for {
+		sig := <-c
+		if sig == syscall.SIGHUP {
+			log.Println("SIGHUP received, reloading configuration...")
+			newCfg, err := config.LoadConfig("config/config.yaml")
+			if err != nil {
+				log.Printf("Failed to reload config: %v", err)
+				continue
+			}
+			bot.Reload(newCfg)
+			continue
+		}
 
-	if cfg.Bot.Debug {
-		log.Printf("Daemon received signal: %v. Shutting down...", sig)
+		if cfg.Bot.Debug {
+			log.Printf("Daemon received signal: %v. Shutting down...", sig)
+		}
+		break
 	}
 
 	// Clean up PID file on exit
@@ -185,43 +220,29 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) {
 	}()
 
 	// Wait for signal
-	sig := <-c
-	log.Printf("Received signal: %v. Shutting down gracefully...", sig)
+	for {
+		sig := <-c
+		if sig == syscall.SIGHUP {
+			log.Println("SIGHUP received, reloading configuration...")
+			newCfg, err := config.LoadConfig("config/config.yaml")
+			if err != nil {
+				log.Printf("Failed to reload config: %v", err)
+				continue
+			}
+			bot.Reload(newCfg)
+			continue
+		}
+		log.Printf("Received signal: %v. Shutting down gracefully...", sig)
+		break
+	}
 
 	// Give some time for graceful shutdown
 	time.Sleep(1 * time.Second)
 }
 
 func startWebServer(cfg *config.Config, bot *irc.Bot) {
-	// Web server implementation
-	log.Println("Starting web server on", cfg.Web.Host, ":", cfg.Web.Port)
-
-	// For now, we'll just log that the web server would start here.
-	// In a real implementation, we would set up an HTTP server with routes for:
-	// - Bot status information
-	// - Command history
-	// - Configuration management
-	// - Real-time updates via WebSockets
-
-	// Example of what would be implemented:
-	/*
-		router := mux.NewRouter()
-		router.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-			// Return bot status information
-			status := map[string]interface{}{
-				"uptime": time.Since(startTime).String(),
-				"connected": bot.IsConnected(),
-				"channels": cfg.IRC.Channels,
-				"nickname": cfg.IRC.Nickname,
-			}
-			json.NewEncoder(w).Encode(status)
-		}).Methods("GET")
-
-		server := &http.Server{
-			Addr:    fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port),
-			Handler: router,
-		}
-
-		log.Fatal(server.ListenAndServe())
-	*/
+	ws := web.NewServer(cfg, bot)
+	if err := ws.Start(); err != nil {
+		log.Printf("Web server error: %v", err)
+	}
 }
