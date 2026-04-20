@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +147,26 @@ func (s *Server) Start() error {
 	return server.ListenAndServe()
 }
 
+func mergeUniqueSortedStrings(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for _, s := range a {
+		if s != "" {
+			seen[s] = struct{}{}
+		}
+	}
+	for _, s := range b {
+		if s != "" {
+			seen[s] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	isAdmin, needsChange := s.checkAuth(r)
 	status := map[string]interface{}{
@@ -166,8 +187,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isAdmin && s.statsTracker.IsEnabled() {
-		nicks, chans := s.statsTracker.GetAdmins()
-		status["admin_nicknames"] = nicks
+		ircNicks, chans := s.statsTracker.GetAdmins()
+		webNames, err := s.authDB.ActiveSessionUsernames()
+		if err != nil {
+			log.Printf("active web admin sessions: %v", err)
+		}
+		status["admin_nicknames"] = mergeUniqueSortedStrings(ircNicks, webNames)
 		status["channel_admins"] = chans
 	}
 

@@ -153,6 +153,29 @@ func (a *AuthDatabase) DeleteSession(token string) error {
 	return err
 }
 
+// ActiveSessionUsernames returns distinct usernames with a valid, non-expired web admin session.
+func (a *AuthDatabase) ActiveSessionUsernames() ([]string, error) {
+	rows, err := a.db.Query(`
+		SELECT DISTINCT u.username
+		FROM web_sessions s
+		JOIN web_users u ON s.user_id = u.id
+		WHERE s.expires_at > ?`, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		names = append(names, u)
+	}
+	return names, rows.Err()
+}
+
 func (a *AuthDatabase) GetUsers() ([]User, error) {
 	rows, err := a.db.Query("SELECT id, username, role, created_at FROM web_users")
 	if err != nil {
