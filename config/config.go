@@ -97,6 +97,8 @@ type RSSConfig struct {
 	Enabled         bool     `yaml:"enabled"`
 	IntervalMinutes int      `yaml:"interval_minutes"`
 	Channels        []string `yaml:"channels"`
+	RetentionCount  int      `yaml:"retention_count"`
+	FeedURLs        []string `yaml:"feed_urls"`
 }
 
 // StatsConfig holds settings for real-time statistics collection.
@@ -121,4 +123,19 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// SaveConfig writes the configuration to the specified YAML file.
+func SaveConfig(path string, cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	err = os.WriteFile(path, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
 }

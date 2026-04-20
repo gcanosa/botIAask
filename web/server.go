@@ -82,6 +82,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
+	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
@@ -372,6 +373,67 @@ func (s *Server) handleRSSFetchNow(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "Fetching started"})
+}
+
+func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		response := map[string]interface{}{
+			"interval_minutes": s.cfg.RSS.IntervalMinutes,
+			"retention_count":  s.cfg.RSS.RetentionCount,
+			"feed_urls":        s.cfg.RSS.FeedURLs,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			IntervalMinutes int      `json:"interval_minutes"`
+			RetentionCount  int      `json:"retention_count"`
+			FeedURLs        []string `json:"feed_urls"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Update config
+		oldInterval := s.cfg.RSS.IntervalMinutes
+		s.cfg.RSS.IntervalMinutes = req.IntervalMinutes
+		s.cfg.RSS.RetentionCount = req.RetentionCount
+		s.cfg.RSS.FeedURLs = req.FeedURLs
+
+		// Save config
+		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Restart fetcher if enabled and interval changed
+		if s.rssFetcher.IsEnabled() && oldInterval != req.IntervalMinutes {
+			s.rssFetcher.SetEnabled(false)
+			s.rssFetcher.SetEnabled(true)
+		}
+
+		// Always trigger cleanup if retention changed
+		if req.RetentionCount > 0 {
+			s.rssFetcher.GetDB().Cleanup(req.RetentionCount)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {

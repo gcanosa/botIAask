@@ -266,6 +266,32 @@
                     <h1 class="section-title">Global News</h1>
                     <p class="section-subtitle">Real-time RSS feed highlights and database entries.</p>
                 </div>
+
+                <!-- Admin RSS Settings Card -->
+                <div id="rss-admin-settings" class="card hidden animate-fade" style="margin-bottom: 2rem; border: 1px solid var(--primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0; color: var(--primary);">RSS Configuration</h3>
+                        <button onclick="toggleRSSSettings()" class="btn btn-ghost" style="padding: 0.25rem;">✕</button>
+                    </div>
+                    <div class="grid grid-2" style="margin-bottom: 1.5rem;">
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Fetch Interval (Minutes)</label>
+                            <input type="number" id="rss-interval" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Retention (Entries)</label>
+                            <input type="number" id="rss-retention" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 1.5rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Feed URLs (one per line)</label>
+                        <textarea id="rss-urls" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; height: 100px; resize: vertical; padding: 1rem; background: rgba(0,0,0,0.2); line-height: 1.5;"></textarea>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button onclick="saveRSSSettings()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Apply Changes</button>
+                        <div id="rss-settings-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
                 <div class="card">
                     <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: center; justify-content: space-between; flex-wrap: wrap;">
                         <div style="display: flex; gap: 0.5rem; align-items: center; position: relative; flex: 1; min-width: 300px;">
@@ -278,6 +304,10 @@
                         <div style="display: flex; gap: 1rem; align-items: center;">
                             <div class="mono" id="news-fetch-info" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Last fetched: Never</div>
                             <button id="admin-fetch-btn" onclick="forceFetchNews()" class="btn btn-primary hidden" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">Fetch Now</button>
+                            <button id="admin-rss-settings-btn" onclick="toggleRSSSettings()" class="btn btn-ghost hidden" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                                Settings
+                            </button>
                             <div style="display: flex; gap: 0.25rem;">
                                 <button id="news-prev-page" onclick="changeNewsPage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
                                 <button id="news-next-page" onclick="changeNewsPage(1)" class="btn btn-ghost" style="padding: 0.4rem;">&rarr;</button>
