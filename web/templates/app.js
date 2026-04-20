@@ -19,6 +19,7 @@ function showPanel(panelId) {
     // Specific panel initializers
     if (panelId === 'bookmarks') fetchBookmarks(1);
     if (panelId === 'pastes') fetchApprovedPastes(1);
+    if (panelId === 'news') fetchNews(1);
     if (panelId === 'admin') fetchUsers();
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
@@ -44,11 +45,14 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchFinance();
     setInterval(fetchFinance, 60000); // 1m finance refresh
     
-    // Poll for pending/approved pastes every 5s if admin and on pastes panel
+    // Poll for pending/approved pastes and news every 5s if admin and on respective panel
     setInterval(() => {
         if (lastIsAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
             fetchPendingPastes();
             fetchApprovedPastes(pastePage);
+        }
+        if (document.getElementById('panel-news').classList.contains('active')) {
+            fetchNews(newsPage);
         }
     }, 5000);
 });
@@ -120,12 +124,16 @@ function updateAdminView(isAdmin) {
             pendingSec.classList.remove('hidden');
             fetchPendingPastes();
         }
+        document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
+        document.getElementById('news-admin-header')?.classList.remove('hidden');
     } else {
         adminNav.classList.add('hidden');
         adminBadge.classList.add('hidden');
         loginBtn.classList.remove('hidden');
         logoutBtn.classList.add('hidden');
         if (pendingSec) pendingSec.classList.add('hidden');
+        document.getElementById('admin-fetch-btn')?.classList.add('hidden');
+        document.getElementById('news-admin-header')?.classList.add('hidden');
     }
 }
 
@@ -482,6 +490,87 @@ async function fetchPendingPastes() {
     }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending approvals</td></tr>';
 }
 
+// NEWS
+let newsPage = 1;
+let newsSearchTimeout = null;
+
+async function fetchNews(page) {
+    if (page < 1) page = 1;
+    newsPage = page;
+    const q = document.getElementById('news-search').value;
+    try {
+        const res = await fetch(`/api/rss/news?page=${page}&q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        
+        const fetchInfo = document.getElementById('news-fetch-info');
+        if (data.last_fetch && data.last_fetch !== '0001-01-01T00:00:00Z') {
+            fetchInfo.textContent = `Last fetched: ${new Date(data.last_fetch).toLocaleString()}`;
+        }
+
+        const list = document.getElementById('news-list');
+        if (!data.news || data.news.length === 0) {
+            list.innerHTML = '<tr><td colspan="3" style="padding: 2rem; text-align: center; color: var(--text-muted);">No news found.</td></tr>';
+            return;
+        }
+
+        list.innerHTML = data.news.map(n => `
+            <tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 1rem;">
+                    <div style="font-weight: 600; color: var(--text-main);">${n.Title}</div>
+                    <div style="font-size: 0.7rem; margin-top: 0.25rem;">
+                        <a href="${n.Link}" target="_blank" style="color: var(--primary); text-decoration: none;">View Source</a>
+                        ${n.ShortLink ? `<span style="color: var(--text-muted); margin: 0 0.5rem;">|</span><a href="${n.ShortLink}" target="_blank" style="color: var(--accent); text-decoration: none;">Short Link</a>` : ''}
+                    </div>
+                </td>
+                <td style="padding: 1rem; text-align: right; color: var(--text-muted); white-space: nowrap;">
+                    ${new Date(n.PubDate).toLocaleDateString()} ${new Date(n.PubDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                </td>
+                ${lastIsAdmin ? `
+                <td style="padding: 1rem; text-align: right;">
+                    <button onclick="deleteNews('${n.GUID}')" style="color: var(--error); background: none; border: none; cursor: pointer; font-size: 0.8rem;">Delete</button>
+                </td>` : '<td class="hidden"></td>'}
+            </tr>
+        `).join('');
+
+        document.getElementById('news-prev-page').disabled = page <= 1;
+        document.getElementById('news-next-page').disabled = page >= data.total_pages;
+
+    } catch (e) { console.error("News fetch failed", e); }
+}
+
+async function forceFetchNews() {
+    const btn = document.getElementById('admin-fetch-btn');
+    btn.disabled = true;
+    btn.textContent = 'Fetching...';
+    try {
+        await fetch('/api/rss/fetch', { method: 'POST' });
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = 'Fetch Now';
+            fetchNews(1);
+        }, 2000);
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Fetch Now';
+    }
+}
+
+async function deleteNews(guid) {
+    if (!confirm('Delete this news entry?')) return;
+    const res = await fetch(`/api/rss/news?guid=${encodeURIComponent(guid)}`, { method: 'DELETE' });
+    if (res.ok) fetchNews(newsPage);
+}
+
+function debounceNewsSearch() {
+    clearTimeout(newsSearchTimeout);
+    newsSearchTimeout = setTimeout(() => fetchNews(1), 300);
+}
+
+function changeNewsPage(d) {
+    if (newsPage + d < 1) return;
+    fetchNews(newsPage + d);
+}
+
 // AUTH & ADMIN
 function showLogin() { 
     document.getElementById('modal-overlay').classList.remove('hidden');
@@ -651,6 +740,10 @@ window.switchLogTab = switchLogTab;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
+window.forceFetchNews = forceFetchNews;
+window.deleteNews = deleteNews;
+window.debounceNewsSearch = debounceNewsSearch;
+window.changeNewsPage = changeNewsPage;
 window.changeTimeframe = (tf) => {
     document.querySelectorAll('#timeframe-selector button').forEach(b => b.classList.toggle('active', b.dataset.time === tf));
     fetchHistory(tf);
