@@ -5,35 +5,32 @@
 !_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
 !_TAG_PROGRAM_VERSION	5.8	//
 cancelSession	web/templates/upload.html	/^        function cancelSession() {$/;"	f
-changeBookmarkPage	web/templates/app.js	/^function changeBookmarkPage(delta) {$/;"	f
-changePastePage	web/templates/app.js	/^function changePastePage(delta) {$/;"	f
+changeBookmarkPage	web/templates/app.js	/^function changeBookmarkPage(d) {$/;"	f
+changeNewsPage	web/templates/app.js	/^function changeNewsPage(d) {$/;"	f
+changePastePage	web/templates/app.js	/^function changePastePage(d) {$/;"	f
 closeAllLogs	web/templates/app.js	/^function closeAllLogs() {$/;"	f
-closeTab	web/templates/app.js	/^function closeTab(channel) {$/;"	f
+closeLogTab	web/templates/app.js	/^function closeLogTab(channel) {$/;"	f
+const.eur_ars	web/templates/app.js	/^            'eur_ars': 'EUR\/ARS'$/;"	p
+const.eur_usd	web/templates/app.js	/^            'eur_usd': 'EUR\/USD',$/;"	p
+const.usd_ars	web/templates/app.js	/^            'usd_ars': 'USD\/ARS (Official)',$/;"	p
+const.usd_ars_blue	web/templates/app.js	/^            'usd_ars_blue': 'USD\/ARS (Blue)',$/;"	p
+debounceNewsSearch	web/templates/app.js	/^function debounceNewsSearch() {$/;"	f
 debounceSearch	web/templates/app.js	/^function debounceSearch() {$/;"	f
-formatTimestamp	web/templates/app.js	/^function formatTimestamp(ts, timeframe) {$/;"	f
 generateLineNumbers	web/templates/paste.html	/^        function generateLineNumbers() {$/;"	f
-hideAddUser	web/templates/app.js	/^function hideAddUser() {$/;"	f
-hideLogin	web/templates/app.js	/^function hideLogin() {$/;"	f
-hideResetPassword	web/templates/app.js	/^function hideResetPassword() {$/;"	f
+hideLogin	web/templates/app.js	/^function hideLogin() { $/;"	f
 init	web/templates/paste.html	/^        function init() {$/;"	f
 initChart	web/templates/app.js	/^function initChart() {$/;"	f
 openLogs	web/templates/app.js	/^function openLogs(channel) {$/;"	f
-showAddUser	web/templates/app.js	/^function showAddUser() {$/;"	f
 showForcePassword	web/templates/app.js	/^function showForcePassword() {$/;"	f
-showLogin	web/templates/app.js	/^function showLogin() {$/;"	f
-showResetPassword	web/templates/app.js	/^function showResetPassword(id, username) {$/;"	f
+showLogin	web/templates/app.js	/^function showLogin() { $/;"	f
+showPanel	web/templates/app.js	/^function showPanel(panelId) {$/;"	f
 startStatsStream	web/templates/app.js	/^function startStatsStream() {$/;"	f
-stopStatsStream	web/templates/app.js	/^function stopStatsStream() {$/;"	f
-switchTab	web/templates/app.js	/^function switchTab(channel) {$/;"	f
-toggleBookmarks	web/templates/app.js	/^function toggleBookmarks() {$/;"	f
+stopStatsStream	web/templates/app.js	/^function stopStatsStream() { if (currentStatsSource) { currentStatsSource.close(); currentStatsSource = null; } }$/;"	f
+switchLogTab	web/templates/app.js	/^function switchLogTab(channel) {$/;"	f
 toggleHighlight	web/templates/paste.html	/^        function toggleHighlight() {$/;"	f
 toggleLines	web/templates/paste.html	/^        function toggleLines() {$/;"	f
-togglePastes	web/templates/app.js	/^function togglePastes() {$/;"	f
-toggleUsers	web/templates/app.js	/^function toggleUsers() {$/;"	f
-updateAdminControls	web/templates/app.js	/^function updateAdminControls(isAdmin) {$/;"	f
+updateAdminView	web/templates/app.js	/^function updateAdminView(isAdmin) {$/;"	f
 updateAdminsUI	web/templates/app.js	/^function updateAdminsUI(nicks, chans) {$/;"	f
-updateBookmarksUI	web/templates/app.js	/^function updateBookmarksUI(show) {$/;"	f
-updateFinanceUI	web/templates/app.js	/^function updateFinanceUI(data) {$/;"	f
+updateIRCAuthStatus	web/templates/app.js	/^function updateIRCAuthStatus(authenticated) {$/;"	f
 updateNewsStatus	web/templates/app.js	/^function updateNewsStatus(enabled, isAdmin) {$/;"	f
-updatePastesUI	web/templates/app.js	/^function updatePastesUI(show) {$/;"	f
 updateStatsStatus	web/templates/app.js	/^function updateStatsStatus(enabled, isAdmin) {$/;"	f
