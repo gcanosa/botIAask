@@ -9,10 +9,11 @@ import (
 )
 
 type PriceEntry struct {
-	Symbol   string
-	Name     string
-	PriceUSD float64
-	FetchedAt time.Time
+	Symbol    string    `json:"symbol"`
+	Name      string    `json:"name"`
+	PriceUSD  float64   `json:"price"`
+	Change24h float64   `json:"change_24h"`
+	FetchedAt time.Time `json:"fetched_at"`
 }
 
 type Database struct {
@@ -31,6 +32,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 			symbol TEXT,
 			name TEXT,
 			price_usd REAL,
+			change_24h REAL DEFAULT 0,
 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
@@ -48,14 +50,14 @@ func (d *Database) SavePrices(entries []PriceEntry) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT INTO crypto_prices (symbol, name, price_usd, fetched_at) VALUES (?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT INTO crypto_prices (symbol, name, price_usd, change_24h, fetched_at) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, e := range entries {
-		_, err := stmt.Exec(e.Symbol, e.Name, e.PriceUSD, e.FetchedAt)
+		_, err := stmt.Exec(e.Symbol, e.Name, e.PriceUSD, e.Change24h, e.FetchedAt)
 		if err != nil {
 			return err
 		}
@@ -68,7 +70,7 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	// We want the latest price for each symbol that was fetched in the last "batch"
 	// For simplicity, we just fetch the last 10 entries ordered by fetched_at desc
 	rows, err := d.db.Query(`
-		SELECT symbol, name, price_usd, fetched_at 
+		SELECT symbol, name, price_usd, change_24h, fetched_at 
 		FROM crypto_prices 
 		WHERE fetched_at = (SELECT MAX(fetched_at) FROM crypto_prices)
 		ORDER BY price_usd DESC
@@ -81,7 +83,7 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	var entries []PriceEntry
 	for rows.Next() {
 		var e PriceEntry
-		if err := rows.Scan(&e.Symbol, &e.Name, &e.PriceUSD, &e.FetchedAt); err != nil {
+		if err := rows.Scan(&e.Symbol, &e.Name, &e.PriceUSD, &e.Change24h, &e.FetchedAt); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -91,9 +93,9 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	// Fallback: get last 10 unique symbols
 	if len(entries) == 0 {
 		rows, err = d.db.Query(`
-			SELECT symbol, name, price_usd, fetched_at
+			SELECT symbol, name, price_usd, change_24h, fetched_at
 			FROM (
-				SELECT symbol, name, price_usd, fetched_at,
+				SELECT symbol, name, price_usd, change_24h, fetched_at,
 				ROW_NUMBER() OVER(PARTITION BY symbol ORDER BY fetched_at DESC) as rn
 				FROM crypto_prices
 			)
@@ -107,7 +109,7 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var e PriceEntry
-			if err := rows.Scan(&e.Symbol, &e.Name, &e.PriceUSD, &e.FetchedAt); err != nil {
+			if err := rows.Scan(&e.Symbol, &e.Name, &e.PriceUSD, &e.Change24h, &e.FetchedAt); err != nil {
 				return nil, err
 			}
 			entries = append(entries, e)

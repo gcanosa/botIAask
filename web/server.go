@@ -249,6 +249,16 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 		return
 	}
+	if path == "/static/style.css" {
+		data, err := templatesFS.ReadFile("templates/style.css")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css")
+		w.Write(data)
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -742,6 +752,7 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -790,6 +801,7 @@ func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	json.NewEncoder(w).Encode(items)
 }
 

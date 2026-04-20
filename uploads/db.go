@@ -11,18 +11,18 @@ import (
 )
 
 type Upload struct {
-	ID            int
-	TicketID      string
-	Token         string
-	Username      string
-	Title         string
-	Description   string
-	ContentPath   string
-	ExpiresInDays int
-	Status        string // pending_form, pending_approval, approved, cancelled, expired
-	Channel       string
-	CreatedAt     time.Time
-	ApprovedAt    sql.NullTime
+	ID            int          `json:"id"`
+	TicketID      string       `json:"ticket_id"`
+	Token         string       `json:"token"`
+	Username      string       `json:"username"`
+	Title         string       `json:"title"`
+	Description   string       `json:"description"`
+	ContentPath   string       `json:"content_path"`
+	ExpiresInDays int          `json:"expires_in_days"`
+	Status        string       `json:"status"` // pending_form, pending_approval, approved, cancelled, expired
+	Channel       string       `json:"channel"`
+	CreatedAt     time.Time    `json:"created_at"`
+	ApprovedAt    sql.NullTime `json:"approved_at"`
 }
 
 type Database struct {
@@ -61,6 +61,10 @@ func NewDatabase(dbPath, pastesDir string) (*Database, error) {
 	if err := os.MkdirAll(pastesDir, 0755); err != nil {
 		return nil, err
 	}
+
+	// Optimize SQLite for better concurrency and consistency
+	db.Exec("PRAGMA journal_mode=WAL;")
+	db.Exec("PRAGMA synchronous=NORMAL;")
 
 	return &Database{db: db, pastesDir: pastesDir}, nil
 }

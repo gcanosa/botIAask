@@ -15,10 +15,11 @@ type Fetcher struct {
 }
 
 type CoinGeckoMarket struct {
-	ID           string  `json:"id"`
-	Symbol       string  `json:"symbol"`
-	Name         string  `json:"name"`
-	CurrentPrice float64 `json:"current_price"`
+	ID                       string  `json:"id"`
+	Symbol                   string  `json:"symbol"`
+	Name                     string  `json:"name"`
+	CurrentPrice             float64 `json:"current_price"`
+	PriceChangePercentage24h float64 `json:"price_change_percentage_24h"`
 }
 
 func NewFetcher(db *Database) *Fetcher {
@@ -71,6 +72,7 @@ func (f *Fetcher) FetchAndSave() error {
 			Symbol:    strings.ToUpper(m.Symbol),
 			Name:      m.Name,
 			PriceUSD:  m.CurrentPrice,
+			Change24h: m.PriceChangePercentage24h,
 			FetchedAt: now,
 		})
 	}
