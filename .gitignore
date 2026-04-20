@@ -99,6 +99,8 @@ bot
 
 # SQLite databases
 *.db
+*.db-shm
+*.db-wal
 /rss_seen.db
 
 # General binaries
