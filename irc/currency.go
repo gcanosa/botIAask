@@ -15,7 +15,8 @@ type ExchangeRates struct {
 	Rates map[string]float64 `json:"rates"`
 }
 
-func fetchRates(base string) (*ExchangeRates, error) {
+// FetchRates retrieves current exchange rates for a given base currency.
+func FetchRates(base string) (*ExchangeRates, error) {
 	url := fmt.Sprintf("https://api.exchangerate-api.com/v4/latest/%s", base)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -36,7 +37,7 @@ func fetchRates(base string) (*ExchangeRates, error) {
 }
 
 func (b *Bot) handleEuroCommand(target string) {
-	rates, err := fetchRates("EUR")
+	rates, err := FetchRates("EUR")
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("Error fetching Euro rates: %v", err))
 		return
@@ -53,7 +54,7 @@ func (b *Bot) handleEuroCommand(target string) {
 
 func (b *Bot) handlePesoCommand(target string) {
 	// Fetching USD as base to get USD/ARS and USD/EUR
-	rates, err := fetchRates("USD")
+	rates, err := FetchRates("USD")
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("Error fetching currency rates: %v", err))
 		return
