@@ -127,6 +127,46 @@ func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
 	return &u, nil
 }
 
+func (d *Database) GetApprovedPastes(limit, offset int) ([]*Upload, int, error) {
+	// Get count
+	var total int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM uploads WHERE status = 'approved'").Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get rows
+	rows, err := d.db.Query("SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at FROM uploads WHERE status = 'approved' ORDER BY approved_at DESC LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var uploads []*Upload
+	for rows.Next() {
+		var u Upload
+		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt)
+		if err != nil {
+			return nil, 0, err
+		}
+		uploads = append(uploads, &u)
+	}
+	return uploads, total, nil
+}
+
+func (d *Database) DeletePaste(ticketID string) error {
+	// Get file path first to delete the file
+	var contentPath string
+	err := d.db.QueryRow("SELECT content_path FROM uploads WHERE ticket_id = ?", ticketID).Scan(&contentPath)
+	if err == nil && contentPath != "" {
+		os.Remove(contentPath)
+	}
+
+	query := `DELETE FROM uploads WHERE ticket_id = ?`
+	_, err = d.db.Exec(query, ticketID)
+	return err
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
 }

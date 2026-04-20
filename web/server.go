@@ -83,6 +83,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
+	mux.HandleFunc("/api/pastes", s.handlePastesList)
+	mux.HandleFunc("/api/pastes/delete", s.handlePasteDelete)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -685,6 +687,68 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.templates.ExecuteTemplate(w, "paste.html", data)
+}
+
+func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	pageStr := r.URL.Query().Get("page")
+	page := 1
+	if p, err := fmt.Sscanf(pageStr, "%d", &page); err == nil && p > 0 {
+		if page < 1 {
+			page = 1
+		}
+	}
+
+	limit := 10
+	offset := (page - 1) * limit
+
+	items, total, err := s.uploadsDB.GetApprovedPastes(limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	totalPages := (total + limit - 1) / limit
+
+	response := map[string]interface{}{
+		"pastes":      items,
+		"page":        page,
+		"total_pages": totalPages,
+		"total_count": total,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handlePasteDelete(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ticketID := r.URL.Query().Get("ticketID")
+	if ticketID == "" {
+		http.Error(w, "ticketID required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.uploadsDB.DeletePaste(ticketID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func generateHex(n int) string {
