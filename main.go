@@ -127,7 +127,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 	if err != nil {
 		return fmt.Errorf("failed to create PID file: %w", err)
 	}
-	
+
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
 		go startWebServer(cfg, bot)
@@ -150,14 +150,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	sig := <-c
-	
+
 	if cfg.Bot.Debug {
 		log.Printf("Daemon received signal: %v. Shutting down...", sig)
 	}
 
 	// Clean up PID file on exit
 	DeletePIDFile(pidFile)
-	
+
 	return nil
 }
 
@@ -191,7 +191,6 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) {
 	// Give some time for graceful shutdown
 	time.Sleep(1 * time.Second)
 }
-
 
 func startWebServer(cfg *config.Config, bot *irc.Bot) {
 	// Web server implementation

@@ -9,12 +9,12 @@ import (
 
 // Config represents the application configuration structure.
 type Config struct {
-	IRC       IRCConfig       `yaml:"irc"`
-	AI        AIConfig        `yaml:"ai"`
-	Bot       BotConfig       `yaml:"bot"`
-	Admin     AdminConfig     `yaml:"admin"`
-	Web       WebConfig       `yaml:"web,omitempty"`
-	Daemon    DaemonConfig    `yaml:"daemon,omitempty"`
+	IRC         IRCConfig       `yaml:"irc"`
+	AI          AIConfig        `yaml:"ai"`
+	Bot         BotConfig       `yaml:"bot"`
+	Admin       AdminConfig     `yaml:"admin"`
+	Web         WebConfig       `yaml:"web,omitempty"`
+	Daemon      DaemonConfig    `yaml:"daemon,omitempty"`
 	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
 }
 
@@ -44,9 +44,9 @@ type BotConfig struct {
 // RateLimitConfig holds settings for rate limiting.
 type RateLimitConfig struct {
 	Enabled bool `yaml:"enabled"`
-	Limit   int  `yaml:"limit"`      // commands per minute
-	Burst   int  `yaml:"burst"`      // allowance
-	Window  int  `yaml:"window"`     // window in seconds (default 60)
+	Limit   int  `yaml:"limit"`  // commands per minute
+	Burst   int  `yaml:"burst"`  // allowance
+	Window  int  `yaml:"window"` // window in seconds (default 60)
 }
 
 // AdminConfig holds settings for administrative users.
@@ -62,9 +62,9 @@ type DaemonConfig struct {
 
 // WebConfig holds settings for the web dashboard server.
 type WebConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Port    int      `yaml:"port"`
-	Host    string   `yaml:"host"`
+	Enabled bool       `yaml:"enabled"`
+	Port    int        `yaml:"port"`
+	Host    string     `yaml:"host"`
 	Auth    AuthConfig `yaml:"auth,omitempty"`
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"botIAask/ai"
 	"botIAask/config"
+	"botIAask/logger"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -97,7 +98,83 @@ func (b *Bot) Start() error {
 			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s", sender, target, message)
 		}
 
-		b.handleCommand(target, message, sender)
+		if strings.HasPrefix(message, "\x01ACTION ") && strings.HasSuffix(message, "\x01") {
+			actionMsg := message[8 : len(message)-1]
+			logger.LogChannelEvent(target, logger.EventAction, sender, actionMsg, "")
+		} else {
+			logger.LogChannelEvent(target, logger.EventMessage, sender, message, "")
+			b.handleCommand(target, message, sender)
+		}
+	})
+
+	b.conn.AddCallback("NOTICE", func(e ircmsg.Message) {
+		if len(e.Params) < 2 {
+			return
+		}
+		target := e.Params[0]
+		message := e.Params[1]
+		sender := e.Nick()
+		logger.LogChannelEvent(target, logger.EventNotice, sender, message, "")
+	})
+
+	b.conn.AddCallback("JOIN", func(e ircmsg.Message) {
+		if len(e.Params) < 1 {
+			return
+		}
+		target := e.Params[0] // Channel
+		sender := e.Nick()
+		logger.LogChannelEvent(target, logger.EventJoin, sender, "", "")
+	})
+
+	b.conn.AddCallback("PART", func(e ircmsg.Message) {
+		if len(e.Params) < 1 {
+			return
+		}
+		target := e.Params[0] // Channel
+		sender := e.Nick()
+		message := ""
+		if len(e.Params) > 1 {
+			message = e.Params[1]
+		}
+		logger.LogChannelEvent(target, logger.EventPart, sender, message, "")
+	})
+
+	b.conn.AddCallback("KICK", func(e ircmsg.Message) {
+		if len(e.Params) < 2 {
+			return
+		}
+		target := e.Params[0] // Channel
+		kicked := e.Params[1]
+		sender := e.Nick()
+		message := ""
+		if len(e.Params) > 2 {
+			message = e.Params[2]
+		}
+		logger.LogChannelEvent(target, logger.EventKick, sender, message, kicked)
+	})
+
+	// QUIT and NICK are not channel-specific, we'll log them globally or skip.
+	b.conn.AddCallback("QUIT", func(e ircmsg.Message) {
+		sender := e.Nick()
+		message := ""
+		if len(e.Params) > 0 {
+			message = e.Params[0]
+		}
+		// For quits, we log to all configured channels as we might not have a full state tracker
+		for _, channel := range b.cfg.IRC.Channels {
+			logger.LogChannelEvent(channel, logger.EventQuit, sender, message, "")
+		}
+	})
+
+	b.conn.AddCallback("NICK", func(e ircmsg.Message) {
+		if len(e.Params) < 1 {
+			return
+		}
+		sender := e.Nick()
+		newNick := e.Params[0]
+		for _, channel := range b.cfg.IRC.Channels {
+			logger.LogChannelEvent(channel, logger.EventNick, sender, newNick, "")
+		}
 	})
 
 	// Handle disconnection events
@@ -129,14 +206,14 @@ func (b *Bot) handleCommand(target, message, sender string) {
 		appUptimeStr := formatDuration(appUptime)
 		sessionUptimeStr := formatDuration(sessionUptime)
 
-		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
 		return
 	}
 
 	// Handle !spec command (Restored)
 	if strings.HasPrefix(message, b.prefix+"spec") {
 		spec := "System Prompt: You are a helpful IRC bot. Keep responses concise and suitable for IRC."
-		b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, spec)))
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, spec)))
 		return
 	}
 
@@ -147,7 +224,7 @@ func (b *Bot) handleCommand(target, message, sender string) {
 			if b.cfg.Bot.Debug {
 				log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
 			}
-			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
+			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 			return
 		}
 
@@ -169,7 +246,7 @@ func (b *Bot) handleCommand(target, message, sender string) {
 			if b.cfg.Bot.Debug {
 				log.Printf("Error contacting AI: %v\n", err)
 			}
-			b.conn.Privmsg(target, b.sanitize(fmt.Sprintf("Error contacting AI: %v", err)))
+			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Error contacting AI: %v", err)))
 			return
 		}
 
@@ -184,8 +261,14 @@ func (b *Bot) handleCommand(target, message, sender string) {
 			}
 		}
 
-		b.conn.Privmsg(target, formattedResponse)
+		b.sendPrivmsg(target, formattedResponse)
 	}
+}
+
+// sendPrivmsg wraps conn.Privmsg and also logs the bot's own outbound messages
+func (b *Bot) sendPrivmsg(target, message string) {
+	b.conn.Privmsg(target, message)
+	logger.LogChannelEvent(target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
 }
 
 // formatDuration formats a time.Duration into a human-readable string.
