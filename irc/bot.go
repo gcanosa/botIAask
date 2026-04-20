@@ -449,8 +449,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %seuro, %speso, %scrypto", 
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %seuro, %speso, %scrypto", 
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -841,6 +841,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: Authorized admins only.", sender))
 			return
 		}
+		if b.uploadsDB == nil {
+			b.sendPrivmsg(target, "Uploads system not initialized.")
+			return
+		}
 		parts := strings.Fields(message)
 		if len(parts) < 2 {
 			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket pending/approve/cancel [ID]", b.prefix))
@@ -865,8 +869,12 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 					expiryStr = fmt.Sprintf("%d days", t.ExpiresInDays)
 				}
 				elapsed := time.Since(t.CreatedAt).Round(time.Minute)
-				b.sendPrivmsg(target, fmt.Sprintf("- [%s] %s by %s (Requested: %s expiry, Submitted: %s ago)", 
-					t.TicketID, t.Title, t.Username, expiryStr, elapsed))
+				kind := "paste"
+				if t.IsFile() {
+					kind = "file"
+				}
+				b.sendPrivmsg(target, fmt.Sprintf("- [%s] [%s] %s by %s (Requested: %s expiry, Submitted: %s ago)",
+					t.TicketID, kind, t.Title, t.Username, expiryStr, elapsed))
 				time.Sleep(500 * time.Millisecond) // Slight delay for sanity
 			}
 		} else if cmd == "approve" {
@@ -880,7 +888,12 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Error approving ticket: %v", err))
 				return
 			}
-			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s/p/%s", ticketID, b.cfg.Web.BaseURL, ticketID))
+			u, _ := b.uploadsDB.GetUploadByTicketID(ticketID)
+			pubURL := fmt.Sprintf("%s/p/%s", b.cfg.Web.BaseURL, ticketID)
+			if u != nil && u.IsFile() {
+				pubURL = fmt.Sprintf("%s/f/%s", b.cfg.Web.BaseURL, ticketID)
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s", ticketID, pubURL))
 		} else if cmd == "cancel" {
 			if len(parts) < 3 {
 				b.sendPrivmsg(target, "Usage: !ticket cancel <ID>")
@@ -912,6 +925,24 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.cfg.Web.BaseURL, token)
 		b.sendPrivmsg(sender, fmt.Sprintf("Paste requested. Fill the form here (expires in 30m): %s", uploadURL))
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the paste link.", sender))
+		return
+	}
+
+	// File upload command
+	if strings.HasPrefix(message, b.prefix+"upload") {
+		if b.uploadsDB == nil {
+			b.sendPrivmsg(target, "Uploads system not initialized.")
+			return
+		}
+		token := generateToken(16)
+		err := b.uploadsDB.CreateFileUploadSession(token, sender, target)
+		if err != nil {
+			b.sendPrivmsg(target, fmt.Sprintf("Error creating upload session: %v", err))
+			return
+		}
+		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.cfg.Web.BaseURL, token)
+		b.sendPrivmsg(sender, fmt.Sprintf("File upload requested. Upload here (expires in 30m): %s", uploadURL))
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the upload link.", sender))
 		return
 	}
 

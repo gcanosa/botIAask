@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File upload - {{.Upload.Username}}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #38bdf8;
+            --primary-hover: #0ea5e9;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            background-image: radial-gradient(circle at 50% 0%, #1e293b 0%, #0f172a 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .container {
+            width: 100%;
+            max-width: 640px;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        h1 {
+            font-weight: 600;
+            font-size: 1.75rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        p.subtitle { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.875rem; }
+        .form-group { margin-bottom: 1.25rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: 500; font-size: 0.875rem; color: var(--text-muted); }
+        input, select {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+        input:disabled { opacity: 0.6; cursor: not-allowed; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+        .actions { display: flex; gap: 1rem; margin-top: 1.75rem; }
+        button {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            border: none;
+        }
+        .btn-primary { background: var(--primary); color: #0f172a; flex: 1; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem; }
+        .error { color: #f87171; font-size: 0.8rem; margin-top: 0.5rem; display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>File upload</h1>
+        <p class="subtitle">One file per submission. Max <strong>{{.MaxFileMB}}</strong> MB. Awaits admin approval before a public link is available.</p>
+
+        <form action="/upload?token={{.Upload.Token}}" method="POST" enctype="multipart/form-data" id="uploadForm">
+            <div class="grid">
+                <div class="form-group">
+                    <label for="username">User</label>
+                    <input type="text" id="username" value="{{.Upload.Username}}" disabled>
+                </div>
+                <div class="form-group">
+                    <label for="expires">Expiration (after approval)</label>
+                    <select name="expires" id="expires">
+                        <option value="1">1 Day</option>
+                        <option value="3">3 Days</option>
+                        <option value="7" selected>7 Days</option>
+                        <option value="0">Never</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="title">Title</label>
+                <input type="text" name="title" id="title" placeholder="Short title" required>
+            </div>
+            <div class="form-group">
+                <label for="description">Description (optional)</label>
+                <input type="text" name="description" id="description" placeholder="Notes for admins">
+            </div>
+            <div class="form-group">
+                <label for="file">File</label>
+                <input type="file" name="file" id="file" required>
+                <div class="hint">Limit enforced on the server; very large files may fail before completing.</div>
+                <div id="sizeError" class="error">File exceeds {{.MaxFileMB}} MB.</div>
+            </div>
+            <div class="actions">
+                <button type="submit" class="btn-primary" id="submitBtn">Submit for approval</button>
+                <button type="button" class="btn-secondary" onclick="cancelSession()">Cancel</button>
+            </div>
+        </form>
+        <form id="cancelForm" action="/upload/cancel" method="POST" style="display:none;">
+            <input type="hidden" name="token" value="{{.Upload.Token}}">
+        </form>
+    </div>
+    <script>
+        const maxMB = {{.MaxFileMB}};
+        const maxBytes = maxMB * 1024 * 1024;
+        const fileInput = document.getElementById('file');
+        const sizeError = document.getElementById('sizeError');
+        const submitBtn = document.getElementById('submitBtn');
+        fileInput.addEventListener('change', () => {
+            const f = fileInput.files[0];
+            if (!f) { sizeError.style.display = 'none'; submitBtn.disabled = false; return; }
+            if (f.size > maxBytes) {
+                sizeError.style.display = 'block';
+                submitBtn.disabled = true;
+            } else {
+                sizeError.style.display = 'none';
+                submitBtn.disabled = false;
+            }
+        });
+        function cancelSession() {
+            if (confirm('Cancel this upload session? The bot will be notified.')) {
+                document.getElementById('cancelForm').submit();
+            }
+        }
+    </script>
+</body>
+</html>

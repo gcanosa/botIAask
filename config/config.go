@@ -19,6 +19,13 @@ type Config struct {
 	Logger      LoggerConfig    `yaml:"logger,omitempty"`
 	RSS         RSSConfig       `yaml:"rss,omitempty"`
 	Stats       StatsConfig     `yaml:"stats,omitempty"`
+	Uploads     UploadsConfig   `yaml:"uploads,omitempty"`
+}
+
+// UploadsConfig holds limits for user file uploads (!upload flow).
+type UploadsConfig struct {
+	MaxFileMB int    `yaml:"max_file_mb"`             // default 200
+	DBPath    string `yaml:"db_path,omitempty"`       // optional; absolute path recommended if cwd differs between processes
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -123,6 +130,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	applyStatsDefaults(&cfg)
+	applyUploadsDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -130,6 +138,12 @@ func LoadConfig(path string) (*Config, error) {
 func applyStatsDefaults(cfg *Config) {
 	if cfg.Stats.Interval <= 0 {
 		cfg.Stats.Interval = 60
+	}
+}
+
+func applyUploadsDefaults(cfg *Config) {
+	if cfg.Uploads.MaxFileMB <= 0 {
+		cfg.Uploads.MaxFileMB = 200
 	}
 }
 

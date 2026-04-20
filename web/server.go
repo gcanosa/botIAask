@@ -2,13 +2,16 @@ package web
 
 import (
 	"bufio"
+	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -122,6 +125,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/pastes/pending", s.handlePendingPastes)
 	mux.HandleFunc("/api/pastes/approve", s.handlePasteApprove)
 	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
+	mux.HandleFunc("/api/uploads/files", s.handleUploadsFilesList)
+	mux.HandleFunc("/api/uploads/files/pending", s.handleUploadsFilesPending)
+	mux.HandleFunc("/api/uploads/settings", s.handleUploadSettings)
 	mux.HandleFunc("/api/finance", s.handleFinance)
 	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
 	mux.HandleFunc("/api/finance/forex-chart", s.handleForexChart)
@@ -129,6 +135,7 @@ func (s *Server) Start() error {
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/upload/cancel", s.handleUploadCancel)
+	mux.HandleFunc("/f/", s.handleFileDownload)
 	mux.HandleFunc("/p/", s.handlePasteView)
 
 	// Static files (app.js)
@@ -820,8 +827,38 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) effectiveMaxFileMB() int {
+	mb := s.cfg.Uploads.MaxFileMB
+	if mb <= 0 {
+		return 200
+	}
+	return mb
+}
+
+func (s *Server) maxUploadBytes() int64 {
+	return int64(s.effectiveMaxFileMB()) * 1024 * 1024
+}
+
+// multipartSlack adds headroom for multipart boundaries and small form fields.
+const multipartSlack int64 = 1 << 20
+
+func parseUploadToken(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("token"))
+	if raw == "" {
+		return ""
+	}
+	if dec, err := url.QueryUnescape(raw); err == nil {
+		raw = strings.TrimSpace(dec)
+	}
+	return raw
+}
+
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads are not configured on this server", http.StatusServiceUnavailable)
+		return
+	}
+	token := parseUploadToken(r)
 	if token == "" {
 		http.Error(w, "Token is required", http.StatusBadRequest)
 		return
@@ -829,6 +866,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := s.uploadsDB.GetUploadByToken(token)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("upload: no session for token (len=%d); ensure web and IRC use the same uploads DB (see uploads.db_path in config)", len(token))
+		} else {
+			log.Printf("upload: token lookup failed: %v", err)
+		}
 		http.Error(w, "Invalid or expired token", http.StatusNotFound)
 		return
 	}
@@ -838,9 +880,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check 30 min expiration
 	if time.Since(upload.CreatedAt) > 30*time.Minute {
 		http.Error(w, "This token has expired", http.StatusBadRequest)
+		return
+	}
+
+	if upload.IsFile() {
+		s.handleUploadFile(w, r, token, upload)
 		return
 	}
 
@@ -866,7 +912,6 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		expiresDays := 7
 		fmt.Sscanf(expiresStr, "%d", &expiresDays)
 
-		// Create ticket ID
 		ticketID := generateHex(4)
 
 		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays)
@@ -875,7 +920,6 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Notify IRC channel and admins
 		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New ticket pending approval: %s (by %s)", ticketID, upload.Username))
 		s.bot.NotifyAdmins(fmt.Sprintf("\x0307[TICKET]\x03 New pending approval: %s. Use !ticket approve %s to publish.", ticketID, ticketID))
 
@@ -888,12 +932,126 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token string, sess *uploads.Upload) {
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		err := s.templates.ExecuteTemplate(w, "file_upload.html", map[string]interface{}{
+			"Upload":     sess,
+			"BaseURL":    s.cfg.Web.BaseURL,
+			"MaxFileMB":  s.effectiveMaxFileMB(),
+		})
+		if err != nil {
+			log.Printf("ExecuteTemplate file_upload.html error: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	token := r.FormValue("token")
+
+	limit := s.maxUploadBytes() + multipartSlack
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+
+	mem := int64(32 << 20)
+	if mem > limit {
+		mem = limit
+	}
+	if err := r.ParseMultipartForm(mem); err != nil {
+		var mbErr *http.MaxBytesError
+		if errors.As(err, &mbErr) || errors.Is(err, io.ErrUnexpectedEOF) {
+			http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "Bad multipart form", http.StatusBadRequest)
+		return
+	}
+
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "File is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if hdr.Size > s.maxUploadBytes() {
+		http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	title := r.FormValue("title")
+	if strings.TrimSpace(title) == "" {
+		http.Error(w, "Title is required", http.StatusBadRequest)
+		return
+	}
+	desc := r.FormValue("description")
+	expiresStr := r.FormValue("expires")
+	expiresDays := 7
+	fmt.Sscanf(expiresStr, "%d", &expiresDays)
+
+	ticketID := generateHex(4)
+	ext := uploads.SafeFileExt(hdr.Filename)
+	diskName := ticketID + ext
+	diskPath := filepath.Join(s.uploadsDB.FilesDiskDir(), diskName)
+
+	out, err := os.Create(diskPath)
+	if err != nil {
+		http.Error(w, "Could not store file", http.StatusInternalServerError)
+		return
+	}
+	n, err := io.Copy(out, io.LimitReader(file, s.maxUploadBytes()+1))
+	out.Close()
+	if err != nil {
+		os.Remove(diskPath)
+		http.Error(w, "Error saving file", http.StatusInternalServerError)
+		return
+	}
+	if n > s.maxUploadBytes() {
+		os.Remove(diskPath)
+		http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if n == 0 {
+		os.Remove(diskPath)
+		http.Error(w, "Empty file", http.StatusBadRequest)
+		return
+	}
+
+	ctype := hdr.Header.Get("Content-Type")
+	if ctype == "" || ctype == "application/octet-stream" {
+		ctype = ""
+	}
+
+	err = s.uploadsDB.SubmitFileUpload(token, ticketID, title, desc, expiresDays, diskPath, hdr.Filename, ctype, n)
+	if err != nil {
+		os.Remove(diskPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.bot.SendMessage(sess.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New file pending approval: %s (by %s)", ticketID, sess.Username))
+	s.bot.NotifyAdmins(fmt.Sprintf("\x0307[TICKET]\x03 New file pending approval: %s. Use !ticket approve %s to publish.", ticketID, ticketID))
+
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>")
+	fmt.Fprintf(w, "<h1 style='color:#38bdf8;'>Successfully submitted</h1>")
+	fmt.Fprintf(w, "<p>Ticket ID: <strong>%s</strong></p>", ticketID)
+	fmt.Fprintf(w, "<p>Please wait for admin approval.</p>")
+	fmt.Fprintf(w, "</body></html>")
+}
+
+func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads are not configured on this server", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("token"))
 	username, channel, err := s.uploadsDB.CancelUploadByToken(token)
 	if err != nil {
 		http.Error(w, "Error cancelling", http.StatusInternalServerError)
@@ -917,6 +1075,11 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
 	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if upload.IsFile() {
 		http.NotFound(w, r)
 		return
 	}
@@ -1031,7 +1194,7 @@ func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.uploadsDB.GetPendingTickets()
+	items, err := s.uploadsDB.GetPendingPastes()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1065,10 +1228,13 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notify IRC as well
 	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
 	if err == nil {
-		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s/p/%s", ticketID, s.cfg.Web.BaseURL, ticketID))
+		pubURL := fmt.Sprintf("%s/p/%s", s.cfg.Web.BaseURL, ticketID)
+		if upload.IsFile() {
+			pubURL = fmt.Sprintf("%s/f/%s", s.cfg.Web.BaseURL, ticketID)
+		}
+		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s", ticketID, pubURL))
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -1347,6 +1513,169 @@ func (s *Server) handleForexChart(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
+}
+
+func contentDispositionAttachment(orig, ticketID, pathExt string) string {
+	name := filepath.Base(orig)
+	if name == "" || name == "." || name == "/" {
+		if pathExt != "" {
+			name = ticketID + pathExt
+		} else {
+			name = ticketID
+		}
+	}
+	name = strings.ReplaceAll(name, `"`, `'`)
+	name = strings.ReplaceAll(name, "\r", "")
+	name = strings.ReplaceAll(name, "\n", "")
+	if len(name) > 180 {
+		name = name[:180]
+	}
+	return fmt.Sprintf(`attachment; filename="%s"`, name)
+}
+
+func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ticketID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/f/"), "/")
+	if ticketID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !upload.IsFile() {
+		http.NotFound(w, r)
+		return
+	}
+	if upload.Status != "approved" {
+		http.Error(w, "This file is pending approval or was cancelled", http.StatusForbidden)
+		return
+	}
+	if upload.ExpiresInDays > 0 {
+		if upload.ApprovedAt.Valid && time.Since(upload.ApprovedAt.Time) > time.Duration(upload.ExpiresInDays)*24*time.Hour {
+			http.Error(w, "This file has expired", http.StatusGone)
+			return
+		}
+	}
+	f, err := os.Open(upload.ContentPath)
+	if err != nil {
+		http.Error(w, "Error reading file", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	ctype := upload.ContentType
+	if ctype == "" {
+		buf := make([]byte, 512)
+		n, _ := f.Read(buf)
+		ctype = http.DetectContentType(buf[:n])
+		_, _ = f.Seek(0, 0)
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(upload.OriginalFilename, ticketID, filepath.Ext(upload.ContentPath)))
+	_, _ = io.Copy(w, f)
+}
+
+func (s *Server) handleUploadsFilesList(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pageStr := r.URL.Query().Get("page")
+	page := 1
+	if p, err := fmt.Sscanf(pageStr, "%d", &page); err == nil && p > 0 {
+		if page < 1 {
+			page = 1
+		}
+	}
+	limit := 10
+	offset := (page - 1) * limit
+	items, total, err := s.uploadsDB.GetApprovedFiles(limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	totalPages := (total + limit - 1) / limit
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"files":       items,
+		"page":        page,
+		"total_pages": totalPages,
+		"total_count": total,
+	})
+}
+
+func (s *Server) handleUploadsFilesPending(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := s.uploadsDB.GetPendingFiles()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"max_file_mb": s.effectiveMaxFileMB()})
+	case http.MethodPost:
+		var req struct {
+			MaxFileMB int `json:"max_file_mb"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		if req.MaxFileMB < 1 || req.MaxFileMB > 2048 {
+			http.Error(w, "max_file_mb must be between 1 and 2048", http.StatusBadRequest)
+			return
+		}
+		s.cfg.Uploads.MaxFileMB = req.MaxFileMB
+		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func generateHex(n int) string {
