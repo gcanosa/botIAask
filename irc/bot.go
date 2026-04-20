@@ -72,6 +72,10 @@ type Bot struct {
 
 	// Crypto Database
 	cryptoDB *crypto.Database
+
+	// IRC Authentication status
+	authenticated bool
+	authMu        sync.RWMutex
 }
 
 // NewBot initializes a new Bot instance.
@@ -147,6 +151,13 @@ func (b *Bot) IsConnected() bool {
 	return b.connected
 }
 
+// IsAuthenticated returns true if the bot is authenticated with services (SASL).
+func (b *Bot) IsAuthenticated() bool {
+	b.authMu.RLock()
+	defer b.authMu.RUnlock()
+	return b.authenticated
+}
+
 // Broadcast sends a message to multiple channels.
 func (b *Bot) Broadcast(channels []string, message string) {
 	for _, ch := range channels {
@@ -190,8 +201,42 @@ func (b *Bot) Start() error {
 		RealName:    b.cfg.IRC.Nickname,
 		UseTLS:      b.cfg.IRC.UseSSL,
 		Debug:       b.cfg.Bot.Debug,
-		RequestCaps: []string{"server-time", "message-tags"},
+		RequestCaps: []string{"server-time", "message-tags", "sasl"},
 	}
+
+	// SASL Authentication setup
+	if b.cfg.IRC.Services.Enabled {
+		b.conn.SASLLogin = b.cfg.IRC.Services.Username
+		b.conn.SASLPassword = b.cfg.IRC.Services.Password
+		if b.cfg.Bot.Debug {
+			log.Printf("[DEBUG] SASL Authentication enabled for user: %s", b.conn.SASLLogin)
+		}
+	}
+
+	// Handle successful authentication
+	// 900: RPL_LOGGEDIN, 903: RPL_SASLSUCCESS
+	authSuccess := func(e ircmsg.Message) {
+		b.authMu.Lock()
+		b.authenticated = true
+		b.authMu.Unlock()
+		if b.cfg.Bot.Debug {
+			log.Println("[DEBUG] Successfully authenticated with services.")
+		}
+	}
+	b.conn.AddCallback("900", authSuccess)
+	b.conn.AddCallback("903", authSuccess)
+
+	// Handle failed authentication
+	// 902: ERR_NICKLOCKED, 904: ERR_SASLFAIL, etc.
+	authFail := func(e ircmsg.Message) {
+		b.authMu.Lock()
+		b.authenticated = false
+		b.authMu.Unlock()
+		log.Printf("[ERROR] IRC Authentication failed: %s", e.Params[len(e.Params)-1])
+	}
+	b.conn.AddCallback("902", authFail)
+	b.conn.AddCallback("904", authFail)
+	b.conn.AddCallback("905", authFail)
 
 	// Handle connection established event
 	b.conn.AddConnectCallback(func(e ircmsg.Message) {
