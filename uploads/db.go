@@ -154,6 +154,25 @@ func (d *Database) GetApprovedPastes(limit, offset int) ([]*Upload, int, error) 
 	return uploads, total, nil
 }
 
+func (d *Database) GetPendingTickets() ([]*Upload, error) {
+	rows, err := d.db.Query("SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at FROM uploads WHERE status = 'pending_approval' ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var uploads []*Upload
+	for rows.Next() {
+		var u Upload
+		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, &u)
+	}
+	return uploads, nil
+}
+
 func (d *Database) DeletePaste(ticketID string) error {
 	// Get file path first to delete the file
 	var contentPath string

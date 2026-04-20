@@ -398,7 +398,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste", 
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket approve/cancel <ID>", 
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		} else if isAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
@@ -752,14 +752,39 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			return
 		}
 		parts := strings.Fields(message)
-		if len(parts) < 3 {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket approve/cancel <ID>", b.prefix))
+		if len(parts) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket pending/approve/cancel [ID]", b.prefix))
 			return
 		}
 		cmd := parts[1]
-		ticketID := parts[2]
 
-		if cmd == "approve" {
+		if cmd == "pending" {
+			pending, err := b.uploadsDB.GetPendingTickets()
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("Error fetching pending tickets: %v", err))
+				return
+			}
+			if len(pending) == 0 {
+				b.sendPrivmsg(target, "No pending tickets.")
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("Found %d pending ticket(s):", len(pending)))
+			for _, t := range pending {
+				expiryStr := "Never"
+				if t.ExpiresInDays > 0 {
+					expiryStr = fmt.Sprintf("%d days", t.ExpiresInDays)
+				}
+				elapsed := time.Since(t.CreatedAt).Round(time.Minute)
+				b.sendPrivmsg(target, fmt.Sprintf("- [%s] %s by %s (Requested: %s expiry, Submitted: %s ago)", 
+					t.TicketID, t.Title, t.Username, expiryStr, elapsed))
+				time.Sleep(500 * time.Millisecond) // Slight delay for sanity
+			}
+		} else if cmd == "approve" {
+			if len(parts) < 3 {
+				b.sendPrivmsg(target, "Usage: !ticket approve <ID>")
+				return
+			}
+			ticketID := parts[2]
 			err := b.uploadsDB.ApproveTicket(ticketID)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("Error approving ticket: %v", err))
@@ -767,6 +792,11 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s/p/%s", ticketID, b.cfg.Web.BaseURL, ticketID))
 		} else if cmd == "cancel" {
+			if len(parts) < 3 {
+				b.sendPrivmsg(target, "Usage: !ticket cancel <ID>")
+				return
+			}
+			ticketID := parts[2]
 			err := b.uploadsDB.CancelTicket(ticketID)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("Error cancelling ticket: %v", err))
