@@ -153,12 +153,18 @@
                     <p class="section-subtitle">Live tracking of top cryptocurrencies and global forex rates.</p>
                 </div>
                 <div class="grid grid-2">
-                    <div class="card">
-                        <h3 class="card-title">Top Cryptocurrencies</h3>
+                     <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem;">
+                            <h3 class="card-title" style="margin: 0;">Top Cryptocurrencies</h3>
+                            <span id="crypto-last-update" class="mono" style="font-size: 0.65rem; color: var(--text-muted);"></span>
+                        </div>
                         <div id="crypto-prices"></div>
                     </div>
                     <div class="card">
-                        <h3 class="card-title">Exchange Rates</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem;">
+                            <h3 class="card-title" style="margin: 0;">Exchange Rates</h3>
+                            <span id="forex-last-update" class="mono" style="font-size: 0.65rem; color: var(--text-muted);"></span>
+                        </div>
                         <div id="forex-rates"></div>
                     </div>
                 </div>
