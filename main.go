@@ -95,6 +95,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	if cfg.Stats.Enabled && !cfg.Stats.SaveToDB {
+		log.Printf("Warning: stats enabled but save_to_db is false; activity history will not persist across restarts")
+	}
 
 	// CLI flag overrides.
 	if *debug {

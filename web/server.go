@@ -501,6 +501,9 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if history == nil {
+		history = []stats.StatEntry{}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
@@ -523,8 +526,19 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 	statsChan := s.statsTracker.Subscribe()
 	defer s.statsTracker.Unsubscribe(statsChan)
 
-	// Send initial data if available (could fetch last entries from DB here)
-	// For now, just wait for next tick
+	// Replay recent DB rows so the client does not wait for the next snapshot tick
+	since := time.Now().Add(-2 * time.Hour)
+	bootstrap, err := s.statsTracker.GetHistory(since)
+	if err == nil {
+		for _, entry := range bootstrap {
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+		}
+	}
 
 	ctx := r.Context()
 	for {
