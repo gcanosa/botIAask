@@ -134,7 +134,7 @@ func StartDaemon(cfg *config.Config) error {
 
 	// Fork the process using exec to create a proper daemon
 	cmd := exec.Command(os.Args[0], childArgs...)
-	
+
 	// Set environment variable to identify the child as the daemon instance
 	cmd.Env = append(os.Environ(), "BOT_DAEMON_INTERNAL=1")
 

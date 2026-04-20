@@ -6,7 +6,11 @@
 =======
 # Binaries and executables
 bot
+<<<<<<< HEAD
 *.pid
+=======
+botIAask
+>>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
 bot.exe
 bot.test
 >>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
@@ -76,4 +80,10 @@ pastes/
 tags
 =======
 bot
+<<<<<<< HEAD
 >>>>>>> 80fa9bb (refactor: improve daemonization by using setsid, internal environment flags, and centralized PID file management)
+=======
+
+# logs folder
+logs/
+>>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
