@@ -452,7 +452,17 @@ async function fetchCryptoChart(range) {
 
     try {
         const res = await fetch(`/api/finance/crypto-chart?range=${encodeURIComponent(cryptoChartRange)}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+            if (subEl) {
+                subEl.textContent = 'Chart unavailable (upstream rate limit or error). Try again in a minute.';
+            }
+            if (cryptoMarketChart) {
+                cryptoMarketChart.data.labels = [];
+                cryptoMarketChart.data.datasets = [];
+                cryptoMarketChart.update();
+            }
+            return;
+        }
         const data = await res.json();
         if (subEl) {
             subEl.textContent = data.subtitle || '';

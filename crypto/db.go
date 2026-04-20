@@ -41,6 +41,19 @@ func NewDatabase(dbPath string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
 	_, _ = db.Exec("ALTER TABLE crypto_prices ADD COLUMN gecko_id TEXT DEFAULT '';")
 
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS forex_rates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			rate_key TEXT NOT NULL,
+			value REAL NOT NULL,
+			fetched_at DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate forex_rates: %w", err)
+	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_forex_rates_fetched_at ON forex_rates(fetched_at)`)
+
 	return &Database{db: db}, nil
 }
 
@@ -64,6 +77,31 @@ func (d *Database) SavePrices(entries []PriceEntry) error {
 		}
 	}
 
+	return tx.Commit()
+}
+
+// SaveForexSnapshot appends one row per key for historical exchange-rate tracking.
+func (d *Database) SaveForexSnapshot(m map[string]float64, fetchedAt time.Time) error {
+	if len(m) == 0 {
+		return nil
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT INTO forex_rates (rate_key, value, fetched_at) VALUES (?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for k, v := range m {
+		if _, err := stmt.Exec(k, v, fetchedAt); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
