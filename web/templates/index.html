@@ -184,6 +184,36 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Pending Approvals (Admin Only) -->
+            <div id="pending-pastes-section" class="hidden mb-10 pb-6 border-b border-white/5">
+                <div class="flex items-center gap-2 mb-4">
+                    <span class="flex h-2 w-2 rounded-full bg-yellow-500"></span>
+                    <h3 class="text-yellow-500 text-[10px] uppercase tracking-widest font-bold">Pending Approvals</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs mono">
+                        <thead>
+                            <tr class="text-slate-500 border-b border-white/5">
+                                <th class="py-3 font-semibold">TICKET ID</th>
+                                <th class="py-3 font-semibold">TITLE</th>
+                                <th class="py-3 font-semibold">USER</th>
+                                <th class="py-3 font-semibold">CHANNEL</th>
+                                <th class="py-3 font-semibold">SUBMITTED AT</th>
+                                <th class="py-3 font-semibold text-right">DECISION</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pending-pastes-list">
+                            <!-- Pending pastes will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-2 mb-4" id="approved-pastes-header">
+                <span class="flex h-2 w-2 rounded-full bg-primary"></span>
+                <h3 class="text-primary text-[10px] uppercase tracking-widest font-bold">Approved Pastes</h3>
+            </div>
             
             <div class="overflow-x-auto">
                 <table class="w-full text-left text-xs mono">
