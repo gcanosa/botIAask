@@ -50,7 +50,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
 
-	authDB, err := NewAuthDatabase("web_auth.db")
+	authDB, err := NewAuthDatabase("data/web_auth.db")
 	if err != nil {
 		log.Fatalf("Failed to initialize auth database: %v", err)
 	}
