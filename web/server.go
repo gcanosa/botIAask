@@ -46,6 +46,18 @@ type Server struct {
 
 	cryptoChartCache map[string]cryptoChartCacheEntry
 	cryptoChartMu    sync.Mutex
+
+	marketChartRawMu    sync.Mutex
+	marketChartRawCache map[string]marketChartRawCacheEntry
+}
+
+type marketChartRawCacheEntry struct {
+	at  time.Time
+	pts [][2]float64
+}
+
+func marketChartRawKey(geckoID, days string) string {
+	return geckoID + ":" + days
 }
 
 type cryptoChartCacheEntry struct {
@@ -1069,7 +1081,7 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	// If cache is empty, retry on every request until at least one rate is fetched.
 	if s.forexCache == nil || len(s.forexCache) == 0 || time.Since(s.forexUpdate) > 1*time.Hour {
 		forex := map[string]float64{}
-		
+
 		// EUR to USD
 		if eurRates, err := irc.FetchRates("EUR"); err == nil {
 			if rate, ok := eurRates.Rates["USD"]; ok {
@@ -1104,6 +1116,11 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 		if len(forex) > 0 {
 			s.forexCache = forex
 			s.forexUpdate = time.Now()
+			if s.cryptoDB != nil {
+				if err := s.cryptoDB.SaveForexSnapshot(forex, s.forexUpdate); err != nil {
+					log.Printf("forex snapshot save: %v", err)
+				}
+			}
 		}
 	}
 
@@ -1161,36 +1178,50 @@ func (s *Server) handleCryptoChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	sem := make(chan struct{}, 4)
-	var wg sync.WaitGroup
-	var seriesMu sync.Mutex
+	client := &http.Client{Timeout: 20 * time.Second}
 	raw := make([]crypto.MarketRawSeries, 0, len(prices))
 
+	// CoinGecko free tier rate-limits hard on burst parallel calls. We cache raw
+	// market_chart by (coin, days) so 6h/1d and 3d/1w reuse the same upstream data,
+	// and we fetch sequentially with a short pause between network calls.
 	for _, p := range prices {
 		if p.GeckoID == "" {
 			continue
 		}
-		p := p
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			pts, err := crypto.FetchMarketChart(client, p.GeckoID, days)
-			if err != nil || len(pts) < 2 {
-				return
+		key := marketChartRawKey(p.GeckoID, days)
+		var pts [][2]float64
+		cacheRead := time.Now()
+		s.marketChartRawMu.Lock()
+		if s.marketChartRawCache != nil {
+			if e, ok := s.marketChartRawCache[key]; ok && cacheRead.Sub(e.at) < chartTTL {
+				pts = e.pts
 			}
-			seriesMu.Lock()
-			raw = append(raw, crypto.MarketRawSeries{
-				Symbol:  p.Symbol,
-				GeckoID: p.GeckoID,
-				Points:  pts,
-			})
-			seriesMu.Unlock()
-		}()
+		}
+		s.marketChartRawMu.Unlock()
+
+		if pts == nil {
+			fetched, ferr := crypto.FetchMarketChartWithRetry(client, p.GeckoID, days)
+			if ferr != nil || len(fetched) < 2 {
+				time.Sleep(150 * time.Millisecond)
+				continue
+			}
+			pts = fetched
+			clipAt := time.Now()
+			s.marketChartRawMu.Lock()
+			if s.marketChartRawCache == nil {
+				s.marketChartRawCache = make(map[string]marketChartRawCacheEntry)
+			}
+			s.marketChartRawCache[key] = marketChartRawCacheEntry{at: clipAt, pts: pts}
+			s.marketChartRawMu.Unlock()
+			time.Sleep(150 * time.Millisecond)
+		}
+
+		raw = append(raw, crypto.MarketRawSeries{
+			Symbol:  p.Symbol,
+			GeckoID: p.GeckoID,
+			Points:  pts,
+		})
 	}
-	wg.Wait()
 
 	resp, err := crypto.BuildChartResponse(rangeKey, raw, time.Now())
 	if err != nil {

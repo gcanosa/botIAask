@@ -326,6 +326,19 @@ input.btn-ghost:focus {
 }
 
 /* Finance panel */
+.finance-top-grid {
+    margin-bottom: 0;
+}
+
+.finance-chart-card {
+    margin-top: 1rem;
+    width: 100%;
+}
+
+.finance-chart-card .crypto-chart-canvas-wrap {
+    height: 280px;
+}
+
 .finance-card-head {
     display: flex;
     justify-content: space-between;
