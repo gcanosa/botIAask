@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"botIAask/config"
 	"botIAask/irc"
 	"botIAask/logger"
+	"botIAask/rss"
 	"botIAask/web"
 )
 
@@ -24,6 +26,9 @@ func main() {
 	mode := flag.String("mode", "", "Operation mode: start, stop, restart, or empty for foreground")
 	version := flag.Bool("version", false, "Show version information")
 	about := flag.Bool("about", false, "Show about information")
+	news := flag.Bool("news", false, "Enable RSS news fetcher")
+	updateNews := flag.Bool("updatenews", false, "Backfill RSS database (fetch last X items) and exit")
+	dropNews := flag.Bool("dropnews", false, "Clear all news from the local database and exit")
 	flag.Parse()
 
 	// Handle version and about flags
@@ -72,11 +77,21 @@ func main() {
 			fmt.Println("Dashboard flag active: enabling web server and forcing daemon mode.")
 		}
 	}
+	if *news {
+		cfg.RSS.Enabled = true
+		*daemon = true // RSS fetcher usually runs in background
+		if cfg.Bot.Debug {
+			fmt.Println("News flag active: enabling RSS fetcher and forcing daemon mode.")
+		}
+	}
 
 	if cfg.Bot.Debug {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
 		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
+		if cfg.RSS.Enabled {
+			fmt.Printf("RSS-Fetcher: ENABLED (Source: %s, Interval: %d min)\n", "https://news.ycombinator.com/rss", cfg.RSS.IntervalMinutes)
+		}
 	}
 
 	// Determine if this is an internal daemon process spawned by us
@@ -97,6 +112,9 @@ func main() {
 				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
 				fmt.Printf("--------------------------------------------------\n\n")
 			}
+			if cfg.RSS.Enabled {
+				fmt.Printf("📰 RSS-Fetcher: ENABLED (Source: https://news.ycombinator.com/rss, Interval: %d min)\n", cfg.RSS.IntervalMinutes)
+			}
 			err := StartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to start daemon: %v", err)
@@ -115,6 +133,9 @@ func main() {
 				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
 				fmt.Printf("--------------------------------------------------\n\n")
 			}
+			if cfg.RSS.Enabled {
+				fmt.Printf("📰 RSS-Fetcher: ENABLED (Source: https://news.ycombinator.com/rss, Interval: %d min)\n", cfg.RSS.IntervalMinutes)
+			}
 			err := RestartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to restart daemon: %v", err)
@@ -123,11 +144,63 @@ func main() {
 		}
 	}
 
+	// Internal Initialization for maintenance flags
+	if *dropNews {
+		rssDB, err := rss.NewDatabase("rss_seen.db")
+		if err != nil {
+			log.Fatalf("Failed to initialize RSS database: %v", err)
+		}
+		fmt.Println("Dropping all news entries from database...")
+		if err := rssDB.DropAll(); err != nil {
+			log.Fatalf("Failed to drop news: %v", err)
+		}
+		fmt.Println("Done. Database cleared.")
+		rssDB.Close()
+		return
+	}
+
+	if *updateNews {
+		rssDB, err := rss.NewDatabase("rss_seen.db")
+		if err != nil {
+			log.Fatalf("Failed to initialize RSS database: %v", err)
+		}
+		
+		limit := 10
+		if flag.NArg() > 0 {
+			if val, err := strconv.Atoi(flag.Arg(0)); err == nil {
+				limit = val
+			}
+		}
+
+		fetcher := rss.NewFetcher(cfg, nil, rssDB)
+		fmt.Printf("Backfilling RSS database with last %d items (syncing URLs)...\n", limit)
+		count := fetcher.Backfill(limit)
+		fmt.Printf("Done. Synchronized %d entries with URLs.\n", count)
+		rssDB.Close()
+		return
+	}
+
 	// Initialize AI Client
 	aiClient := ai.NewClient(cfg.AI.LMStudioURL, cfg.AI.Model)
 
 	// Initialize IRC Bot
 	bot := irc.NewBot(cfg, aiClient)
+
+	// Initialize RSS Database
+	rssDB, err := rss.NewDatabase("rss_seen.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize RSS database: %v", err)
+	}
+	defer rssDB.Close()
+
+	// Set database in bot for !news command
+	bot.SetRSSDatabase(rssDB)
+
+	// Initialize RSS Fetcher
+	rssFetcher := rss.NewFetcher(cfg, bot, rssDB)
+	if cfg.RSS.Enabled {
+		go rssFetcher.Start()
+	}
 
 	// Start Log Rotator
 	if cfg.Logger.RotationDays > 0 {
@@ -137,17 +210,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient)
+		runInForeground(cfg, bot, aiClient, rssFetcher)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher) error {
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
 	err := WritePIDFile(pidFile)
@@ -157,7 +230,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot)
+		go startWebServer(cfg, bot, rssFetcher)
 	}
 
 	// Start the IRC bot
@@ -202,14 +275,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot)
+		go startWebServer(cfg, bot, rssFetcher)
 	}
 
 	// Start the IRC bot
@@ -246,8 +319,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) {
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot) {
-	ws := web.NewServer(cfg, bot)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher) {
+	ws := web.NewServer(cfg, bot, rf)
 	if err := ws.Start(); err != nil {
 		log.Printf("Web server error: %v", err)
 	}

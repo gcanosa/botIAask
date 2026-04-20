@@ -88,6 +88,19 @@ bot
 =======
 
 # logs folder
-logs/
+<<<<<<< HEAD
+<<<<<<< HEAD
 *.log
 >>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
+=======
+=======
+/logs/
+>>>>>>> 83cc4e8 (added logs folder to gitignore)
+
+# SQLite databases
+*.db
+/rss_seen.db
+
+# General binaries
+/botIAask
+>>>>>>> d79fb0e (feat: Implement RSS News Fetcher for Hacker News with SQLite persistence, URL shortening, and management CLI flags)
