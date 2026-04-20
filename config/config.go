@@ -25,7 +25,7 @@ type Config struct {
 // UploadsConfig holds limits for user file uploads (!upload flow).
 type UploadsConfig struct {
 	MaxFileMB int    `yaml:"max_file_mb"`             // default 200
-	DBPath    string `yaml:"db_path,omitempty"`       // optional; absolute path recommended if cwd differs between processes
+	DBPath    string `yaml:"db_path,omitempty"`       // optional; relative paths resolve from project root (parent of config/); absolute path if multiple instances or odd cwd
 }
 
 // IRCConfig holds settings for the IRC connection.

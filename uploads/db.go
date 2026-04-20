@@ -266,6 +266,103 @@ func (d *Database) GetApprovedFiles(limit, offset int) ([]*Upload, int, error) {
 	return scanUploadRows(rows, total)
 }
 
+// ListApprovedFilesByUser returns approved file uploads for username, newest first (same rows as the web file list).
+// limit must be positive.
+func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Upload, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be positive")
+	}
+	uname := strings.TrimSpace(username)
+	targetFold := ircFoldNick(uname)
+
+	// Align with GetApprovedFiles (no expiry filter in SQL — dashboard lists all approved files).
+	// IRC nicks: trim + case-insensitive; LOWER matches most cases.
+	q := `
+		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
+			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?)
+		ORDER BY approved_at DESC LIMIT ?`
+	rows, err := d.db.Query(q, uname, limit)
+	if err != nil {
+		return nil, err
+	}
+	list, err := scanApprovedFileRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) > 0 {
+		return list, nil
+	}
+
+	// Fallback: RFC 1459 casefold can differ from ASCII LOWER (e.g. [ vs {).
+	rows2, err := d.db.Query(`
+		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
+		ORDER BY approved_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows2.Close()
+	var out []*Upload
+	for rows2.Next() {
+		var u Upload
+		err := rows2.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+		if err != nil {
+			return nil, err
+		}
+		if ircFoldNick(strings.TrimSpace(u.Username)) == targetFold {
+			out = append(out, &u)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, rows2.Err()
+}
+
+func scanApprovedFileRows(rows *sql.Rows) ([]*Upload, error) {
+	defer rows.Close()
+	var list []*Upload
+	for rows.Next() {
+		var u Upload
+		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, &u)
+	}
+	return list, rows.Err()
+}
+
+// ircFoldNick applies RFC 1459 ASCII case mapping for IRC nick comparison ([→{, ]→}, etc.).
+func ircFoldNick(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '^':
+			b.WriteRune('~')
+		case '\\':
+			b.WriteRune('|')
+		case '[':
+			b.WriteRune('{')
+		case ']':
+			b.WriteRune('}')
+		default:
+			if r >= 'A' && r <= 'Z' {
+				b.WriteRune(r + ('a' - 'A'))
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
 func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
 	var list []*Upload
 	for rows.Next() {
