@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -71,9 +69,17 @@ func main() {
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
 	}
 
-	// Handle mode flags (start, stop, restart) - these functions are defined in daemon.go
-	if *mode != "" {
-		switch *mode {
+	// Determine if this is an internal daemon process spawned by us
+	isDaemonChild := os.Getenv("BOT_DAEMON_INTERNAL") == "1"
+
+	// Handle mode flags (start, stop, restart) or the -daemon trigger
+	if (*mode != "" || *daemon) && !isDaemonChild {
+		effectiveMode := *mode
+		if *daemon && effectiveMode == "" {
+			effectiveMode = "start"
+		}
+
+		switch effectiveMode {
 		case "start":
 			err := StartDaemon(cfg)
 			if err != nil {
@@ -101,12 +107,12 @@ func main() {
 	// Initialize IRC Bot
 	bot := irc.NewBot(cfg, aiClient)
 
-	// Handle daemon mode
-	if *daemon {
-		// Run in daemon mode
+	// Handle daemon mode execution
+	if *daemon || isDaemonChild {
+		// Run in daemon mode (already detached if -mode start or -daemon was used)
 		err := runAsDaemon(cfg, bot, aiClient)
 		if err != nil {
-			log.Fatalf("Failed to start daemon: %v", err)
+			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
@@ -115,18 +121,13 @@ func main() {
 }
 
 func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
-	// Create PID file
-	pid := os.Getpid()
-	pidFile := "bot.pid"
-	err := createPIDFile(pidFile, pid)
+	// Use configured PID file
+	pidFile := cfg.Daemon.PIDFile
+	err := WritePIDFile(pidFile)
 	if err != nil {
 		return fmt.Errorf("failed to create PID file: %w", err)
 	}
-	defer func() {
-		// Clean up PID file on exit
-		os.Remove(pidFile)
-	}()
-
+	
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
 		go startWebServer(cfg, bot)
@@ -134,7 +135,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 
 	// Start the IRC bot
 	if cfg.Bot.Debug {
-		fmt.Println("Connecting to IRC (daemon mode)...")
+		fmt.Printf("Connecting to IRC (daemon mode, PID: %d)...\n", os.Getpid())
 	}
 
 	// Run the bot in a goroutine so we can handle signals
@@ -145,13 +146,18 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) error {
 		}
 	}()
 
-	// Wait indefinitely for signals or shutdown
-	// This keeps the daemon process alive
-	// We need to handle signal properly in daemon mode
+	// Wait for signals or shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
+	sig := <-c
+	
+	if cfg.Bot.Debug {
+		log.Printf("Daemon received signal: %v. Shutting down...", sig)
+	}
 
+	// Clean up PID file on exit
+	DeletePIDFile(pidFile)
+	
 	return nil
 }
 
@@ -186,36 +192,6 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client) {
 	time.Sleep(1 * time.Second)
 }
 
-func forkProcess() error {
-	// Fork the process using syscall
-	// This is a simplified approach - in production, you might want to use a more robust solution
-	// For now, we'll just detach from terminal by redirecting std streams
-
-	// Create a new process group
-	syscall.Setpgid(0, 0)
-
-	return nil
-}
-
-func createPIDFile(filename string, pid int) error {
-	absPath, err := filepath.Abs(filename)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %w", err)
-	}
-
-	file, err := os.Create(absPath)
-	if err != nil {
-		return fmt.Errorf("failed to create PID file: %w", err)
-	}
-	defer file.Close()
-
-	_, err = file.WriteString(strconv.Itoa(pid))
-	if err != nil {
-		return fmt.Errorf("failed to write PID to file: %w", err)
-	}
-
-	return nil
-}
 
 func startWebServer(cfg *config.Config, bot *irc.Bot) {
 	// Web server implementation

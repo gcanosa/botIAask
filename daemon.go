@@ -114,8 +114,36 @@ func StartDaemon(cfg *config.Config) error {
 		DeletePIDFile(cfg.Daemon.PIDFile)
 	}
 
+	// Filter out -mode start and -mode restart from child arguments to prevent loops
+	var childArgs []string
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "-mode" && i+1 < len(os.Args) {
+			next := os.Args[i+1]
+			if next == "start" || next == "restart" {
+				i++ // skip the value
+				continue
+			}
+		}
+		if arg != "-daemon" { // we will add it explicitly
+			childArgs = append(childArgs, arg)
+		}
+	}
+	// Prepend -daemon flag
+	childArgs = append([]string{"-daemon"}, childArgs...)
+
 	// Fork the process using exec to create a proper daemon
-	cmd := exec.Command(os.Args[0], append([]string{"-daemon"}, os.Args[1:]...)...)
+	cmd := exec.Command(os.Args[0], childArgs...)
+	
+	// Set environment variable to identify the child as the daemon instance
+	cmd.Env = append(os.Environ(), "BOT_DAEMON_INTERNAL=1")
+
+	// Setsid detaches the process from the controlling terminal (important for daemons)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+	}
+
+	// Detach standard streams
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
@@ -125,15 +153,7 @@ func StartDaemon(cfg *config.Config) error {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	// Write PID file after starting the daemon process
-	err = WritePIDFile(cfg.Daemon.PIDFile)
-	if err != nil {
-		// If we can't write PID file, kill the process and return error
-		cmd.Process.Kill()
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-
-	fmt.Println("Bot started in daemon mode with PID:", cmd.Process.Pid)
+	fmt.Printf("Bot process spawned (Control PID: %d). Check %s for daemon status.\n", cmd.Process.Pid, cfg.Daemon.PIDFile)
 	return nil
 }
 
