@@ -16,6 +16,7 @@ import (
 
 	"botIAask/config"
 	"botIAask/irc"
+	"botIAask/rss"
 )
 
 //go:embed templates/*
@@ -23,22 +24,24 @@ var templatesFS embed.FS
 
 // Server handles the web dashboard
 type Server struct {
-	cfg       *config.Config
-	bot       *irc.Bot
-	templates *template.Template
+	cfg        *config.Config
+	bot        *irc.Bot
+	rssFetcher *rss.Fetcher
+	templates  *template.Template
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/index.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
 
 	return &Server{
-		cfg:       cfg,
-		bot:       bot,
-		templates: tmpl,
+		cfg:        cfg,
+		bot:        bot,
+		rssFetcher: rssFetcher,
+		templates:  tmpl,
 	}
 }
 
@@ -49,6 +52,7 @@ func (s *Server) Start() error {
 	// API endpoints
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
+	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
 
 	// Static files (app.js)
 	mux.HandleFunc("/static/", s.handleStatic)
@@ -80,6 +84,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_model":    s.cfg.AI.Model,
 		"ai_status":   "Online",
 		"ai_requests": s.bot.GetAIRequestCount(),
+		"rss_enabled": s.rssFetcher.IsEnabled(),
 		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
 	}
 
@@ -202,4 +207,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	enabled := !s.rssFetcher.IsEnabled()
+	s.rssFetcher.SetEnabled(enabled)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"rss_enabled": enabled})
 }

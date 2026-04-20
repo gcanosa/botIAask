@@ -11,6 +11,8 @@ async function fetchStatus() {
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
         document.getElementById('ai_model').textContent = data.ai_model;
         
+        updateNewsStatus(data.rss_enabled);
+        
         const badge = document.getElementById('status-badge');
         badge.textContent = 'Online';
         badge.classList.remove('bg-primary/10', 'text-primary');
@@ -81,6 +83,37 @@ function closeLogs() {
         currentEventSource = null;
     }
     document.getElementById('log-container').classList.add('hidden');
+}
+
+function updateNewsStatus(enabled) {
+    const btn = document.getElementById('news-toggle');
+    const indicator = document.getElementById('news-indicator');
+    const text = document.getElementById('news-status-text');
+
+    if (enabled) {
+        btn.classList.remove('border-white/20', 'text-slate-400');
+        btn.classList.add('border-primary/50', 'text-primary', 'bg-primary/5');
+        indicator.classList.remove('bg-slate-600');
+        indicator.classList.add('bg-primary', 'animate-pulse');
+        text.textContent = 'ON';
+    } else {
+        btn.classList.remove('border-primary/50', 'text-primary', 'bg-primary/5');
+        btn.classList.add('border-white/20', 'text-slate-400');
+        indicator.classList.remove('bg-primary', 'animate-pulse');
+        indicator.classList.add('bg-slate-600');
+        text.textContent = 'OFF';
+    }
+}
+
+async function toggleNews() {
+    try {
+        const res = await fetch('/api/rss/toggle', { method: 'POST' });
+        if (!res.ok) throw new Error('Toggle failed');
+        const data = await res.json();
+        updateNewsStatus(data.rss_enabled);
+    } catch (e) {
+        console.error("Failed to toggle news", e);
+    }
 }
 
 // Initial load

@@ -11,6 +11,7 @@ import (
 	"botIAask/ai"
 	"botIAask/config"
 	"botIAask/logger"
+	"botIAask/rss"
 
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
@@ -45,6 +46,12 @@ type Bot struct {
 	// Stats
 	aiRequests int
 	statsMu    sync.Mutex
+
+	// Connection status
+	connected bool
+
+	// RSS Database for !news
+	rssDB *rss.Database
 }
 
 // NewBot initializes a new Bot instance.
@@ -70,6 +77,11 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	return bot
 }
 
+// SetRSSDatabase sets the RSS database for the bot
+func (b *Bot) SetRSSDatabase(db *rss.Database) {
+	b.rssDB = db
+}
+
 // GetUptime returns the human-readable uptime of the bot.
 func (b *Bot) GetUptime() string {
 	return formatDuration(time.Since(b.startTime))
@@ -85,6 +97,22 @@ func (b *Bot) GetAIRequestCount() int {
 	b.statsMu.Lock()
 	defer b.statsMu.Unlock()
 	return b.aiRequests
+}
+
+// IsConnected returns true if the bot is connected to the IRC server.
+func (b *Bot) IsConnected() bool {
+	b.statsMu.Lock()
+	defer b.statsMu.Unlock()
+	return b.connected
+}
+
+// Broadcast sends a message to multiple channels.
+func (b *Bot) Broadcast(channels []string, message string) {
+	for _, ch := range channels {
+		b.sendPrivmsg(ch, message)
+		// Small delay to avoid flooding when broadcasting to many channels
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // IsAdmin checks if a given hostmask or account matches the admin list.
@@ -128,6 +156,9 @@ func (b *Bot) Start() error {
 	b.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("Connected to %s! Joining channels...", serverAddr)
 		b.connectionTime = time.Now()
+		b.statsMu.Lock()
+		b.connected = true
+		b.statsMu.Unlock()
 		for _, channel := range b.cfg.IRC.Channels {
 			if b.cfg.Bot.Debug {
 				log.Printf("[DEBUG] Joining channel: %s", channel)
@@ -227,6 +258,9 @@ func (b *Bot) Start() error {
 
 	// Handle disconnection events
 	b.conn.AddDisconnectCallback(func(e ircmsg.Message) {
+		b.statsMu.Lock()
+		b.connected = false
+		b.statsMu.Unlock()
 		if b.cfg.Bot.Debug {
 			log.Println("Disconnected from IRC server")
 		}
@@ -303,6 +337,63 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		sessionUptimeStr := formatDuration(sessionUptime)
 
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		return
+	}
+
+	// Handle !news command
+	if strings.HasPrefix(message, b.prefix+"news") {
+		// Check if news enabled for this channel
+		isNewsChannel := false
+		for _, ch := range b.cfg.RSS.Channels {
+			if strings.EqualFold(ch, target) {
+				isNewsChannel = true
+				break
+			}
+		}
+
+		if !isNewsChannel && !b.IsAdmin(source) {
+			return
+		}
+
+		if b.rssDB == nil {
+			b.sendPrivmsg(target, "RSS database not initialized.")
+			return
+		}
+
+		limit := 5
+		parts := strings.Fields(message)
+		if len(parts) > 1 {
+			if l, err := fmt.Sscanf(parts[1], "%d", &limit); err == nil && l > 0 {
+				if limit > 10 {
+					limit = 10
+				}
+			}
+		}
+
+		entries, err := b.rssDB.GetLastNews(limit)
+		if err != nil {
+			b.sendPrivmsg(target, fmt.Sprintf("Error fetching news: %v", err))
+			return
+		}
+
+		if len(entries) == 0 {
+			b.sendPrivmsg(target, "No news items found.")
+			return
+		}
+
+		for _, e := range entries {
+			displayLink := e.ShortLink
+			if displayLink == "" && e.Link != "" {
+				displayLink = rss.ShortenURL(e.Link)
+			}
+			
+			msg := fmt.Sprintf("\x0304,01[NEWS]\x03 %s - %s", e.PubDate.Format("15:04"), e.Title)
+			if displayLink != "" {
+				msg += fmt.Sprintf(" \x0312\x1f🔗\x1f\x03 %s", displayLink)
+			}
+			b.sendPrivmsg(target, msg)
+			time.Sleep(1 * time.Second) // Throttling
+		}
 		return
 	}
 

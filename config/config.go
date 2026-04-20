@@ -17,6 +17,7 @@ type Config struct {
 	Daemon      DaemonConfig    `yaml:"daemon,omitempty"`
 	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
 	Logger      LoggerConfig    `yaml:"logger,omitempty"`
+	RSS         RSSConfig       `yaml:"rss,omitempty"`
 }
 
 // IRCConfig holds settings for the IRC connection.
@@ -79,6 +80,13 @@ type AuthConfig struct {
 // LoggerConfig holds settings for log rotation.
 type LoggerConfig struct {
 	RotationDays int `yaml:"rotation_days"`
+}
+
+// RSSConfig holds settings for the Hacker News RSS fetcher.
+type RSSConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	IntervalMinutes int      `yaml:"interval_minutes"`
+	Channels        []string `yaml:"channels"`
 }
 
 // LoadConfig reads and parses the YAML configuration file.
