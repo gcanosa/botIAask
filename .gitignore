@@ -6,6 +6,7 @@
 =======
 # Binaries and executables
 bot
+*.pid
 bot.exe
 bot.test
 >>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
@@ -66,9 +67,13 @@ go.work.sum
 
 # Tooling
 .claude/
+<<<<<<< HEAD
 >>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
 
 *.db
 logs/
 pastes/
 tags
+=======
+bot
+>>>>>>> 80fa9bb (refactor: improve daemonization by using setsid, internal environment flags, and centralized PID file management)
