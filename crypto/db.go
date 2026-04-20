@@ -36,9 +36,8 @@ func NewDatabase(dbPath string) (*Database, error) {
 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create crypto_prices table: %w", err)
-	}
+	// Migration: Ensure change_24h column exists
+	_, _ = db.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
 
 	return &Database{db: db}, nil
 }

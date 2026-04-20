@@ -872,9 +872,10 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{}
 
 	// Get Crypto Prices
+	data["crypto"] = []crypto.PriceEntry{}
 	if s.cryptoDB != nil {
 		prices, err := s.cryptoDB.GetLatestPrices()
-		if err == nil {
+		if err == nil && prices != nil {
 			data["crypto"] = prices
 		}
 	}
@@ -883,22 +884,33 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	forex := map[string]float64{}
 	
 	// EUR to USD
-	eurRates, err := irc.FetchRates("EUR")
-	if err == nil {
+	if eurRates, err := irc.FetchRates("EUR"); err == nil {
 		if rate, ok := eurRates.Rates["USD"]; ok {
 			forex["eur_usd"] = rate
 		}
 	}
 
-	// USD to ARS
-	usdRates, err := irc.FetchRates("USD")
-	if err == nil {
+	// USD to ARS (Official)
+	if usdRates, err := irc.FetchRates("USD"); err == nil {
 		if rate, ok := usdRates.Rates["ARS"]; ok {
 			forex["usd_ars"] = rate
 		}
-		// Calculate EUR to ARS if we have both
 		if eurRate, ok := usdRates.Rates["EUR"]; ok && eurRate != 0 {
 			forex["eur_ars"] = usdRates.Rates["ARS"] / eurRate
+		}
+	}
+
+	// ARS Blue (Parallel) - Using Bluelytics API
+	client := &http.Client{Timeout: 5 * time.Second}
+	if resp, err := client.Get("https://api.bluelytics.com.ar/v2/latest"); err == nil {
+		defer resp.Body.Close()
+		var blueData struct {
+			Blue struct {
+				ValueAvg float64 `json:"value_avg"`
+			} `json:"blue"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&blueData); err == nil {
+			forex["usd_ars_blue"] = blueData.Blue.ValueAvg
 		}
 	}
 

@@ -245,7 +245,8 @@ async function fetchFinance() {
         
         const cryptoDiv = document.getElementById('crypto-prices');
         cryptoDiv.innerHTML = '';
-        data.crypto.forEach(c => {
+        if (data.crypto) {
+            data.crypto.forEach(c => {
             const up = c.change_24h >= 0;
             cryptoDiv.innerHTML += `
                 <div class="price-tag">
@@ -257,14 +258,21 @@ async function fetchFinance() {
                 </div>
             `;
         });
+        }
 
         const forexDiv = document.getElementById('forex-rates');
         forexDiv.innerHTML = '';
+        const labels = {
+            'eur_usd': 'EUR/USD',
+            'usd_ars': 'USD/ARS (Official)',
+            'usd_ars_blue': 'USD/ARS (Blue)',
+            'eur_ars': 'EUR/ARS'
+        };
         Object.entries(data.forex).forEach(([k, v]) => {
             forexDiv.innerHTML += `
                 <div class="price-tag">
-                    <span class="mono font-bold">${k}</span>
-                    <span class="mono">$${v.toFixed(2)}</span>
+                    <span class="mono font-bold">${labels[k] || k.toUpperCase()}</span>
+                    <span class="mono">$${v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
                 </div>
             `;
         });
@@ -318,7 +326,9 @@ async function fetchHistory(tf) {
     currentTimeframe = tf;
     const res = await fetch(`/api/stats/history?timeframe=${tf}`);
     const data = await res.json();
-    activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'}));
+    
+    const format = tf === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
+    activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], format));
     activityChart.data.datasets[0].data = data.map(e => e.messages);
     activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
     activityChart.update();
@@ -329,16 +339,18 @@ function startStatsStream() {
     currentStatsSource = new EventSource('/api/stats/stream');
     currentStatsSource.onmessage = (e) => {
         const entry = JSON.parse(e.data);
-        if (currentTimeframe === '1h') {
-            activityChart.data.labels.push(new Date(entry.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}));
-            activityChart.data.datasets[0].data.push(entry.messages);
-            activityChart.data.datasets[1].data.push(entry.ai_requests);
-            if (activityChart.data.labels.length > 30) {
-                 activityChart.data.labels.shift();
-                 activityChart.data.datasets.forEach(d => d.data.shift());
-            }
-            activityChart.update('none');
+        const format = currentTimeframe === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
+        
+        activityChart.data.labels.push(new Date(entry.timestamp).toLocaleTimeString([], format));
+        activityChart.data.datasets[0].data.push(entry.messages);
+        activityChart.data.datasets[1].data.push(entry.ai_requests);
+        
+        const limit = currentTimeframe === '1h' ? 30 : 100;
+        if (activityChart.data.labels.length > limit) {
+             activityChart.data.labels.shift();
+             activityChart.data.datasets.forEach(d => d.data.shift());
         }
+        activityChart.update('none');
     };
 }
 
@@ -498,7 +510,6 @@ window.switchLogTab = switchLogTab;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
-window.changeTimeframe = changeTimeframe;
 async function deletePaste(id) {
     if(!confirm('Are you sure you want to delete this paste?')) return;
     try {
