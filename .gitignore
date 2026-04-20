@@ -1,63 +1,32 @@
-<<<<<<< HEAD
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-=======
 # Binaries and executables
-<<<<<<< HEAD
-bot
-<<<<<<< HEAD
-*.pid
-=======
-=======
->>>>>>> 001f6e8 (Refactor web dashboard with Tailwind CSS v4, dynamic config reloading, and real-time SSE log streaming)
 botIAask
->>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
 bot.exe
 bot.test
->>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 
-<<<<<<< HEAD
-# Test binary, built with `go test -c`
-*.test
-
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
-=======
 # PID files
 *.pid
 
 # Test binary, built with `go test -c`
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
+# Output of the go coverage tool
 *.out
->>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
+coverage.*
+*.coverprofile
+profile.cov
 
-# Dependency directories (remove the comment below to include it)
+# Dependency directories
 # vendor/
 
 # Go workspace file
 go.work
 go.work.sum
 
-<<<<<<< HEAD
-# env file
-.env
-
-# Editor/IDE
-# .idea/
-# .vscode/
-=======
 # IDEs
 .vscode/
 .idea/
@@ -74,48 +43,23 @@ go.work.sum
 
 # Tooling
 .claude/
-<<<<<<< HEAD
->>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
 
-*.db
-logs/
-pastes/
-tags
-=======
-bot
-<<<<<<< HEAD
->>>>>>> 80fa9bb (refactor: improve daemonization by using setsid, internal environment flags, and centralized PID file management)
-=======
-
-# logs folder
-<<<<<<< HEAD
-<<<<<<< HEAD
-*.log
->>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
-=======
-=======
-/logs/
->>>>>>> 83cc4e8 (added logs folder to gitignore)
-
-# SQLite databases
+# Databases and Data folder
+data/
 *.db
 *.db-shm
 *.db-wal
-/rss_seen.db
 
-# General binaries
-/botIAask
-<<<<<<< HEAD
->>>>>>> d79fb0e (feat: Implement RSS News Fetcher for Hacker News with SQLite persistence, URL shortening, and management CLI flags)
-=======
+# Logs folder
+logs/
+*.log
 
-# uploads and pastes
-/pastes
-/uploads
-<<<<<<< HEAD
->>>>>>> d907fb1 (updated gitignore with uploads and pastes)
-=======
-/scratch
->>>>>>> 14810bc (feat: add crypto price tracking and currency exchange commands to the IRC bot)
+# Uploads and pastes
+pastes/
+uploads/
 
-config/config.yaml
+# Scratch folder
+scratch/
+
+# Config (if you want to keep a template but ignore the actual file)
+# config/config.yaml

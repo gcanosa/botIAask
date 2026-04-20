@@ -124,6 +124,11 @@ func main() {
 		}
 	}
 
+	// Ensure data directory exists
+	if err := os.MkdirAll("data", 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
 	// Determine if this is an internal daemon process spawned by us
 	isDaemonChild := os.Getenv("BOT_DAEMON_INTERNAL") == "1"
 
@@ -176,7 +181,7 @@ func main() {
 
 	// Internal Initialization for maintenance flags
 	if *dropNews {
-		rssDB, err := rss.NewDatabase("rss_seen.db")
+		rssDB, err := rss.NewDatabase("data/rss_seen.db")
 		if err != nil {
 			log.Fatalf("Failed to initialize RSS database: %v", err)
 		}
@@ -190,7 +195,7 @@ func main() {
 	}
 
 	if *updateNews {
-		rssDB, err := rss.NewDatabase("rss_seen.db")
+		rssDB, err := rss.NewDatabase("data/rss_seen.db")
 		if err != nil {
 			log.Fatalf("Failed to initialize RSS database: %v", err)
 		}
@@ -217,7 +222,7 @@ func main() {
 	bot := irc.NewBot(cfg, aiClient)
 
 	// Initialize RSS Database
-	rssDB, err := rss.NewDatabase("rss_seen.db")
+	rssDB, err := rss.NewDatabase("data/rss_seen.db")
 	if err != nil {
 		log.Fatalf("Failed to initialize RSS database: %v", err)
 	}
@@ -233,7 +238,7 @@ func main() {
 	}
 
 	// Initialize Stats Database
-	statsDB, err := stats.NewDatabase("stats.db")
+	statsDB, err := stats.NewDatabase("data/stats.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize stats database: %v", err)
 	} else {
@@ -245,7 +250,7 @@ func main() {
 	go statsTracker.Start()
 	bot.SetStatsTracker(statsTracker)
 	// Initialize Bookmarks Database
-	bookmarksDB, err := bookmarks.NewDatabase("bookmarks.db")
+	bookmarksDB, err := bookmarks.NewDatabase("data/bookmarks.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize bookmarks database: %v", err)
 	} else {
@@ -254,7 +259,7 @@ func main() {
 	}
 	
 	// Initialize Uploads Database
-	uploadsDB, err := uploads.NewDatabase("uploads.db", "pastes")
+	uploadsDB, err := uploads.NewDatabase("data/uploads.db", "pastes")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize uploads database: %v", err)
 	} else {
@@ -264,7 +269,7 @@ func main() {
 
 	// Initialize Crypto Database
 	var cryptoDB *crypto.Database
-	cryptoDB, err = crypto.NewDatabase("crypto.db")
+	cryptoDB, err = crypto.NewDatabase("data/crypto.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize crypto database: %v", err)
 	} else {
