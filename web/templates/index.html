@@ -191,9 +191,12 @@
                     <p class="section-subtitle">Search and manage saved bookmarks from IRC communication.</p>
                 </div>
                 <div class="card">
-                    <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: center;">
-                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search bookmarks..." class="btn btn-ghost" style="flex: 1; text-align: left; cursor: text;">
-                        <div class="mono" id="bookmarks-count" style="font-size: 0.75rem; color: var(--text-muted);">0 items</div>
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; align-items: center; position: relative; flex: 1;">
+                        <div style="position: absolute; left: 1rem; color: var(--text-muted); pointer-events: none;">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </div>
+                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search library..." class="btn btn-ghost" style="flex: 1; text-align: left; cursor: text; padding-left: 3rem; background: rgba(0,0,0,0.2);">
+                        <div class="mono" id="bookmarks-count" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">0 items</div>
                         <div style="display: flex; gap: 0.25rem;">
                             <button id="prev-page" onclick="changeBookmarkPage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
                             <button id="next-page" onclick="changeBookmarkPage(1)" class="btn btn-ghost" style="padding: 0.4rem;">&rarr;</button>
