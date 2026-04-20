@@ -122,7 +122,15 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	applyStatsDefaults(&cfg)
+
 	return &cfg, nil
+}
+
+func applyStatsDefaults(cfg *Config) {
+	if cfg.Stats.Interval <= 0 {
+		cfg.Stats.Interval = 60
+	}
 }
 
 // SaveConfig writes the configuration to the specified YAML file.

@@ -214,7 +214,7 @@ func (t *Tracker) snapshot() {
 // GetHistory retrieves historical stats from the database.
 func (t *Tracker) GetHistory(since time.Time) ([]StatEntry, error) {
 	if t.db == nil {
-		return nil, nil
+		return []StatEntry{}, nil
 	}
 	return t.db.GetStatsSince(since)
 }

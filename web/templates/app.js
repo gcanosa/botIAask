@@ -570,28 +570,54 @@ function initChart() {
 }
 
 async function fetchHistory(tf) {
+    if (!document.getElementById('activityChart')) return;
     currentTimeframe = tf;
-    const res = await fetch(`/api/stats/history?timeframe=${tf}`);
-    const data = await res.json();
-    
-    const format = tf === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
-    activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], format));
-    activityChart.data.datasets[0].data = data.map(e => e.messages);
-    activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
-    activityChart.update();
+    if (!activityChart) initChart();
+    if (!activityChart) return;
+
+    try {
+        const res = await fetch(`/api/stats/history?timeframe=${tf}`);
+        if (!res.ok) {
+            console.error('Stats history HTTP', res.status);
+            return;
+        }
+        const raw = await res.json();
+        const data = Array.isArray(raw) ? raw : [];
+
+        const format = tf === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
+        activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], format));
+        activityChart.data.datasets[0].data = data.map(e => e.messages);
+        activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
+        activityChart._seenTs = new Set(data.map(e => new Date(e.timestamp).getTime()));
+        activityChart.update();
+    } catch (err) {
+        console.error('Stats history fetch error', err);
+    }
 }
 
 function startStatsStream() {
     if (currentStatsSource) return;
     currentStatsSource = new EventSource('/api/stats/stream');
     currentStatsSource.onmessage = (e) => {
-        const entry = JSON.parse(e.data);
+        if (!activityChart) return;
+        let entry;
+        try {
+            entry = JSON.parse(e.data);
+        } catch {
+            return;
+        }
+        const ts = new Date(entry.timestamp).getTime();
+        if (Number.isNaN(ts)) return;
+        if (activityChart._seenTs && activityChart._seenTs.has(ts)) return;
+        if (!activityChart._seenTs) activityChart._seenTs = new Set();
+        activityChart._seenTs.add(ts);
+
         const format = currentTimeframe === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
-        
+
         activityChart.data.labels.push(new Date(entry.timestamp).toLocaleTimeString([], format));
         activityChart.data.datasets[0].data.push(entry.messages);
         activityChart.data.datasets[1].data.push(entry.ai_requests);
-        
+
         const limit = currentTimeframe === '1h' ? 30 : 100;
         if (activityChart.data.labels.length > limit) {
              activityChart.data.labels.shift();
