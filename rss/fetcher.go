@@ -121,53 +121,53 @@ func (f *Fetcher) Fetch() {
 		return
 	}
 
-	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL("https://news.ycombinator.com/rss")
-	if err != nil {
-		log.Printf("[RSS] Error fetching feed: %v", err)
-		return
-	}
-
 	f.lfMu.Lock()
 	f.lastFetch = time.Now()
 	f.lfMu.Unlock()
 
+	fp := gofeed.NewParser()
 	var newEntries []NewsEntry
-	for _, item := range feed.Items {
-		id := item.GUID
-		if id == "" {
-			id = item.Link
-		}
-		if id == "" {
+
+	for _, feedURL := range f.cfg.RSS.FeedURLs {
+		feed, err := fp.ParseURL(feedURL)
+		if err != nil {
+			log.Printf("[RSS] Error fetching feed %s: %v", feedURL, err)
 			continue
 		}
 
-		seen, err := f.db.IsSeen(id)
-		if err != nil {
-			log.Printf("[RSS] DB Error: %v", err)
-			continue
-		}
-		if !seen {
-			pubDate := time.Now()
-			if item.PublishedParsed != nil {
-				pubDate = *item.PublishedParsed
+		for _, item := range feed.Items {
+			id := item.GUID
+			if id == "" {
+				id = item.Link
 			}
-			entry := NewsEntry{
-				GUID:    id,
-				Title:   item.Title,
-				Link:    item.Link,
-				PubDate: pubDate,
+			if id == "" {
+				continue
 			}
-			newEntries = append(newEntries, entry)
+
+			seen, err := f.db.IsSeen(id)
+			if err != nil {
+				log.Printf("[RSS] DB Error: %v", err)
+				continue
+			}
+			if !seen {
+				pubDate := time.Now()
+				if item.PublishedParsed != nil {
+					pubDate = *item.PublishedParsed
+				}
+				entry := NewsEntry{
+					GUID:    id,
+					Title:   item.Title,
+					Link:    item.Link,
+					PubDate: pubDate,
+				}
+				newEntries = append(newEntries, entry)
+			}
 		}
 	}
 
 	// Send new entries to IRC with anti-spam delay
-	// Hacker News RSS usually has 30 items. If we just enabled it, we might have many.
-	// We only send the ones we haven't seen.
-	
 	// Sort by PubDate to send oldest first among the new ones
-	// Actually gofeed usually gives them newest first.
+	// Actually we might want to sort all newEntries by PubDate if they come from different feeds
 	
 	for i := len(newEntries) - 1; i >= 0; i-- {
 		entry := newEntries[i]
@@ -193,7 +193,11 @@ func (f *Fetcher) Fetch() {
 	}
 
 	// Cleanup old entries
-	if err := f.db.Cleanup(500); err != nil {
+	retention := f.cfg.RSS.RetentionCount
+	if retention <= 0 {
+		retention = 50 // Default fallback
+	}
+	if err := f.db.Cleanup(retention); err != nil {
 		log.Printf("[RSS] Cleanup Error: %v", err)
 	}
 }
@@ -201,51 +205,58 @@ func (f *Fetcher) Fetch() {
 // Backfill populates the database with the latest X items without broadcasting them.
 func (f *Fetcher) Backfill(limit int) int {
 	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL("https://news.ycombinator.com/rss")
-	if err != nil {
-		log.Printf("[RSS] Error fetching feed for backfill: %v", err)
-		return 0
-	}
-
-	log.Printf("[RSS] Feed fetched: %d items total", len(feed.Items))
-
 	count := 0
-	for _, item := range feed.Items {
+
+	for _, feedURL := range f.cfg.RSS.FeedURLs {
 		if count >= limit {
 			break
 		}
-		
-		id := item.GUID
-		if id == "" {
-			id = item.Link
-		}
-		if id == "" {
-			continue
-		}
-		
-		exists, _, err := f.db.GetEntryStatus(id)
+
+		feed, err := fp.ParseURL(feedURL)
 		if err != nil {
-			log.Printf("[RSS] DB Error during backfill: %v", err)
+			log.Printf("[RSS] Error fetching feed %s for backfill: %v", feedURL, err)
 			continue
 		}
-		
-		if !exists {
-			pubDate := time.Now()
-			if item.PublishedParsed != nil {
-				pubDate = *item.PublishedParsed
+
+		log.Printf("[RSS] Feed %s fetched: %d items total", feedURL, len(feed.Items))
+
+		for _, item := range feed.Items {
+			if count >= limit {
+				break
 			}
-			entry := NewsEntry{
-				GUID:      id,
-				Title:     item.Title,
-				Link:      item.Link,
-				ShortLink: ShortenURL(item.Link),
-				PubDate:   pubDate,
+			
+			id := item.GUID
+			if id == "" {
+				id = item.Link
 			}
-			if err := f.db.MarkSeen(entry); err != nil {
-				log.Printf("[RSS] Failed to save backfill entry: %v", err)
+			if id == "" {
 				continue
 			}
-			count++
+			
+			exists, _, err := f.db.GetEntryStatus(id)
+			if err != nil {
+				log.Printf("[RSS] DB Error during backfill: %v", err)
+				continue
+			}
+			
+			if !exists {
+				pubDate := time.Now()
+				if item.PublishedParsed != nil {
+					pubDate = *item.PublishedParsed
+				}
+				entry := NewsEntry{
+					GUID:      id,
+					Title:     item.Title,
+					Link:      item.Link,
+					ShortLink: ShortenURL(item.Link),
+					PubDate:   pubDate,
+				}
+				if err := f.db.MarkSeen(entry); err != nil {
+					log.Printf("[RSS] Failed to save backfill entry: %v", err)
+					continue
+				}
+				count++
+			}
 		}
 	}
 	return count

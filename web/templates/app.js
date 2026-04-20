@@ -120,11 +120,9 @@ function updateAdminView(isAdmin) {
         adminBadge.classList.remove('hidden');
         loginBtn.classList.add('hidden');
         logoutBtn.classList.remove('hidden');
-        if (pendingSec) {
-            pendingSec.classList.remove('hidden');
-            fetchPendingPastes();
-        }
+        if (pendingSec) pendingSec.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
+        document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
     } else {
         adminNav.classList.add('hidden');
@@ -133,7 +131,9 @@ function updateAdminView(isAdmin) {
         logoutBtn.classList.add('hidden');
         if (pendingSec) pendingSec.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
+        document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
+        document.getElementById('rss-admin-settings')?.classList.add('hidden');
     }
 }
 
@@ -758,3 +758,65 @@ window.deleteUser = deleteUser;
 window.showAddUser = () => { document.getElementById('modal-overlay').classList.remove('hidden'); document.getElementById('adduser-modal').classList.remove('hidden'); };
 window.hideAddUser = () => { document.getElementById('modal-overlay').classList.add('hidden'); document.getElementById('adduser-modal').classList.add('hidden'); };
 window.addUser = addUser;
+
+// RSS SETTINGS
+async function toggleRSSSettings() {
+    const card = document.getElementById('rss-admin-settings');
+    const isHidden = card.classList.contains('hidden');
+    
+    if (isHidden) {
+        card.classList.remove('hidden');
+        await fetchRSSSettings();
+    } else {
+        card.classList.add('hidden');
+    }
+}
+
+async function fetchRSSSettings() {
+    try {
+        const res = await fetch('/api/rss/settings');
+        const data = await res.json();
+        
+        document.getElementById('rss-interval').value = data.interval_minutes;
+        document.getElementById('rss-retention').value = data.retention_count;
+        document.getElementById('rss-urls').value = (data.feed_urls || []).join('\n');
+    } catch (e) { console.error("Failed to fetch RSS settings", e); }
+}
+
+async function saveRSSSettings() {
+    const status = document.getElementById('rss-settings-status');
+    status.textContent = 'Saving...';
+    status.style.color = 'var(--text-muted)';
+
+    const interval = parseInt(document.getElementById('rss-interval').value);
+    const retention = parseInt(document.getElementById('rss-retention').value);
+    const urls = document.getElementById('rss-urls').value.split('\n').map(u => u.trim()).filter(u => u !== '');
+
+    try {
+        const res = await fetch('/api/rss/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                interval_minutes: interval,
+                retention_count: retention,
+                feed_urls: urls
+            })
+        });
+
+        if (res.ok) {
+            status.textContent = '✓ Settings saved and applied';
+            status.style.color = 'var(--success)';
+            setTimeout(() => { status.textContent = ''; }, 3000);
+            fetchNews(1); // Refresh list in case retention reduced
+        } else {
+            status.textContent = '✕ Save failed';
+            status.style.color = 'var(--error)';
+        }
+    } catch (e) {
+        status.textContent = '✕ Error: ' + e.message;
+        status.style.color = 'var(--error)';
+    }
+}
+
+window.toggleRSSSettings = toggleRSSSettings;
+window.saveRSSSettings = saveRSSSettings;
