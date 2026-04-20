@@ -17,6 +17,7 @@ async function fetchStatus() {
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
         updateAdminControls(data.is_admin);
+        lastIsAdmin = data.is_admin;
         
         const badge = document.getElementById('status-badge');
         badge.textContent = 'Online';
@@ -829,3 +830,104 @@ async function deleteUser(id) {
 fetchStatus();
 // Refresh status metadata every 30 seconds
 setInterval(fetchStatus, 30000);
+
+// Pastes Logic
+let pastePage = 1;
+let totalPastePages = 1;
+let lastIsAdmin = false;
+
+function updatePastesUI(show) {
+    const btn = document.getElementById('pastes-toggle');
+    const indicator = document.getElementById('pastes-indicator');
+    const container = document.getElementById('pastes-container');
+
+    if (show) {
+        btn.classList.add('border-primary/50', 'text-white', 'bg-primary/5');
+        btn.classList.remove('border-white/10', 'text-slate-400');
+        indicator.classList.add('bg-primary', 'animate-pulse');
+        indicator.classList.remove('bg-slate-500');
+        container.classList.remove('hidden');
+        fetchPastes(1);
+    } else {
+        btn.classList.remove('border-primary/50', 'text-white', 'bg-primary/5');
+        btn.classList.add('border-white/10', 'text-slate-400');
+        indicator.classList.remove('bg-primary', 'animate-pulse');
+        indicator.classList.add('bg-slate-500');
+        container.classList.add('hidden');
+    }
+}
+
+function togglePastes() {
+    const container = document.getElementById('pastes-container');
+    const isHidden = container.classList.contains('hidden');
+    updatePastesUI(isHidden);
+}
+
+async function fetchPastes(page) {
+    pastePage = page;
+    try {
+        const res = await fetch(`/api/pastes?page=${page}`);
+        if (!res.ok) throw new Error('Pastes fetch failed');
+        const data = await res.json();
+        
+        totalPastePages = data.total_pages;
+        document.getElementById('pastes-count').textContent = `${data.total_count} items`;
+        
+        const list = document.getElementById('pastes-list');
+        list.innerHTML = '';
+        
+        if (data.pastes && data.pastes.length > 0) {
+            data.pastes.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors group';
+                
+                const date = new Date(p.ApprovedAt.Time).toLocaleString([], { 
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                });
+
+                tr.innerHTML = `
+                    <td class="py-4 text-primary font-bold">
+                        <a href="/p/${p.TicketID}" target="_blank" class="hover:underline">${p.TicketID}</a>
+                    </td>
+                    <td class="py-4 text-slate-200">${p.Title || '(No title)'}</td>
+                    <td class="py-4 text-slate-400">${p.Username}</td>
+                    <td class="py-4 text-slate-500">${p.Channel}</td>
+                    <td class="py-4 text-slate-500 text-[10px]">${date}</td>
+                    <td class="py-4 text-right">
+                        ${lastIsAdmin ? `<button onclick="deletePaste('${p.TicketID}')" class="text-red-500 hover:text-red-400 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Delete</button>` : ''}
+                    </td>
+                `;
+                list.appendChild(tr);
+            });
+        } else {
+            list.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-slate-500 italic">No approved pastes found yet.</td></tr>';
+        }
+        
+        document.getElementById('pastes-prev-page').disabled = pastePage <= 1;
+        document.getElementById('pastes-next-page').disabled = pastePage >= totalPastePages;
+        
+    } catch (e) {
+        console.error("Failed to load pastes", e);
+    }
+}
+
+function changePastePage(delta) {
+    const newPage = pastePage + delta;
+    if (newPage >= 1 && newPage <= totalPastePages) {
+        fetchPastes(newPage);
+    }
+}
+
+async function deletePaste(ticketID) {
+    if (!confirm(`Are you sure you want to delete paste ${ticketID}?`)) return;
+    try {
+        const res = await fetch(`/api/pastes/delete?ticketID=${ticketID}`, { method: 'DELETE' });
+        if (res.ok) {
+            fetchPastes(pastePage);
+        } else {
+            alert('Failed to delete paste');
+        }
+    } catch (e) {
+        console.error("Delete failed", e);
+    }
+}

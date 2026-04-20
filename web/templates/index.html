@@ -43,6 +43,10 @@
                     <span class="w-2 h-2 rounded-full bg-slate-500" id="bookmarks-indicator"></span>
                     Bookmarks
                 </button>
+                <button id="pastes-toggle" onclick="togglePastes()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-white/10 hover:border-primary text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-slate-500" id="pastes-indicator"></span>
+                    Pastes
+                </button>
                 <div id="admin-controls" class="hidden flex items-center gap-2">
                     <button id="users-toggle" onclick="toggleUsers()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-white/10 hover:border-primary text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-2">
                         Users
@@ -163,6 +167,38 @@
                     </thead>
                     <tbody id="bookmarks-list">
                         <!-- Bookmarks will be injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Pastes Section -->
+        <div id="pastes-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">Shared Pastes</h2>
+                <div class="flex items-center gap-4">
+                    <span class="text-[10px] mono text-slate-500" id="pastes-count">0 items</span>
+                    <div class="flex gap-1">
+                        <button id="pastes-prev-page" onclick="changePastePage(-1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">PREV</button>
+                        <button id="pastes-next-page" onclick="changePastePage(1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">NEXT</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs mono">
+                    <thead>
+                        <tr class="text-slate-500 border-b border-white/5">
+                            <th class="py-3 font-semibold">TICKET ID</th>
+                            <th class="py-3 font-semibold">TITLE</th>
+                            <th class="py-3 font-semibold">USER</th>
+                            <th class="py-3 font-semibold">CHANNEL</th>
+                            <th class="py-3 font-semibold">APPROVED AT</th>
+                            <th class="py-3 font-semibold text-right">ACTIONS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pastes-list">
+                        <!-- Pastes will be injected here -->
                     </tbody>
                 </table>
             </div>

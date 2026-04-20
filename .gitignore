@@ -103,4 +103,11 @@ bot
 
 # General binaries
 /botIAask
+<<<<<<< HEAD
 >>>>>>> d79fb0e (feat: Implement RSS News Fetcher for Hacker News with SQLite persistence, URL shortening, and management CLI flags)
+=======
+
+# uploads and pastes
+/pastes
+/uploads
+>>>>>>> d907fb1 (updated gitignore with uploads and pastes)
