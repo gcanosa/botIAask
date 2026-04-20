@@ -358,24 +358,58 @@ function stopStatsStream() { if (currentStatsSource) { currentStatsSource.close(
 
 // BOOKMARKS
 let bookmarkPage = 1;
+let searchTimeout = null;
+
 async function fetchBookmarks(page) {
+    if (page < 1) page = 1;
     bookmarkPage = page;
-    const q = document.getElementById('bookmark-search').value;
-    const res = await fetch(`/api/bookmarks?page=${page}&q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    document.getElementById('bookmarks-count').textContent = `${data.total_count} items`;
-    const list = document.getElementById('bookmarks-list');
-    list.innerHTML = data.bookmarks.map(b => `
-        <tr style="border-bottom: 1px solid var(--glass-border);">
-            <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${b.nickname}</td>
-            <td style="padding: 1rem;"><a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none;">${b.url.substring(0,40)}...</a></td>
-            <td style="padding: 1rem; text-align: right; color: var(--text-muted);">${new Date(b.timestamp).toLocaleDateString()}</td>
-        </tr>
-    `).join('');
+    
+    const searchInput = document.getElementById('bookmark-search');
+    const q = searchInput ? searchInput.value : '';
+    
+    try {
+        const res = await fetch(`/api/bookmarks?page=${page}&q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        
+        document.getElementById('bookmarks-count').textContent = `${data.total_count} items`;
+        const list = document.getElementById('bookmarks-list');
+        
+        if (!data.bookmarks || data.bookmarks.length === 0) {
+            list.innerHTML = '<tr><td colspan="3" style="padding: 2rem; text-align: center; color: var(--text-muted);">No bookmarks found matching your search.</td></tr>';
+            return;
+        }
+
+        list.innerHTML = data.bookmarks.map(b => `
+            <tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${b.nickname}</td>
+                <td style="padding: 1rem;">
+                    <a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
+                        ${b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url}
+                    </a>
+                </td>
+                <td style="padding: 1rem; text-align: right; color: var(--text-muted);">${new Date(b.timestamp).toLocaleDateString()}</td>
+            </tr>
+        `).join('');
+        
+        // Update pagination buttons state
+        document.getElementById('prev-page').disabled = page <= 1;
+        document.getElementById('next-page').disabled = page >= data.total_pages;
+        
+    } catch (e) {
+        console.error("Failed to fetch bookmarks", e);
+    }
 }
 
-function debounceSearch() { clearTimeout(this.timeout); this.timeout = setTimeout(() => fetchBookmarks(1), 300); }
-function changeBookmarkPage(d) { fetchBookmarks(bookmarkPage + d); }
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => fetchBookmarks(1), 300);
+}
+
+function changeBookmarkPage(d) {
+    const target = bookmarkPage + d;
+    if (target < 1) return;
+    fetchBookmarks(target);
+}
 
 // PASTES
 let pastePage = 1;

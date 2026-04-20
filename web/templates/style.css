@@ -261,6 +261,19 @@ body {
     background: rgba(255, 255, 255, 0.1);
 }
 
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+input.btn-ghost:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+    background: rgba(255, 255, 255, 0.08);
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
     .sidebar {
