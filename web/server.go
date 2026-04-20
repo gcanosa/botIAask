@@ -48,6 +48,9 @@ type Server struct {
 	cryptoChartCache map[string]cryptoChartCacheEntry
 	cryptoChartMu    sync.Mutex
 
+	forexChartCache map[string]cryptoChartCacheEntry
+	forexChartMu    sync.Mutex
+
 	marketChartRawMu    sync.Mutex
 	marketChartRawCache map[string]marketChartRawCacheEntry
 }
@@ -121,6 +124,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
 	mux.HandleFunc("/api/finance", s.handleFinance)
 	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
+	mux.HandleFunc("/api/finance/forex-chart", s.handleForexChart)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -1279,6 +1283,67 @@ func (s *Server) handleCryptoChart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.cryptoChartCache[rangeKey] = cryptoChartCacheEntry{at: time.Now(), body: body}
 	s.cryptoChartMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
+
+func (s *Server) handleForexChart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.cryptoDB == nil {
+		http.Error(w, "crypto unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rangeKey := crypto.NormalizeRangeKey(r.URL.Query().Get("range"))
+	if rangeKey == "" {
+		rangeKey = "1w"
+	}
+	win, err := crypto.RangeToWindow(rangeKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	const chartTTL = 5 * time.Minute
+	s.forexChartMu.Lock()
+	if s.forexChartCache != nil {
+		if e, ok := s.forexChartCache[rangeKey]; ok && time.Since(e.at) < chartTTL {
+			s.forexChartMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(e.body)
+			return
+		}
+	}
+	s.forexChartMu.Unlock()
+
+	since := time.Now().Add(-win)
+	rows, err := s.cryptoDB.GetForexHistorySince(since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := crypto.BuildForexChartResponse(rangeKey, rows, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.forexChartMu.Lock()
+	if s.forexChartCache == nil {
+		s.forexChartCache = make(map[string]cryptoChartCacheEntry)
+	}
+	s.forexChartCache[rangeKey] = cryptoChartCacheEntry{at: time.Now(), body: body}
+	s.forexChartMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
