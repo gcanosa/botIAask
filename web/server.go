@@ -39,6 +39,8 @@ type Server struct {
 	uploadsDB    *uploads.Database
 	cryptoDB     *crypto.Database
 	templates    *template.Template
+	forexCache   map[string]float64
+	forexUpdate  time.Time
 }
 
 // NewServer creates a new web server instance
@@ -873,48 +875,57 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 
 	// Get Crypto Prices
 	data["crypto"] = []crypto.PriceEntry{}
+	var cryptoLastUpdate time.Time
 	if s.cryptoDB != nil {
 		prices, err := s.cryptoDB.GetLatestPrices()
-		if err == nil && prices != nil {
+		if err == nil && len(prices) > 0 {
 			data["crypto"] = prices
+			cryptoLastUpdate = prices[0].FetchedAt
 		}
 	}
+	data["crypto_last_update"] = cryptoLastUpdate.Format(time.RFC3339)
 
-	// Get Forex Rates
-	forex := map[string]float64{}
-	
-	// EUR to USD
-	if eurRates, err := irc.FetchRates("EUR"); err == nil {
-		if rate, ok := eurRates.Rates["USD"]; ok {
-			forex["eur_usd"] = rate
+	// Get Forex Rates with simple server-side caching (1 hour)
+	if s.forexCache == nil || time.Since(s.forexUpdate) > 1*time.Hour {
+		forex := map[string]float64{}
+		
+		// EUR to USD
+		if eurRates, err := irc.FetchRates("EUR"); err == nil {
+			if rate, ok := eurRates.Rates["USD"]; ok {
+				forex["eur_usd"] = rate
+			}
 		}
+
+		// USD to ARS (Official)
+		if usdRates, err := irc.FetchRates("USD"); err == nil {
+			if rate, ok := usdRates.Rates["ARS"]; ok {
+				forex["usd_ars"] = rate
+			}
+			if eurRate, ok := usdRates.Rates["EUR"]; ok && eurRate != 0 {
+				forex["eur_ars"] = usdRates.Rates["ARS"] / eurRate
+			}
+		}
+
+		// ARS Blue (Parallel) - Using Bluelytics API
+		client := &http.Client{Timeout: 5 * time.Second}
+		if resp, err := client.Get("https://api.bluelytics.com.ar/v2/latest"); err == nil {
+			defer resp.Body.Close()
+			var blueData struct {
+				Blue struct {
+					ValueAvg float64 `json:"value_avg"`
+				} `json:"blue"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&blueData); err == nil {
+				forex["usd_ars_blue"] = blueData.Blue.ValueAvg
+			}
+		}
+
+		s.forexCache = forex
+		s.forexUpdate = time.Now()
 	}
 
-	// USD to ARS (Official)
-	if usdRates, err := irc.FetchRates("USD"); err == nil {
-		if rate, ok := usdRates.Rates["ARS"]; ok {
-			forex["usd_ars"] = rate
-		}
-		if eurRate, ok := usdRates.Rates["EUR"]; ok && eurRate != 0 {
-			forex["eur_ars"] = usdRates.Rates["ARS"] / eurRate
-		}
-	}
-
-	// ARS Blue (Parallel) - Using Bluelytics API
-	client := &http.Client{Timeout: 5 * time.Second}
-	if resp, err := client.Get("https://api.bluelytics.com.ar/v2/latest"); err == nil {
-		defer resp.Body.Close()
-		var blueData struct {
-			Blue struct {
-				ValueAvg float64 `json:"value_avg"`
-			} `json:"blue"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&blueData); err == nil {
-			forex["usd_ars_blue"] = blueData.Blue.ValueAvg
-		}
-	}
-
-	data["forex"] = forex
+	data["forex"] = s.forexCache
+	data["forex_last_update"] = s.forexUpdate.Format(time.RFC3339)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)

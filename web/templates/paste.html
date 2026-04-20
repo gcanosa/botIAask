@@ -183,6 +183,7 @@
                 <div class="meta">
                     <span>Author: <b>{{.Upload.Username}}</b></span>
                     <span>Ticket: <b>{{.Upload.TicketID}}</b></span>
+                    <span>Published: <b>{{if .Upload.ApprovedAt.Valid}}{{.Upload.ApprovedAt.Time.Format "2006-01-02 15:04"}}{{else}}Pending{{end}}</b></span>
                     <span>Expires: <b>{{if eq .Upload.ExpiresInDays 0}}Never{{else}}{{.Upload.ExpiresInDays}} days{{end}}</b></span>
                 </div>
             </div>

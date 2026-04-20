@@ -244,7 +244,13 @@ async function fetchFinance() {
         const data = await res.json();
         
         const cryptoDiv = document.getElementById('crypto-prices');
+        const cryptoUpdate = document.getElementById('crypto-last-update');
         cryptoDiv.innerHTML = '';
+        
+        if (data.crypto_last_update && data.crypto_last_update !== '0001-01-01T00:00:00Z') {
+            cryptoUpdate.textContent = `Updated: ${new Date(data.crypto_last_update).toLocaleTimeString()}`;
+        }
+        
         if (data.crypto) {
             data.crypto.forEach(c => {
             const up = c.change_24h >= 0;
@@ -261,7 +267,13 @@ async function fetchFinance() {
         }
 
         const forexDiv = document.getElementById('forex-rates');
+        const forexUpdate = document.getElementById('forex-last-update');
         forexDiv.innerHTML = '';
+        
+        if (data.forex_last_update) {
+            forexUpdate.textContent = `Updated: ${new Date(data.forex_last_update).toLocaleTimeString()}`;
+        }
+
         const labels = {
             'eur_usd': 'EUR/USD',
             'usd_ars': 'USD/ARS (Official)',
@@ -422,10 +434,14 @@ async function fetchApprovedPastes(page) {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
+        const date = p.approved_at && p.approved_at.Valid ? new Date(p.approved_at.Time).toLocaleDateString() : 'N/A';
         return `
             <tr style="border-bottom: 1px solid var(--glass-border);">
                 <td style="padding: 1rem;" class="font-bold">${tid}</td>
-                <td style="padding: 1rem;">${title}</td>
+                <td style="padding: 1rem;">
+                    <div>${title}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Published: ${date}</div>
+                </td>
                 <td style="padding: 1rem; color: var(--primary);">${user}</td>
                 <td style="padding: 1rem; text-align: right;">
                     <a href="/p/${tid}" target="_blank" class="text-primary">View</a>
@@ -448,10 +464,14 @@ async function fetchPendingPastes() {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
+        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A';
         return `
             <tr style="border-bottom: 1px solid var(--glass-border); background: var(--accent-glow);">
                 <td style="padding: 1rem;">${tid}</td>
-                <td style="padding: 1rem;">${title}</td>
+                <td style="padding: 1rem;">
+                    <div>${title}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Submitted: ${date}</div>
+                </td>
                 <td style="padding: 1rem;">${user}</td>
                 <td style="padding: 1rem; text-align: right;">
                     <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
