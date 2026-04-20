@@ -69,3 +69,6 @@ go.work.sum
 >>>>>>> 776f444 (chore: add .gitignore file for Go project and IDE configurations)
 
 *.db
+logs/
+pastes/
+tags
