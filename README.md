@@ -19,7 +19,8 @@
 
 ### 📝 Secure Paste System
 - **Ephemeral Uploads**: Users can generate temporary links with `!paste` to upload logs or code.
-- **Admin Approval**: All pastes require manual approval from an administrator before being publicly viewable.
+- **File uploads**: `!upload` provides a time-limited form to submit a binary file (size limit configurable in the web dashboard). The IRC bot and web dashboard must use the **same** `uploads` SQLite file (see `uploads.db_path` in config if your working directory differs between processes).
+- **Admin Approval**: Pastes and file uploads require manual approval before public links work.
 - **Syntax Highlighting**: Beautiful rendering of shared code snippets.
 - **Auto-Expiration**: Pastes are automatically removed after a configurable duration.
 
@@ -87,6 +88,7 @@
 | `!ask <query>` | Asks the AI a question and returns the response. |
 | `!news [limit]` | Fetches the latest stories from Hacker News. |
 | `!paste` | Generates a secure, temporary link to upload a text paste. |
+| `!upload` | Generates a secure, temporary link to upload a file (max size in web **Uploads** settings). |
 | `!uptime` | Displays how long the bot has been running. |
 | `!spec` | Shows the current AI system prompt specification. |
 | `!help` | Displays help information in the channel. |
@@ -115,6 +117,7 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 - **Admin Control Panel**: Manage pastes, toggle bot features, and manage web user accounts.
 - **Live Logs**: Dedicated view for watching channel activity in real-time.
 - **Paste Viewer**: Publicly accessible view for approved pastes (`/p/<ID>`).
+- **File uploads**: Admin **Uploads** panel, configurable max size; approved files at `/f/<ID>`.
 - **Market View**: Live financial data panel for crypto and currency rates.
 - **System Stats**: Detailed charts for AI requests and system performance.
 - **Bookmarks**: Searchable database of links shared across channels.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -43,6 +44,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !uptime          - Show bot uptime\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !spec            - Show system prompt spec\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !paste           - Upload a text paste/log\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !upload          - Request a link to upload a file (max size in web settings)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !help            - Show this help message in IRC\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
@@ -261,8 +263,19 @@ func main() {
 		bot.SetBookmarksDatabase(bookmarksDB)
 	}
 	
-	// Initialize Uploads Database
-	uploadsDB, err := uploads.NewDatabase("data/uploads.db", "pastes")
+	// Initialize Uploads Database (absolute path avoids different cwd between services)
+	uploadsDBPath := cfg.Uploads.DBPath
+	if uploadsDBPath == "" {
+		uploadsDBPath = "data/uploads.db"
+	}
+	if !filepath.IsAbs(uploadsDBPath) {
+		uploadsDBPath, err = filepath.Abs(uploadsDBPath)
+		if err != nil {
+			log.Fatalf("uploads db path: %v", err)
+		}
+	}
+	log.Printf("Uploads database: %s", uploadsDBPath)
+	uploadsDB, err := uploads.NewDatabase(uploadsDBPath, "pastes", "upload_files")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize uploads database: %v", err)
 	} else {

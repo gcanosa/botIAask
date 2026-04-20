@@ -55,6 +55,12 @@
                         Pastes
                     </a>
                 </div>
+                <div class="nav-item">
+                    <a href="#uploads" class="nav-link" onclick="showPanel('uploads')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        Uploads
+                    </a>
+                </div>
                 <div id="admin-nav" class="hidden">
                     <div class="nav-item">
                         <a href="#admin" class="nav-link" onclick="showPanel('admin')">
@@ -295,6 +301,51 @@
                     <div style="overflow-x: auto;">
                          <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
                             <tbody id="pastes-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- File uploads panel -->
+            <section id="panel-uploads" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">File uploads</h1>
+                    <p class="section-subtitle">Pending and approved binary uploads from <span class="mono">!upload</span>. Approve or reject like pastes.</p>
+                </div>
+
+                <div id="upload-settings-card" class="card hidden" style="margin-bottom: 2rem; border-color: var(--primary);">
+                    <h3 class="card-title" style="margin-bottom: 1rem; color: var(--primary);">Upload limits</h3>
+                    <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Max file size (MB)</label>
+                            <input type="number" id="uploads-max-mb" min="1" max="2048" class="btn btn-ghost" style="width: 8rem; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                        <button type="button" onclick="saveUploadSettings()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Save</button>
+                        <span id="upload-settings-status" class="mono" style="font-size: 0.75rem;"></span>
+                    </div>
+                </div>
+
+                <div id="pending-files-section" class="card hidden" style="margin-bottom: 2rem; border-color: var(--accent);">
+                    <h3 class="card-title" style="color: var(--accent);">Pending file approvals</h3>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tbody id="pending-files-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0;">Approved files</h3>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span class="mono" id="files-count" style="font-size: 0.75rem; color: var(--text-muted);">0 items</span>
+                            <button id="files-prev-page" onclick="changeFilePage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
+                            <button id="files-next-page" onclick="changeFilePage(1)" class="btn btn-ghost" style="padding: 0.4rem;">&rarr;</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tbody id="files-list"></tbody>
                         </table>
                     </div>
                 </div>

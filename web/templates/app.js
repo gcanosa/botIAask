@@ -24,6 +24,11 @@ function showPanel(panelId) {
     // Specific panel initializers
     if (panelId === 'bookmarks') fetchBookmarks(1);
     if (panelId === 'pastes') fetchApprovedPastes(1);
+    if (panelId === 'uploads') {
+        fetchUploadSettings();
+        fetchPendingFiles();
+        fetchApprovedFiles(1);
+    }
     if (panelId === 'news') fetchNews(1);
     if (panelId === 'admin') fetchUsers();
     if (panelId === 'dashboard') {
@@ -59,6 +64,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (lastIsAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
             fetchPendingPastes();
             fetchApprovedPastes(pastePage);
+        }
+        if (lastIsAdmin && document.getElementById('panel-uploads').classList.contains('active')) {
+            fetchPendingFiles();
+            fetchApprovedFiles(filePage);
         }
         if (document.getElementById('panel-news').classList.contains('active')) {
             fetchNews(newsPage);
@@ -140,6 +149,8 @@ function updateAdminView(isAdmin) {
     const loginBtn = document.getElementById('login-btn');
     const logoutBtn = document.getElementById('logout-btn');
     const pendingSec = document.getElementById('pending-pastes-section');
+    const pendingFilesSec = document.getElementById('pending-files-section');
+    const uploadSettingsCard = document.getElementById('upload-settings-card');
 
     if (isAdmin) {
         adminNav.classList.remove('hidden');
@@ -147,6 +158,8 @@ function updateAdminView(isAdmin) {
         loginBtn.classList.add('hidden');
         logoutBtn.classList.remove('hidden');
         if (pendingSec) pendingSec.classList.remove('hidden');
+        if (pendingFilesSec) pendingFilesSec.classList.remove('hidden');
+        if (uploadSettingsCard) uploadSettingsCard.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
@@ -157,6 +170,8 @@ function updateAdminView(isAdmin) {
         loginBtn.classList.remove('hidden');
         logoutBtn.classList.add('hidden');
         if (pendingSec) pendingSec.classList.add('hidden');
+        if (pendingFilesSec) pendingFilesSec.classList.add('hidden');
+        if (uploadSettingsCard) uploadSettingsCard.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -878,6 +893,128 @@ async function fetchPendingPastes() {
     }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending approvals</td></tr>';
 }
 
+// FILE UPLOADS (!upload)
+let filePage = 1;
+
+function formatFileSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n < 0) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function fetchUploadSettings() {
+    if (!lastIsAdmin) return;
+    try {
+        const res = await fetch('/api/uploads/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const el = document.getElementById('uploads-max-mb');
+        if (el && data.max_file_mb != null) el.value = data.max_file_mb;
+    } catch (e) {
+        console.error('upload settings', e);
+    }
+}
+
+async function saveUploadSettings() {
+    const el = document.getElementById('uploads-max-mb');
+    const status = document.getElementById('upload-settings-status');
+    if (!el) return;
+    const mb = parseInt(el.value, 10);
+    if (!Number.isFinite(mb) || mb < 1 || mb > 2048) {
+        status.textContent = 'Invalid (1–2048)';
+        status.style.color = 'var(--error)';
+        return;
+    }
+    status.textContent = 'Saving...';
+    status.style.color = 'var(--text-muted)';
+    try {
+        const res = await fetch('/api/uploads/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ max_file_mb: mb }),
+        });
+        if (res.ok) {
+            status.textContent = 'Saved';
+            status.style.color = 'var(--success)';
+            setTimeout(() => { status.textContent = ''; }, 2500);
+        } else {
+            status.textContent = 'Save failed';
+            status.style.color = 'var(--error)';
+        }
+    } catch (e) {
+        status.textContent = 'Error';
+        status.style.color = 'var(--error)';
+    }
+}
+
+async function fetchApprovedFiles(page) {
+    if (page < 1) page = 1;
+    filePage = page;
+    const res = await fetch(`/api/uploads/files?page=${page}&t=${Date.now()}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('files-count').textContent = `${data.total_count} items`;
+    document.getElementById('files-list').innerHTML = (data.files || []).map((p) => {
+        const tid = p.ticket_id || p.TicketID;
+        const title = p.title || p.Title;
+        const user = p.username || p.Username;
+        const fname = p.original_filename || p.OriginalFilename || '—';
+        const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
+        const date = p.approved_at && p.approved_at.Valid ? new Date(p.approved_at.Time).toLocaleDateString() : 'N/A';
+        return `
+            <tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 1rem;" class="font-bold">${tid}</td>
+                <td style="padding: 1rem;">
+                    <div>${title}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(fname)} · ${sz} · Published: ${date}</div>
+                </td>
+                <td style="padding: 1rem; color: var(--primary);">${user}</td>
+                <td style="padding: 1rem; text-align: right;">
+                    <a href="/f/${tid}" target="_blank" class="text-primary">Download</a>
+                    ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
+                </td>
+            </tr>
+        `;
+    }).join('');
+    document.getElementById('files-prev-page').disabled = page <= 1;
+    document.getElementById('files-next-page').disabled = page >= data.total_pages;
+}
+
+function changeFilePage(d) {
+    if (filePage + d < 1) return;
+    fetchApprovedFiles(filePage + d);
+}
+
+async function fetchPendingFiles() {
+    const res = await fetch(`/api/uploads/files/pending?t=${Date.now()}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('pending-files-list').innerHTML = data.map((p) => {
+        const tid = p.ticket_id || p.TicketID;
+        const title = p.title || p.Title;
+        const user = p.username || p.Username;
+        const fname = p.original_filename || p.OriginalFilename || '—';
+        const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
+        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A';
+        return `
+            <tr style="border-bottom: 1px solid var(--glass-border); background: var(--accent-glow);">
+                <td style="padding: 1rem;">${tid}</td>
+                <td style="padding: 1rem;">
+                    <div>${title}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(fname)} · ${sz} · Submitted: ${date}</div>
+                </td>
+                <td style="padding: 1rem;">${user}</td>
+                <td style="padding: 1rem; text-align: right;">
+                    <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
+                    <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
+                </td>
+            </tr>
+        `;
+    }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending file uploads</td></tr>';
+}
+
 // NEWS
 let newsPage = 1;
 let newsSearchTimeout = null;
@@ -1047,6 +1184,7 @@ async function deletePaste(id) {
         const res = await fetch(`/api/pastes/delete?ticketID=${id}&t=${Date.now()}`, { method: 'DELETE' });
         if (res.ok) {
             await fetchApprovedPastes(pastePage);
+            await fetchApprovedFiles(filePage);
         } else {
             alert('Delete failed');
         }
@@ -1064,16 +1202,16 @@ async function approvePaste(id) {
 
         const res = await fetch(`/api/pastes/approve?ticketID=${id}&t=${Date.now()}`, { method: 'POST' });
         if (res.ok) {
-            // Remove from DOM immediately
             if (btn && btn.closest('tr')) btn.closest('tr').remove();
-            
-            // Re-fetch data to sync with server
             await fetchPendingPastes();
             await fetchApprovedPastes(1);
+            await fetchPendingFiles();
+            await fetchApprovedFiles(1);
         } else {
             const err = await res.text();
             alert('Approval failed: ' + err);
-            fetchPendingPastes(); // Re-sync on failure
+            fetchPendingPastes();
+            fetchPendingFiles();
         }
     } catch (e) { console.error(e); }
 }
@@ -1090,10 +1228,12 @@ async function rejectPaste(id) {
         if (res.ok) {
             if (btn && btn.closest('tr')) btn.closest('tr').remove();
             await fetchPendingPastes();
+            await fetchPendingFiles();
         } else {
             const err = await res.text();
             alert('Rejection failed: ' + err);
             fetchPendingPastes();
+            fetchPendingFiles();
         }
     } catch (e) { console.error(e); }
 }
@@ -1144,6 +1284,8 @@ window.debounceSearch = debounceSearch;
 window.deletePaste = deletePaste;
 window.approvePaste = approvePaste;
 window.rejectPaste = rejectPaste;
+window.changeFilePage = changeFilePage;
+window.saveUploadSettings = saveUploadSettings;
 window.deleteUser = deleteUser;
 window.showAddUser = () => { document.getElementById('modal-overlay').classList.remove('hidden'); document.getElementById('adduser-modal').classList.remove('hidden'); };
 window.hideAddUser = () => { document.getElementById('modal-overlay').classList.add('hidden'); document.getElementById('adduser-modal').classList.add('hidden'); };
