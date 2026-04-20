@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Paste - {{.Upload.Username}}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #38bdf8;
+            --primary-hover: #0ea5e9;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            background-image: radial-gradient(circle at 50% 0%, #1e293b 0%, #0f172a 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        h1 {
+            font-weight: 600;
+            font-size: 1.875rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 0.875rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        input, select, textarea {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+
+        input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        textarea {
+            font-family: 'JetBrains Mono', monospace;
+            resize: vertical;
+            min-height: 300px;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        button {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            transition: all 0.2s;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #0f172a;
+            flex: 1;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .line-counter {
+            text-align: right;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .error {
+            color: #f87171;
+            font-size: 0.75rem;
+            margin-top: 0.5rem;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>New Paste</h1>
+        <p class="subtitle">Enter your content to be approved by an administrator.</p>
+
+        <form action="/upload?token={{.Upload.Token}}" method="POST" id="uploadForm">
+            <div class="grid">
+                <div class="form-group">
+                    <label for="username">User</label>
+                    <input type="text" id="username" value="{{.Upload.Username}}" disabled>
+                </div>
+                <div class="form-group">
+                    <label for="expires">Expiration</label>
+                    <select name="expires" id="expires">
+                        <option value="1">1 Day</option>
+                        <option value="3">3 Days</option>
+                        <option value="7" selected>7 Days (Default)</option>
+                        <option value="0">Never</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="title">Title</label>
+                <input type="text" name="title" id="title" placeholder="Give your paste a title..." required>
+            </div>
+
+            <div class="form-group">
+                <label for="description">Description (Optional)</label>
+                <input type="text" name="description" id="description" placeholder="Short description of the content...">
+            </div>
+
+            <div class="form-group">
+                <label for="content">Content</label>
+                <textarea name="content" id="content" placeholder="Paste your source code, log, or text here..." required></textarea>
+                <div class="line-counter"><span id="lineCount">0</span> / 30,000 lines</div>
+                <div id="lineError" class="error">Content exceeds the maximum limit of 30,000 lines.</div>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn-primary" id="submitBtn">Submit for Approval</button>
+                <button type="button" class="btn-secondary" onclick="cancelSession()">Cancel</button>
+            </div>
+        </form>
+
+        <form id="cancelForm" action="/upload/cancel" method="POST" style="display:none;">
+            <input type="hidden" name="token" value="{{.Upload.Token}}">
+        </form>
+    </div>
+
+    <script>
+        const textarea = document.getElementById('content');
+        const lineCountDisplay = document.getElementById('lineCount');
+        const submitBtn = document.getElementById('submitBtn');
+        const lineError = document.getElementById('lineError');
+
+        textarea.addEventListener('input', () => {
+            const lines = textarea.value.split('\n').length;
+            lineCountDisplay.textContent = lines.toLocaleString();
+            
+            if (lines > 30000) {
+                lineError.style.display = 'block';
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.5';
+                submitBtn.style.cursor = 'not-allowed';
+            } else {
+                lineError.style.display = 'none';
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+            }
+        });
+
+        function cancelSession() {
+            if (confirm('Are you sure you want to cancel this upload session? This will notify the bot.')) {
+                document.getElementById('cancelForm').submit();
+            }
+        }
+    </script>
+</body>
+</html>
