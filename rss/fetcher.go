@@ -118,17 +118,29 @@ func (f *Fetcher) Fetch() {
 
 	var newEntries []NewsEntry
 	for _, item := range feed.Items {
-		seen, err := f.db.IsSeen(item.GUID)
+		id := item.GUID
+		if id == "" {
+			id = item.Link
+		}
+		if id == "" {
+			continue
+		}
+
+		seen, err := f.db.IsSeen(id)
 		if err != nil {
 			log.Printf("[RSS] DB Error: %v", err)
 			continue
 		}
 		if !seen {
+			pubDate := time.Now()
+			if item.PublishedParsed != nil {
+				pubDate = *item.PublishedParsed
+			}
 			entry := NewsEntry{
-				GUID:    item.GUID,
+				GUID:    id,
 				Title:   item.Title,
 				Link:    item.Link,
-				PubDate: *item.PublishedParsed,
+				PubDate: pubDate,
 			}
 			newEntries = append(newEntries, entry)
 		}
@@ -189,7 +201,10 @@ func (f *Fetcher) Backfill(limit int) int {
 		
 		id := item.GUID
 		if id == "" {
-			id = item.Link // Fallback to link as ID
+			id = item.Link
+		}
+		if id == "" {
+			continue
 		}
 		
 		exists, _, err := f.db.GetEntryStatus(id)
@@ -199,12 +214,16 @@ func (f *Fetcher) Backfill(limit int) int {
 		}
 		
 		if !exists {
+			pubDate := time.Now()
+			if item.PublishedParsed != nil {
+				pubDate = *item.PublishedParsed
+			}
 			entry := NewsEntry{
 				GUID:      id,
 				Title:     item.Title,
 				Link:      item.Link,
 				ShortLink: ShortenURL(item.Link),
-				PubDate:   *item.PublishedParsed,
+				PubDate:   pubDate,
 			}
 			if err := f.db.MarkSeen(entry); err != nil {
 				log.Printf("[RSS] Failed to save backfill entry: %v", err)
