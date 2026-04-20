@@ -13,6 +13,7 @@ import (
 	"botIAask/ai"
 	"botIAask/bookmarks"
 	"botIAask/config"
+	"botIAask/crypto"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -259,6 +260,19 @@ func main() {
 	} else {
 		defer uploadsDB.Close()
 		bot.SetUploadsDatabase(uploadsDB)
+	}
+
+	// Initialize Crypto Database
+	cryptoDB, err := crypto.NewDatabase("crypto.db")
+	if err != nil {
+		log.Printf("Warning: Failed to initialize crypto database: %v", err)
+	} else {
+		defer cryptoDB.Close()
+		bot.SetCryptoDatabase(cryptoDB)
+
+		// Initialize Crypto Fetcher
+		cryptoFetcher := crypto.NewFetcher(cryptoDB)
+		go cryptoFetcher.Start()
 	}
 
 	// Start Log Rotator

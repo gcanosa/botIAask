@@ -13,6 +13,7 @@ import (
 	"botIAask/ai"
 	"botIAask/bookmarks"
 	"botIAask/config"
+	"botIAask/crypto"
 	"botIAask/logger"
 	"botIAask/rss"
 	"botIAask/stats"
@@ -68,6 +69,9 @@ type Bot struct {
 
 	// Uploads Database
 	uploadsDB *uploads.Database
+
+	// Crypto Database
+	cryptoDB *crypto.Database
 }
 
 // NewBot initializes a new Bot instance.
@@ -112,6 +116,11 @@ func (b *Bot) SetStatsTracker(t *stats.Tracker) {
 // SetUploadsDatabase sets the uploads database for the bot
 func (b *Bot) SetUploadsDatabase(db *uploads.Database) {
 	b.uploadsDB = db
+}
+
+// SetCryptoDatabase sets the crypto database for the bot
+func (b *Bot) SetCryptoDatabase(db *crypto.Database) {
+	b.cryptoDB = db
 }
 
 // GetUptime returns the human-readable uptime of the bot.
@@ -395,8 +404,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste", 
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %seuro, %speso, %scrypto", 
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -584,6 +593,42 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		sessionUptimeStr := formatDuration(sessionUptime)
 
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		return
+	}
+
+	// Handle !bc command (Calculator)
+	if strings.HasPrefix(message, b.prefix+"bc ") {
+		exprStr := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"bc "))
+		if exprStr == "" {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbc <expression>, e.g., %sbc 5+5", b.prefix, b.prefix))
+			return
+		}
+
+		result, err := EvaluateExpression(exprStr)
+		if err != nil {
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: Error: %v", sender, err))
+			return
+		}
+
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: %s = %s", sender, exprStr, result))
+		return
+	}
+
+	// Handle !euro command
+	if strings.HasPrefix(message, b.prefix+"euro") {
+		b.handleEuroCommand(target)
+		return
+	}
+
+	// Handle !peso command
+	if strings.HasPrefix(message, b.prefix+"peso") {
+		b.handlePesoCommand(target)
+		return
+	}
+
+	// Handle !crypto command
+	if strings.HasPrefix(message, b.prefix+"crypto") {
+		b.handleCryptoCommand(target)
 		return
 	}
 

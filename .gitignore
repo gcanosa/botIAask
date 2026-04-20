@@ -110,4 +110,8 @@ bot
 # uploads and pastes
 /pastes
 /uploads
+<<<<<<< HEAD
 >>>>>>> d907fb1 (updated gitignore with uploads and pastes)
+=======
+/scratch
+>>>>>>> 14810bc (feat: add crypto price tracking and currency exchange commands to the IRC bot)
