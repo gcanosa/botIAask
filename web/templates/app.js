@@ -124,6 +124,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
+        document.getElementById('bookmarks-admin-header')?.classList.remove('hidden');
     } else {
         adminNav.classList.add('hidden');
         adminBadge.classList.add('hidden');
@@ -133,6 +134,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
+        document.getElementById('bookmarks-admin-header')?.classList.add('hidden');
         document.getElementById('rss-admin-settings')?.classList.add('hidden');
     }
 }
@@ -395,7 +397,8 @@ async function fetchBookmarks(page) {
         const list = document.getElementById('bookmarks-list');
         
         if (!data.bookmarks || data.bookmarks.length === 0) {
-            list.innerHTML = '<tr><td colspan="3" style="padding: 2rem; text-align: center; color: var(--text-muted);">No bookmarks found matching your search.</td></tr>';
+            const span = lastIsAdmin ? 4 : 3;
+            list.innerHTML = `<tr><td colspan="${span}" style="padding: 2rem; text-align: center; color: var(--text-muted);">No bookmarks found matching your search.</td></tr>`;
             return;
         }
 
@@ -403,11 +406,20 @@ async function fetchBookmarks(page) {
             <tr style="border-bottom: 1px solid var(--glass-border);">
                 <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${b.nickname}</td>
                 <td style="padding: 1rem;">
-                    <a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
-                        ${b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url}
-                    </a>
+                    <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                        <a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
+                            ${b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url}
+                        </a>
+                        <button type="button" onclick="copyBookmarkUrl(decodeURIComponent('${encodeURIComponent(b.url)}'))" title="Copy URL" class="btn btn-ghost" style="padding: 0.2rem 0.35rem; line-height: 0; flex-shrink: 0; opacity: 0.75;" aria-label="Copy URL">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                    </div>
                 </td>
                 <td style="padding: 1rem; text-align: right; color: var(--text-muted);">${new Date(b.timestamp).toLocaleDateString()}</td>
+                ${lastIsAdmin ? `
+                <td style="padding: 1rem; text-align: right;">
+                    <button onclick="deleteBookmark(${b.id})" style="color: var(--error); background: none; border: none; cursor: pointer; font-size: 0.8rem;">Delete</button>
+                </td>` : '<td class="hidden"></td>'}
             </tr>
         `).join('');
         
@@ -417,6 +429,20 @@ async function fetchBookmarks(page) {
         
     } catch (e) {
         console.error("Failed to fetch bookmarks", e);
+    }
+}
+
+async function deleteBookmark(id) {
+    if (!confirm('Delete this bookmark?')) return;
+    const res = await fetch(`/api/bookmarks?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) fetchBookmarks(bookmarkPage);
+}
+
+async function copyBookmarkUrl(url) {
+    try {
+        await navigator.clipboard.writeText(url);
+    } catch (e) {
+        console.error('Copy failed', e);
     }
 }
 
@@ -749,6 +775,8 @@ window.changeTimeframe = (tf) => {
     fetchHistory(tf);
 };
 window.changeBookmarkPage = changeBookmarkPage;
+window.deleteBookmark = deleteBookmark;
+window.copyBookmarkUrl = copyBookmarkUrl;
 window.changePastePage = changePastePage;
 window.debounceSearch = debounceSearch;
 window.deletePaste = deletePaste;

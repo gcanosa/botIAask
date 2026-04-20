@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"crypto/rand"
@@ -522,6 +523,35 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	if s.bookmarksDB == nil {
 		http.Error(w, "Bookmarks database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		isAdmin, _ := s.checkAuth(r)
+		if !isAdmin {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		idStr := r.URL.Query().Get("id")
+		id, err := strconv.Atoi(idStr)
+		if idStr == "" || err != nil || id < 1 {
+			http.Error(w, "Invalid ID", http.StatusBadRequest)
+			return
+		}
+		if err := s.bookmarksDB.DeleteBookmark(id); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 

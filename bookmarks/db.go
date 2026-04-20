@@ -104,6 +104,21 @@ func (d *Database) CountUserBookmarksSince(nickname string, since time.Time) (in
 	return count, err
 }
 
+func (d *Database) DeleteBookmark(id int) error {
+	res, err := d.db.Exec("DELETE FROM bookmarks WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("bookmark not found")
+	}
+	return nil
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
 }
