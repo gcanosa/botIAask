@@ -1,0 +1,205 @@
+package web
+
+import (
+	"bufio"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"botIAask/config"
+	"botIAask/irc"
+)
+
+//go:embed templates/*
+var templatesFS embed.FS
+
+// Server handles the web dashboard
+type Server struct {
+	cfg       *config.Config
+	bot       *irc.Bot
+	templates *template.Template
+}
+
+// NewServer creates a new web server instance
+func NewServer(cfg *config.Config, bot *irc.Bot) *Server {
+	tmpl, err := template.ParseFS(templatesFS, "templates/index.html")
+	if err != nil {
+		log.Fatalf("Failed to parse templates: %v", err)
+	}
+
+	return &Server{
+		cfg:       cfg,
+		bot:       bot,
+		templates: tmpl,
+	}
+}
+
+// Start starts the web server
+func (s *Server) Start() error {
+	mux := http.NewServeMux()
+
+	// API endpoints
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
+
+	// Static files (app.js)
+	mux.HandleFunc("/static/", s.handleStatic)
+
+	// Dashboard page
+	mux.HandleFunc("/", s.handleDashboard)
+
+	addr := fmt.Sprintf("%s:%d", s.cfg.Web.Host, s.cfg.Web.Port)
+	log.Printf("Starting web dashboard on http://%s", addr)
+	fmt.Printf("\n--------------------------------------------------\n")
+	fmt.Printf("🚀 Web Dashboard: http://%s\n", addr)
+	fmt.Printf("--------------------------------------------------\n\n")
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	return server.ListenAndServe()
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	status := map[string]interface{}{
+		"uptime":      s.bot.GetUptime(),
+		"connected":   true,
+		"server":      s.cfg.IRC.Server,
+		"nickname":    s.cfg.IRC.Nickname,
+		"channels":    s.cfg.IRC.Channels,
+		"ai_model":    s.cfg.AI.Model,
+		"ai_status":   "Online",
+		"ai_requests": s.bot.GetAIRequestCount(),
+		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
+func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		http.Error(w, "Channel is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Determine log file path for today
+	// Replicate logger's safeChannel logic
+	safeChannel := strings.ReplaceAll(channel, "/", "_")
+	if len(safeChannel) > 0 && (safeChannel[0] == '#' || safeChannel[0] == '&') {
+		safeChannel = safeChannel[1:]
+	}
+	
+	today := time.Now().Format("2006-01-02")
+	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", safeChannel, today))
+
+	file, err := os.Open(logFile)
+	if err != nil {
+		fmt.Fprintf(w, "data: Error opening log file: %v\n\n", err)
+		flusher.Flush()
+		// We don't return here because the file might be created later
+	}
+
+	var reader *bufio.Reader
+	if file != nil {
+		reader = bufio.NewReader(file)
+	}
+
+	// Ticker for polling new data if file is at EOF
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	// Notify client that stream is open
+	fmt.Fprintf(w, "data: [CONNECTED to %s]\n\n", channel)
+	flusher.Flush()
+
+	ctx := r.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if file != nil {
+				file.Close()
+			}
+			return
+		case <-ticker.C:
+			// If file was not open or was closed, try to open/reopen it
+			if file == nil {
+				file, err = os.Open(logFile)
+				if err == nil {
+					reader = bufio.NewReader(file)
+				} else {
+					continue // Still no file
+				}
+			}
+
+			// Read all available lines
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					if err == io.EOF {
+						break // End of current data, wait for next tick
+					}
+					// Real error
+					fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
+					flusher.Flush()
+					break
+				}
+				// Send line to client
+				fmt.Fprintf(w, "data: %s", line) // line already has \n
+				fmt.Fprint(w, "\n")              // data block ends with extra \n
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if path == "/static/app.js" {
+		data, err := templatesFS.ReadFile("templates/app.js")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write(data)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	err := s.templates.Execute(w, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}

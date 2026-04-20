@@ -37,6 +37,14 @@ type Bot struct {
 
 	// Version tracking
 	version string
+
+	// Admin and protection
+	ignoreList map[string]bool
+	ignoreMu   sync.RWMutex
+
+	// Stats
+	aiRequests int
+	statsMu    sync.Mutex
 }
 
 // NewBot initializes a new Bot instance.
@@ -50,6 +58,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		connectionTime: time.Now(),
 		channelMembers: make(map[string]map[string]struct{}),
 		version:        "1.0.0",
+		ignoreList:     make(map[string]bool),
 	}
 
 	// Initialize rate limiter
@@ -59,6 +68,45 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	}
 
 	return bot
+}
+
+// GetUptime returns the human-readable uptime of the bot.
+func (b *Bot) GetUptime() string {
+	return formatDuration(time.Since(b.startTime))
+}
+
+// GetStartTime returns the time the bot was initialized.
+func (b *Bot) GetStartTime() time.Time {
+	return b.startTime
+}
+
+// GetAIRequestCount returns the total number of AI requests processed.
+func (b *Bot) GetAIRequestCount() int {
+	b.statsMu.Lock()
+	defer b.statsMu.Unlock()
+	return b.aiRequests
+}
+
+// IsAdmin checks if a given hostmask or account matches the admin list.
+func (b *Bot) IsAdmin(fullHostmask string) bool {
+	b.membersMu.RLock()
+	defer b.membersMu.RUnlock()
+	for _, admin := range b.cfg.Admin.Admins {
+		if strings.Contains(fullHostmask, admin) {
+			return true
+		}
+	}
+	return false
+}
+
+// Reload updates the bot's configuration.
+func (b *Bot) Reload(cfg *config.Config) {
+	b.membersMu.Lock()
+	defer b.membersMu.Unlock()
+	b.cfg = cfg
+	b.prefix = cfg.Bot.CommandPrefix
+	b.cmdName = cfg.Bot.CommandName
+	log.Printf("Bot configuration reloaded.")
 }
 
 // Start connects to the IRC server and starts the bot event loop.
@@ -103,7 +151,7 @@ func (b *Bot) Start() error {
 			logger.LogChannelEvent(target, logger.EventAction, sender, actionMsg, "")
 		} else {
 			logger.LogChannelEvent(target, logger.EventMessage, sender, message, "")
-			b.handleCommand(target, message, sender)
+			b.handleCommand(target, message, sender, e.Source)
 		}
 	})
 
@@ -196,8 +244,56 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// handleCommand checks for the !ask, !uptime, and !spec command and interacts with the AI client.
-func (b *Bot) handleCommand(target, message, sender string) {
+// handleCommand checks for the commands and interacts with the AI client or management functions.
+func (b *Bot) handleCommand(target, message, sender, source string) {
+	isAdmin := b.IsAdmin(source)
+
+	// Admin commands
+	if isAdmin {
+		if strings.HasPrefix(message, b.prefix+"join ") {
+			channel := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
+			if channel != "" {
+				b.conn.Join(channel)
+				b.sendPrivmsg(target, fmt.Sprintf("Joining %s...", channel))
+			}
+			return
+		}
+		if strings.HasPrefix(message, b.prefix+"part") {
+			parts := strings.Fields(message)
+			channel := target
+			if len(parts) > 1 {
+				channel = parts[1]
+			}
+			b.conn.Part(channel)
+			return
+		}
+		if strings.HasPrefix(message, b.prefix+"ignore ") {
+			user := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"ignore "))
+			if user != "" {
+				b.ignoreMu.Lock()
+				b.ignoreList[strings.ToLower(user)] = true
+				b.ignoreMu.Unlock()
+				b.sendPrivmsg(target, fmt.Sprintf("Now ignoring %s", user))
+			}
+			return
+		}
+		if strings.HasPrefix(message, b.prefix+"stats") {
+			b.statsMu.Lock()
+			count := b.aiRequests
+			b.statsMu.Unlock()
+			b.sendPrivmsg(target, fmt.Sprintf("Stats: AI Requests=%d, Uptime=%s", count, b.GetUptime()))
+			return
+		}
+	}
+
+	// Check if user is ignored
+	b.ignoreMu.RLock()
+	ignored := b.ignoreList[strings.ToLower(sender)]
+	b.ignoreMu.RUnlock()
+	if ignored {
+		return
+	}
+
 	// Handle !uptime command
 	if strings.HasPrefix(message, b.prefix+"uptime") {
 		appUptime := time.Since(b.startTime)
@@ -239,6 +335,11 @@ func (b *Bot) handleCommand(target, message, sender string) {
 
 		// Use a background context for the AI request
 		ctx := context.Background()
+
+		// Track request
+		b.statsMu.Lock()
+		b.aiRequests++
+		b.statsMu.Unlock()
 
 		// Get response from AI
 		response, err := b.aiClient.Ask(ctx, question)

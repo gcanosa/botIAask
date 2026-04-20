@@ -5,10 +5,13 @@
 # Binaries for programs and plugins
 =======
 # Binaries and executables
+<<<<<<< HEAD
 bot
 <<<<<<< HEAD
 *.pid
 =======
+=======
+>>>>>>> 001f6e8 (Refactor web dashboard with Tailwind CSS v4, dynamic config reloading, and real-time SSE log streaming)
 botIAask
 >>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
 bot.exe
@@ -86,4 +89,5 @@ bot
 
 # logs folder
 logs/
+*.log
 >>>>>>> 9cbdc1a (feat: implement IRC event logging system and integrate it into bot message handling)
