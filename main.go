@@ -45,6 +45,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !spec            - Show system prompt spec\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !paste           - Upload a text paste/log\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !upload          - Request a link to upload a file (max size in web settings)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !download [N]    - List your approved file uploads with download URLs (newest first; optional last N)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !help            - Show this help message in IRC\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
@@ -263,16 +264,10 @@ func main() {
 		bot.SetBookmarksDatabase(bookmarksDB)
 	}
 	
-	// Initialize Uploads Database (absolute path avoids different cwd between services)
-	uploadsDBPath := cfg.Uploads.DBPath
-	if uploadsDBPath == "" {
-		uploadsDBPath = "data/uploads.db"
-	}
-	if !filepath.IsAbs(uploadsDBPath) {
-		uploadsDBPath, err = filepath.Abs(uploadsDBPath)
-		if err != nil {
-			log.Fatalf("uploads db path: %v", err)
-		}
+	// Initialize Uploads Database (path relative to project root — same file for IRC + web even if cwd differs)
+	uploadsDBPath, err := resolveUploadsDBPath(configPath, cfg.Uploads.DBPath)
+	if err != nil {
+		log.Fatalf("uploads db path: %v", err)
 	}
 	log.Printf("Uploads database: %s", uploadsDBPath)
 	uploadsDB, err := uploads.NewDatabase(uploadsDBPath, "pastes", "upload_files")
@@ -419,4 +414,21 @@ func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats
 	if err := ws.Start(); err != nil {
 		log.Printf("Web server error: %v", err)
 	}
+}
+
+// resolveUploadsDBPath resolves a relative db path against the project root (parent of the config directory),
+// so IRC and web always share one DB when using default data/uploads.db.
+func resolveUploadsDBPath(configPath, dbPath string) (string, error) {
+	if dbPath == "" {
+		dbPath = "data/uploads.db"
+	}
+	if filepath.IsAbs(dbPath) {
+		return dbPath, nil
+	}
+	cfgAbs, err := filepath.Abs(configPath)
+	if err != nil {
+		return "", err
+	}
+	projectRoot := filepath.Dir(filepath.Dir(cfgAbs))
+	return filepath.Join(projectRoot, dbPath), nil
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -449,8 +450,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %seuro, %speso, %scrypto", 
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto", 
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -944,6 +945,54 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		b.sendPrivmsg(sender, fmt.Sprintf("File upload requested. Upload here (expires in 30m): %s", uploadURL))
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the upload link.", sender))
 		return
+	}
+
+	downloadCmd := b.prefix + "download"
+	if strings.HasPrefix(message, downloadCmd) {
+		suf := strings.TrimPrefix(message, downloadCmd)
+		if suf == "" || strings.HasPrefix(suf, " ") {
+			if b.uploadsDB == nil {
+				b.sendPrivmsg(target, "Uploads system not initialized.")
+				return
+			}
+			const maxDownloadList = 100
+			limit := maxDownloadList
+			parts := strings.Fields(message)
+			if len(parts) > 1 {
+				n, err := strconv.Atoi(parts[1])
+				if err != nil || n <= 0 {
+					b.sendPrivmsg(target, fmt.Sprintf("Usage: %sdownload [N] — list your approved file uploads (newest first); N = last N files (max %d).", b.prefix, maxDownloadList))
+					return
+				}
+				if n > maxDownloadList {
+					n = maxDownloadList
+				}
+				limit = n
+			}
+			files, err := b.uploadsDB.ListApprovedFilesByUser(sender, limit)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error listing uploads: %v", sender, err))
+				return
+			}
+			if len(files) == 0 {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: No approved file uploads found.", sender))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: %d file(s) (newest first):", sender, len(files)))
+			for _, u := range files {
+				name := u.OriginalFilename
+				if name == "" {
+					name = u.Title
+				}
+				if name == "" {
+					name = u.TicketID
+				}
+				url := fmt.Sprintf("%s/f/%s", b.cfg.Web.BaseURL, u.TicketID)
+				b.sendPrivmsg(target, fmt.Sprintf("  %s — %s", name, url))
+				time.Sleep(1 * time.Second)
+			}
+			return
+		}
 	}
 
 	// Handle !ask command
