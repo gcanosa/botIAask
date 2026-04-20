@@ -3,411 +3,318 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>botIAask Dashboard</title>
-    <!-- Tailwind CSS v4 Play CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <title>botIAask | AI Intelligence Hub</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style type="text/tailwindcss">
-        @theme {
-            --color-bg: #0f172a;
-            --color-card: #1e293b;
-            --color-primary: #38bdf8;
-            --color-accent: #c084fc;
-        }
-        body {
-            font-family: 'Inter', sans-serif;
-            @apply bg-bg text-slate-100 antialiased;
-        }
-        .mono {
-            font-family: 'JetBrains Mono', monospace;
-        }
-    </style>
 </head>
-<body class="p-4 md:p-8 flex justify-center">
-    <div class="container max-w-5xl">
-        <header class="mb-8 flex justify-between items-center">
-            <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
-                botIAask Dash
-            </h1>
-            <div class="flex items-center gap-4">
-                <button id="news-toggle" onclick="toggleNews()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full" id="news-indicator"></span>
-                    News Fetcher: <span id="news-status-text">OFF</span>
-                </button>
-                <button id="stats-toggle" onclick="toggleStats()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full" id="stats-indicator"></span>
-                    Stats: <span id="stats-status-text">OFF</span>
-                </button>
-                <button id="bookmarks-toggle" onclick="toggleBookmarks()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-white/10 hover:border-accent text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-slate-500" id="bookmarks-indicator"></span>
-                    Bookmarks
-                </button>
-                <button id="pastes-toggle" onclick="togglePastes()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-white/10 hover:border-primary text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-slate-500" id="pastes-indicator"></span>
-                    Pastes
-                </button>
-                <div id="admin-controls" class="hidden flex items-center gap-2">
-                    <button id="users-toggle" onclick="toggleUsers()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-white/10 hover:border-primary text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-2">
-                        Users
-                    </button>
-                    <button onclick="logout()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-red-500/30 hover:bg-red-500/10 text-red-500 transition-all cursor-pointer">
-                        Logout
-                    </button>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="brand">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                <span>botIAask</span>
+            </div>
+
+            <nav class="nav-menu">
+                <div class="nav-item">
+                    <a href="#dashboard" class="nav-link active" onclick="showPanel('dashboard')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        Overview
+                    </a>
                 </div>
-                <button id="login-btn" onclick="showLogin()" class="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 transition-all cursor-pointer">
-                    Admin Login
-                </button>
-                <div id="irc-auth-badge" class="px-3 py-1 bg-slate-800 text-slate-500 border border-white/10 rounded-full text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-slate-600" id="irc-auth-indicator"></span>
+                <div class="nav-item">
+                    <a href="#finance" class="nav-link" onclick="showPanel('finance')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                        Finance
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="#logs" class="nav-link" onclick="showPanel('logs')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                        Logs
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="#bookmarks" class="nav-link" onclick="showPanel('bookmarks')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                        Bookmarks
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="#pastes" class="nav-link" onclick="showPanel('pastes')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        Pastes
+                    </a>
+                </div>
+                <div id="admin-nav" class="hidden">
+                    <div class="nav-item">
+                        <a href="#admin" class="nav-link" onclick="showPanel('admin')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                            Administration
+                        </a>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="status-area">
+                <div id="status-badge" class="badge">
+                    <span class="dot"></span> 
+                    <span id="status-text">Connecting...</span>
+                </div>
+                <div id="irc-auth-badge" class="badge badge-online hidden">
+                    <span class="dot pulse"></span>
                     IRC: <span id="irc-auth-text">Guest</span>
                 </div>
-                <div id="status-badge" class="px-3 py-1 bg-primary/10 text-primary border border-primary/20 rounded-full text-xs font-bold uppercase tracking-wider">
-                    Connecting...
-                </div>
-            </div>
-        </header>
-
-        <!-- Stats Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div class="bg-card p-5 rounded-xl border border-white/5 shadow-lg">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-2 font-semibold">Uptime</h2>
-                <div id="uptime" class="mono text-lg font-bold">--</div>
-            </div>
-            <div class="bg-card p-5 rounded-xl border border-white/5 shadow-lg">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-2 font-semibold">IRC Server</h2>
-                <div id="server" class="mono text-lg font-bold truncate">--</div>
-            </div>
-            <div class="bg-card p-5 rounded-xl border border-white/5 shadow-lg">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-2 font-semibold">AI Requests</h2>
-                <div id="ai_requests" class="mono text-lg font-bold">--</div>
-            </div>
-            <div class="bg-card p-5 rounded-xl border border-white/5 shadow-lg">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-2 font-semibold">AI Model</h2>
-                <div id="ai_model" class="mono text-lg font-bold truncate">--</div>
-            </div>
-        </div>
-
-        <!-- Finance Panel -->
-        <div id="finance-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold flex items-center gap-2">
-                    Financial Markets
-                    <span class="text-[9px] lowercase bg-slate-800 text-slate-500 px-2 py-0.5 rounded-full border border-white/5">Real-time indicators</span>
-                </h2>
-                <span class="text-[10px] mono text-slate-500" id="finance-updated">Last update: --:--:--</span>
-            </div>
-            
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <!-- Crypto Prices -->
-                <div class="space-y-4">
-                    <h3 class="text-primary text-[10px] uppercase tracking-widest font-bold flex items-center gap-2">
-                        <span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
-                        Top Cryptocurrencies
-                    </h3>
-                    <div id="crypto-prices" class="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        <!-- Crypto items injected here -->
-                    </div>
-                </div>
-
-                <!-- Forex Rates -->
-                <div class="space-y-4">
-                    <h3 class="text-accent text-[10px] uppercase tracking-widest font-bold flex items-center gap-2">
-                        <span class="w-1.5 h-1.5 rounded-full bg-accent"></span>
-                        Exchange Rates
-                    </h3>
-                    <div id="forex-rates" class="grid grid-cols-2 gap-3">
-                        <!-- Forex items injected here -->
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Channels & Interaction -->
-        <div class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8">
-            <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-4 font-semibold">Active Channels (Click to view logs)</h2>
-            <div id="channels" class="flex flex-wrap gap-2">
-                <!-- Channels will be injected here -->
-            </div>
-        </div>
-        <!-- Active Administrators -->
-        <div id="admins-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h2 class="text-slate-400 text-xs uppercase tracking-widest mb-4 font-semibold">Active Administrators</h2>
-            <div id="admins-global" class="mb-4">
-                <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Global Session</div>
-                <div id="admins-list" class="flex flex-wrap gap-2">
-                    <!-- Global admins -->
-                </div>
-            </div>
-            <div id="admins-presence">
-                <div class="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Channel Presence</div>
-                <div id="admins-by-channel" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <!-- Per-channel admins -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Real-time Statistics -->
-        <div id="stats-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                <div>
-                    <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold mb-3">Activity Analytics</h2>
-                    <div class="flex flex-wrap gap-2" id="timeframe-selector">
-                        <button onclick="changeTimeframe('1h')" data-time="1h" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn active">1H</button>
-                        <button onclick="changeTimeframe('6h')" data-time="6h" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">6H</button>
-                        <button onclick="changeTimeframe('1d')" data-time="1d" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">1D</button>
-                        <button onclick="changeTimeframe('5d')" data-time="5d" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">5D</button>
-                        <button onclick="changeTimeframe('1m')" data-time="1m" class="px-3 py-1 text-[10px] font-bold rounded-md border border-white/5 bg-slate-800 text-slate-400 hover:text-white transition-all cursor-pointer timeframe-btn">1M</button>
-                    </div>
-                </div>
-                <div class="flex gap-4 text-[10px] mono text-slate-500">
-                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-primary"></span> Messages</span>
-                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-accent"></span> AI Requests</span>
-                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span> Users</span>
-                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span> Admin Cmds</span>
-                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Auth Fails</span>
-                </div>
-            </div>
-            <div class="h-[250px] w-full">
-                <canvas id="activityChart"></canvas>
-            </div>
-        </div>
-
-        <!-- Bookmarks Section -->
-        <div id="bookmarks-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">Saved Bookmarks</h2>
-                <div class="flex flex-1 max-w-md w-full px-4">
-                    <div class="relative w-full">
-                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search by ID, nick or URL..." class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-1.5 text-xs mono focus:outline-none focus:border-accent/50 transition-all">
-                        <div class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                        </div>
-                    </div>
-                </div>
-                <div class="flex items-center gap-4">
-                    <span class="text-[10px] mono text-slate-500" id="bookmarks-count">0 items</span>
-                    <div class="flex gap-1">
-                        <button id="prev-page" onclick="changeBookmarkPage(-1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">PREV</button>
-                        <button id="next-page" onclick="changeBookmarkPage(1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">NEXT</button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs mono">
-                    <thead>
-                        <tr class="text-slate-500 border-b border-white/5">
-                            <th class="py-3 font-semibold">NICKNAME</th>
-                            <th class="py-3 font-semibold">HOSTNAME</th>
-                            <th class="py-3 font-semibold">URL</th>
-                            <th class="py-3 font-semibold text-right">SAVED AT</th>
-                        </tr>
-                    </thead>
-                    <tbody id="bookmarks-list">
-                        <!-- Bookmarks will be injected here -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Pastes Section -->
-        <div id="pastes-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">Shared Pastes</h2>
-                <div class="flex items-center gap-4">
-                    <span class="text-[10px] mono text-slate-500" id="pastes-count">0 items</span>
-                    <div class="flex gap-1">
-                        <button id="pastes-prev-page" onclick="changePastePage(-1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">PREV</button>
-                        <button id="pastes-next-page" onclick="changePastePage(1)" class="p-1 px-2 text-[10px] font-bold rounded bg-slate-800 border border-white/5 text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">NEXT</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Pending Approvals (Admin Only) -->
-            <div id="pending-pastes-section" class="hidden mb-10 pb-6 border-b border-white/5">
-                <div class="flex items-center gap-2 mb-4">
-                    <span class="flex h-2 w-2 rounded-full bg-yellow-500"></span>
-                    <h3 class="text-yellow-500 text-[10px] uppercase tracking-widest font-bold">Pending Approvals</h3>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs mono">
-                        <thead>
-                            <tr class="text-slate-500 border-b border-white/5">
-                                <th class="py-3 font-semibold">TICKET ID</th>
-                                <th class="py-3 font-semibold">TITLE</th>
-                                <th class="py-3 font-semibold">USER</th>
-                                <th class="py-3 font-semibold">CHANNEL</th>
-                                <th class="py-3 font-semibold">SUBMITTED AT</th>
-                                <th class="py-3 font-semibold text-right">DECISION</th>
-                            </tr>
-                        </thead>
-                        <tbody id="pending-pastes-list">
-                            <!-- Pending pastes will be injected here -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            
-            <div class="flex items-center gap-2 mb-4" id="approved-pastes-header">
-                <span class="flex h-2 w-2 rounded-full bg-primary"></span>
-                <h3 class="text-primary text-[10px] uppercase tracking-widest font-bold">Approved Pastes</h3>
-            </div>
-            
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs mono">
-                    <thead>
-                        <tr class="text-slate-500 border-b border-white/5">
-                            <th class="py-3 font-semibold">TICKET ID</th>
-                            <th class="py-3 font-semibold">TITLE</th>
-                            <th class="py-3 font-semibold">USER</th>
-                            <th class="py-3 font-semibold">CHANNEL</th>
-                            <th class="py-3 font-semibold">APPROVED AT</th>
-                            <th class="py-3 font-semibold text-right">ACTIONS</th>
-                        </tr>
-                    </thead>
-                    <tbody id="pastes-list">
-                        <!-- Pastes will be injected here -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- User Management Section -->
-        <div id="users-container" class="bg-card rounded-xl border border-white/5 shadow-lg p-6 mb-8 hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-slate-400 text-xs uppercase tracking-widest font-semibold">User Management</h2>
-                <button onclick="showAddUser()" class="px-3 py-1 text-[10px] font-bold rounded-md bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-all cursor-pointer">+ Add Admin</button>
-            </div>
-            
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs mono">
-                    <thead>
-                        <tr class="text-slate-500 border-b border-white/5">
-                            <th class="py-3 font-semibold">ID</th>
-                            <th class="py-3 font-semibold">USERNAME</th>
-                            <th class="py-3 font-semibold">ROLE</th>
-                            <th class="py-3 font-semibold">CREATED AT</th>
-                            <th class="py-3 font-semibold text-right">ACTIONS</th>
-                        </tr>
-                    </thead>
-                    <tbody id="users-list">
-                        <!-- Users will be injected here -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Log Viewer Context -->
-        <div id="log-container" class="hidden animate-in fade-in slide-in-from-top-4 duration-500">
-            <div class="bg-card rounded-xl border border-white/5 shadow-lg overflow-hidden flex flex-col h-[600px]">
-                <div class="bg-slate-800/50 px-4 py-2 border-b border-white/5 flex flex-col gap-2 transition-all">
-                    <div class="flex justify-between items-center">
-                        <div class="flex items-center gap-3">
-                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            <h3 id="current-channel-title" class="mono font-bold text-primary">Log Viewer</h3>
-                        </div>
-                        <button onclick="closeAllLogs()" class="text-slate-500 hover:text-white text-xs transition-colors cursor-pointer uppercase tracking-widest font-bold">Close All</button>
-                    </div>
-                    
-                    <!-- Tabs Bar -->
-                    <div id="log-tabs" class="flex flex-wrap gap-1 mt-1">
-                        <!-- Tabs will be injected here -->
-                    </div>
+                <div id="admin-badge" class="badge badge-admin hidden">
+                    <span class="dot"></span>
+                    Admin Session
                 </div>
                 
-                <!-- Wrapper for multiple log outputs -->
-                <div id="log-outputs-wrapper" class="flex-1 relative overflow-hidden bg-slate-950/30">
-                    <!-- Individual log output divs will be injected here -->
-                </div>
+                <button id="login-btn" onclick="showLogin()" class="btn btn-ghost w-full" style="margin-top: 1rem;">
+                    Sign In
+                </button>
+                <button id="logout-btn" onclick="logout()" class="btn btn-ghost w-full hidden" style="margin-top: 1rem; color: var(--error);">
+                    Logout
+                </button>
             </div>
-        </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            
+            <!-- Dashboard Panel -->
+            <section id="panel-dashboard" class="panel active">
+                <div class="section-header">
+                    <h1 class="section-title">Command Center</h1>
+                    <p class="section-subtitle">Real-time system performance and bot health metrics.</p>
+                </div>
+
+                <div class="grid grid-4">
+                    <div class="card">
+                        <h3 class="card-title">Uptime</h3>
+                        <div id="uptime" class="card-value mono">--</div>
+                    </div>
+                    <div class="card">
+                        <h3 class="card-title">IRC Server</h3>
+                        <div id="server" class="card-value mono" style="font-size: 1rem;">--</div>
+                    </div>
+                    <div class="card">
+                        <h3 class="card-title">AI Requests</h3>
+                        <div id="ai_requests" class="card-value mono">--</div>
+                    </div>
+                    <div class="card">
+                        <h3 class="card-title">Active Model</h3>
+                        <div id="ai_model" class="card-value mono" style="font-size: 1rem;">--</div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom: 2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0;">System Activity</h3>
+                        <div id="timeframe-selector" style="display: flex; gap: 0.5rem;">
+                            <button onclick="changeTimeframe('1h')" data-time="1h" class="btn btn-ghost active" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1H</button>
+                            <button onclick="changeTimeframe('1d')" data-time="1d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1D</button>
+                        </div>
+                    </div>
+                    <div style="height: 300px;">
+                        <canvas id="activityChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="grid grid-2">
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 class="card-title" style="margin: 0;">Feature Control</h3>
+                        </div>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                            <button id="news-toggle" onclick="toggleNews()" class="btn btn-ghost">
+                                <span class="dot" id="news-indicator"></span> News Fetcher
+                            </button>
+                            <button id="stats-toggle" onclick="toggleStats()" class="btn btn-ghost">
+                                <span class="dot" id="stats-indicator"></span> Statistics
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card">
+                         <h3 class="card-title">Active Administrators</h3>
+                         <div id="admins-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                             <!-- Admins injected here -->
+                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Finance Panel -->
+            <section id="panel-finance" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Financial Markets</h1>
+                    <p class="section-subtitle">Live tracking of top cryptocurrencies and global forex rates.</p>
+                </div>
+                <div class="grid grid-2">
+                    <div class="card">
+                        <h3 class="card-title">Top Cryptocurrencies</h3>
+                        <div id="crypto-prices"></div>
+                    </div>
+                    <div class="card">
+                        <h3 class="card-title">Exchange Rates</h3>
+                        <div id="forex-rates"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Logs Panel -->
+            <section id="panel-logs" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Network Streams</h1>
+                    <p class="section-subtitle">Real-time interaction logs across IRC channels.</p>
+                </div>
+                <div class="card" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title">Active Channels</h3>
+                    <div id="channels" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+                </div>
+                <div id="log-container" class="card hidden" style="padding: 0; overflow: hidden; height: 600px; display: flex; flex-direction: column;">
+                     <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
+                         <div id="current-channel-title" class="mono" style="font-weight: 700; color: var(--primary);">Channel Logs</div>
+                         <button onclick="closeAllLogs()" class="btn btn-ghost" style="padding: 0.25rem 0.5rem; font-size: 0.7rem;">Clear View</button>
+                     </div>
+                     <div id="log-tabs" style="display: flex; background: rgba(0,0,0,0.2); padding: 0.5rem 1rem; gap: 0.5rem; border-bottom: 1px solid var(--glass-border);"></div>
+                     <div id="log-outputs-wrapper" style="flex: 1; overflow-y: auto; padding: 1rem;" class="mono"></div>
+                </div>
+            </section>
+
+            <!-- Bookmarks Panel -->
+            <section id="panel-bookmarks" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Knowledge Base</h1>
+                    <p class="section-subtitle">Search and manage saved bookmarks from IRC communication.</p>
+                </div>
+                <div class="card">
+                    <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: center;">
+                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search bookmarks..." class="btn btn-ghost" style="flex: 1; text-align: left; cursor: text;">
+                        <div class="mono" id="bookmarks-count" style="font-size: 0.75rem; color: var(--text-muted);">0 items</div>
+                        <div style="display: flex; gap: 0.25rem;">
+                            <button id="prev-page" onclick="changeBookmarkPage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
+                            <button id="next-page" onclick="changeBookmarkPage(1)" class="btn btn-ghost" style="padding: 0.4rem;">&rarr;</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                <th style="text-align: left; padding: 1rem;">NICKNAME</th>
+                                <th style="text-align: left; padding: 1rem;">URL</th>
+                                <th style="text-align: right; padding: 1rem;">DATE</th>
+                            </tr>
+                            <tbody id="bookmarks-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Pastes Panel -->
+            <section id="panel-pastes" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Secure Pastes</h1>
+                    <p class="section-subtitle">Manage approved snippets and pending submissions.</p>
+                </div>
+                
+                <div id="pending-pastes-section" class="card hidden" style="margin-bottom: 2rem; border-color: var(--accent);">
+                    <h3 class="card-title" style="color: var(--accent);">Pending Approvals</h3>
+                    <div style="overflow-x: auto;">
+                         <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tbody id="pending-pastes-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0;">Approved Pastes</h3>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span class="mono" id="pastes-count" style="font-size: 0.75rem; color: var(--text-muted);">0 items</span>
+                            <button id="pastes-prev-page" onclick="changePastePage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
+                            <button id="pastes-next-page" onclick="changePastePage(1)" class="btn btn-ghost" style="padding: 0.4rem;">&rarr;</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x: auto;">
+                         <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tbody id="pastes-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Admin Panel -->
+            <section id="panel-admin" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Identity Management</h1>
+                    <p class="section-subtitle">Administrator access control and security configurations.</p>
+                </div>
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0;">Authorized Users</h3>
+                        <button onclick="showAddUser()" class="btn btn-primary" style="padding: 0.4rem 0.8rem;">+ New Admin</button>
+                    </div>
+                    <div style="overflow-x: auto;">
+                         <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono">
+                            <tbody id="users-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+        </main>
     </div>
 
-    <!-- Login Modal -->
-    <div id="login-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
-        <div class="bg-card border border-white/10 p-8 rounded-2xl w-full max-w-sm shadow-2xl scale-95 transition-transform duration-300" id="login-modal-content">
-            <h3 class="text-xl font-bold mb-6 text-center text-primary">Admin Access</h3>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">Username</label>
-                    <input type="text" id="login-username" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-primary/50 transition-all text-sm">
-                </div>
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">Password</label>
-                    <input type="password" id="login-password" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-primary/50 transition-all text-sm">
-                </div>
-                <div id="login-error" class="text-red-400 text-[10px] italic hidden"></div>
-                <button onclick="login()" class="w-full bg-primary hover:bg-primary/90 text-bg py-2.5 rounded-lg font-bold text-sm transition-all active:scale-95 cursor-pointer mt-4">
-                    Unlock Dashboard
-                </button>
-                <button onclick="hideLogin()" class="w-full text-slate-500 hover:text-white text-[10px] font-bold uppercase tracking-widest py-2 transition-colors cursor-pointer">
-                    Cancel
-                </button>
+    <!-- Modals -->
+    <div id="modal-overlay" class="hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 200; display: flex; align-items: center; justify-content: center;">
+        
+        <!-- Login Modal -->
+        <div id="login-modal" class="card hidden animate-fade" style="width: 100%; max-width: 400px; padding: 2.5rem;">
+            <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Security Portal</h2>
+            <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem;">Please authenticate to access admin features.</p>
+            
+            <div style="margin-bottom: 1rem;">
+                <label class="card-title">Username</label>
+                <input type="text" id="login-username" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.5rem;">
             </div>
+            <div style="margin-bottom: 1.5rem;">
+                <label class="card-title">Password</label>
+                <input type="password" id="login-password" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.5rem;">
+            </div>
+            <div id="login-error" style="color: var(--error); font-size: 0.75rem; margin-bottom: 1rem;" class="hidden"></div>
+            
+            <button onclick="login()" class="btn btn-primary w-full" style="justify-content: center; margin-bottom: 0.5rem;">Authorize</button>
+            <button onclick="hideLogin()" class="btn btn-ghost w-full" style="justify-content: center;">Cancel</button>
         </div>
-    </div>
 
-    <!-- Add User Modal -->
-    <div id="adduser-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
-        <div class="bg-card border border-white/10 p-8 rounded-2xl w-full max-w-sm shadow-2xl scale-95 transition-transform duration-300" id="adduser-modal-content">
-            <h3 class="text-xl font-bold mb-6 text-center text-accent">Add New Admin</h3>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">New Username</label>
-                    <input type="text" id="add-username" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-accent/50 transition-all text-sm">
-                </div>
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">New Password</label>
-                    <input type="password" id="add-password" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-accent/50 transition-all text-sm">
-                </div>
-                <div id="add-error" class="text-red-400 text-[10px] italic hidden"></div>
-                <button onclick="addUser()" class="w-full bg-accent hover:bg-accent/90 text-white py-2.5 rounded-lg font-bold text-sm transition-all active:scale-95 cursor-pointer mt-4">
-                    Create Admin
-                </button>
-                <button onclick="hideAddUser()" class="w-full text-slate-500 hover:text-white text-[10px] font-bold uppercase tracking-widest py-2 transition-colors cursor-pointer">
-                    Cancel
-                </button>
+        <!-- Add User Modal -->
+        <div id="adduser-modal" class="card hidden animate-fade" style="width: 100%; max-width: 400px; padding: 2.5rem;">
+            <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--accent);">New Administrator</h2>
+            <div style="margin-bottom: 1rem;">
+                <label class="card-title">Username</label>
+                <input type="text" id="add-username" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.5rem;">
             </div>
+            <div style="margin-bottom: 1.5rem;">
+                <label class="card-title">Initial Password</label>
+                <input type="password" id="add-password" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.5rem;">
+            </div>
+            <div id="add-error" style="color: var(--error); font-size: 0.75rem; margin-bottom: 1rem;" class="hidden"></div>
+            <button onclick="addUser()" class="btn btn-primary w-full" style="justify-content: center; margin-bottom: 0.5rem;">Create User</button>
+            <button onclick="hideAddUser()" class="btn btn-ghost w-full" style="justify-content: center;">Cancel</button>
         </div>
-    </div>
 
-    <!-- Force Password Change Modal -->
-    <div id="force-password-modal" class="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
-        <div class="bg-card border border-primary/30 p-8 rounded-2xl w-full max-w-sm shadow-2xl scale-95 transition-transform duration-300" id="force-password-modal-content">
-            <h3 class="text-xl font-bold mb-2 text-center text-primary">Security Required</h3>
-            <p class="text-slate-400 text-center text-[10px] uppercase tracking-widest mb-6 font-semibold">You must change the default password</p>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">New Secure Password</label>
-                    <input type="password" id="new-password-input" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-primary/50 transition-all text-sm">
-                </div>
-                <div id="force-password-error" class="text-red-400 text-[10px] italic hidden"></div>
-                <button onclick="updatePassword()" class="w-full bg-primary hover:bg-primary/90 text-bg py-2.5 rounded-lg font-bold text-sm transition-all active:scale-95 cursor-pointer mt-4">
-                    Update Password
-                </button>
+        <!-- Force Password Change Modal -->
+        <div id="force-password-modal" class="card hidden animate-fade" style="width: 100%; max-width: 400px; padding: 2.5rem; border-color: var(--primary);">
+            <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Security Update</h2>
+            <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem;">Please update your default password to continue.</p>
+            <div style="margin-bottom: 1.5rem;">
+                <label class="card-title">New Password</label>
+                <input type="password" id="new-password-input" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.5rem;">
             </div>
-        </div>
-    </div>
-
-    <!-- Admin Reset Password Modal -->
-    <div id="reset-password-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
-        <div class="bg-card border border-white/10 p-8 rounded-2xl w-full max-w-sm shadow-2xl scale-95 transition-transform duration-300" id="reset-password-modal-content">
-            <h3 class="text-xl font-bold mb-6 text-center text-accent">Reset Password</h3>
-            <input type="hidden" id="reset-user-id">
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">New Password for <span id="reset-username-display" class="text-accent underline font-mono italic"></span></label>
-                    <input type="password" id="reset-password-input" class="w-full bg-slate-800/50 border border-white/5 rounded-lg px-4 py-2 focus:outline-none focus:border-accent/50 transition-all text-sm">
-                </div>
-                <div id="reset-password-error" class="text-red-400 text-[10px] italic hidden"></div>
-                <button onclick="adminResetPassword()" class="w-full bg-accent hover:bg-accent/90 text-white py-2.5 rounded-lg font-bold text-sm transition-all active:scale-95 cursor-pointer mt-4">
-                    Set New Password
-                </button>
-                <button onclick="hideResetPassword()" class="w-full text-slate-500 hover:text-white text-[10px] font-bold uppercase tracking-widest py-2 transition-colors cursor-pointer">
-                    Cancel
-                </button>
-            </div>
+            <div id="force-password-error" style="color: var(--error); font-size: 0.75rem; margin-bottom: 1rem;" class="hidden"></div>
+            <button onclick="updatePassword()" class="btn btn-primary w-full" style="justify-content: center;">Update Security</button>
         </div>
     </div>
 

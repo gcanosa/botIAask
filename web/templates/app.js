@@ -2,6 +2,56 @@ let logSources = {};
 let activeLogChannel = null;
 let currentStatsSource = null;
 let activityChart = null;
+let lastIsAdmin = false;
+
+// Routing logic
+function showPanel(panelId) {
+    // Update links
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === `#${panelId}`);
+    });
+
+    // Update panels
+    document.querySelectorAll('.panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `panel-${panelId}`);
+    });
+
+    // Specific panel initializers
+    if (panelId === 'bookmarks') fetchBookmarks(1);
+    if (panelId === 'pastes') fetchApprovedPastes(1);
+    if (panelId === 'admin') fetchUsers();
+    if (panelId === 'dashboard') {
+         if (!activityChart) initChart();
+         fetchHistory(currentTimeframe);
+    }
+}
+
+// Handle browser navigation
+window.addEventListener('hashchange', () => {
+    const hash = window.location.hash.substring(1) || 'dashboard';
+    showPanel(hash);
+});
+
+// Initialization
+document.addEventListener('DOMContentLoaded', () => {
+    const initialHash = window.location.hash.substring(1) || 'dashboard';
+    showPanel(initialHash);
+    
+    fetchStatus();
+    setInterval(fetchStatus, 30000); // 30s status refresh
+    
+    // Start background tasks
+    fetchFinance();
+    setInterval(fetchFinance, 60000); // 1m finance refresh
+    
+    // Poll for pending/approved pastes every 5s if admin and on pastes panel
+    setInterval(() => {
+        if (lastIsAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
+            fetchPendingPastes();
+            fetchApprovedPastes(pastePage);
+        }
+    }, 5000);
+});
 
 async function fetchStatus() {
     try {
@@ -14,16 +64,19 @@ async function fetchStatus() {
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
         document.getElementById('ai_model').textContent = data.ai_model || 'Unknown';
         
+        // Features
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
-        updateAdminControls(data.is_admin);
+        
+        // State updates
+        updateAdminView(data.is_admin);
         updateIRCAuthStatus(data.irc_authenticated);
         lastIsAdmin = data.is_admin;
         
-        const badge = document.getElementById('status-badge');
-        badge.textContent = 'Online';
-        badge.classList.remove('bg-primary/10', 'text-primary');
-        badge.classList.add('bg-green-500/10', 'text-green-500');
+        const statusText = document.getElementById('status-text');
+        const statusBadge = document.getElementById('status-badge');
+        statusText.textContent = 'Operational';
+        statusBadge.classList.add('badge-online');
 
         if (data.needs_password_change && data.is_admin) {
             showForcePassword();
@@ -34,7 +87,7 @@ async function fetchStatus() {
         if (data.channels) {
             data.channels.forEach(ch => {
                 const btn = document.createElement('button');
-                btn.className = 'px-4 py-2 bg-slate-800 hover:bg-slate-700 text-primary border border-white/5 rounded-lg mono text-sm transition-all hover:scale-105 active:scale-95 cursor-pointer';
+                btn.className = 'btn btn-ghost mono';
                 btn.textContent = ch;
                 btn.onclick = () => openLogs(ch);
                 channelsContainer.appendChild(btn);
@@ -45,179 +98,138 @@ async function fetchStatus() {
             updateAdminsUI(data.admin_nicknames, data.channel_admins);
         }
     } catch (e) {
-        console.error("Failed to load status", e);
-        const badge = document.getElementById('status-badge');
-        badge.textContent = 'Offline';
-        badge.classList.add('bg-red-500/10', 'text-red-500');
+        console.error("Status check failed", e);
+        document.getElementById('status-text').textContent = 'Disconnected';
+        document.getElementById('status-badge').classList.remove('badge-online');
     }
 }
 
+function updateAdminView(isAdmin) {
+    const adminNav = document.getElementById('admin-nav');
+    const adminBadge = document.getElementById('admin-badge');
+    const loginBtn = document.getElementById('login-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const pendingSec = document.getElementById('pending-pastes-section');
+
+    if (isAdmin) {
+        adminNav.classList.remove('hidden');
+        adminBadge.classList.remove('hidden');
+        loginBtn.classList.add('hidden');
+        logoutBtn.classList.remove('hidden');
+        if (pendingSec) {
+            pendingSec.classList.remove('hidden');
+            fetchPendingPastes();
+        }
+    } else {
+        adminNav.classList.add('hidden');
+        adminBadge.classList.add('hidden');
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+        if (pendingSec) pendingSec.classList.add('hidden');
+    }
+}
+
+function updateIRCAuthStatus(authenticated) {
+    const badge = document.getElementById('irc-auth-badge');
+    const text = document.getElementById('irc-auth-text');
+    if (authenticated) {
+        badge.classList.remove('hidden');
+        text.textContent = 'Identified';
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
+// LOGS SYSTEM
 function openLogs(channel) {
     const container = document.getElementById('log-container');
     container.classList.remove('hidden');
 
-    // If already open, just switch
     if (logSources[channel]) {
-        switchTab(channel);
+        switchLogTab(channel);
         return;
     }
 
     // Create Tab
     const tabsContainer = document.getElementById('log-tabs');
-    const tab = document.createElement('div');
-    tab.id = `tab-${channel.replace('#', '')}`;
-    tab.className = 'flex items-center gap-2 px-3 py-1.5 rounded-t-lg bg-slate-900 border border-b-0 border-white/5 cursor-pointer transition-all hover:bg-slate-800';
-    tab.innerHTML = `
-        <span class="mono text-xs font-bold text-slate-400">${channel}</span>
-        <button onclick="event.stopPropagation(); closeTab('${channel}')" class="text-slate-600 hover:text-red-400 transition-colors">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-        </button>
-    `;
-    tab.onclick = () => switchTab(channel);
+    const tab = document.createElement('button');
+    tab.id = `tab-${channel.replace(/#/g, '')}`;
+    tab.className = 'btn btn-ghost active mono';
+    tab.style.padding = '0.25rem 0.75rem';
+    tab.innerHTML = `<span>${channel}</span> <small onclick="event.stopPropagation(); closeLogTab('${channel}')" style="margin-left: 0.5rem; color: var(--error);">×</small>`;
+    tab.onclick = () => switchLogTab(channel);
     tabsContainer.appendChild(tab);
 
-    // Create Output Div
+    // Create Output
     const wrapper = document.getElementById('log-outputs-wrapper');
     const output = document.createElement('div');
-    output.id = `output-${channel.replace('#', '')}`;
-    output.className = 'absolute inset-0 p-6 overflow-y-auto mono text-sm space-y-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent hidden';
-    output.innerHTML = '<div class="text-slate-500 italic">Initializing stream...</div>';
+    output.id = `output-${channel.replace(/#/g, '')}`;
+    output.className = 'log-view-pane hidden';
+    output.innerHTML = '<div class="text-slate-500 italic">Connecting to stream...</div>';
     wrapper.appendChild(output);
 
     // Start Stream
     const source = new EventSource(`/api/logs/stream?channel=${encodeURIComponent(channel)}`);
     logSources[channel] = source;
 
-    source.onmessage = (event) => {
+    source.onmessage = (e) => {
         const line = document.createElement('div');
-        line.className = 'hover:bg-white/5 px-2 py-0.5 rounded transition-colors';
+        line.className = 'log-entry';
         
-        let text = event.data;
-        if (text.includes('[MESSAGE]')) line.classList.add('text-slate-200');
-        else if (text.includes('[JOIN]')) line.classList.add('text-green-400/80');
-        else if (text.includes('[PART]')) line.classList.add('text-red-400/80');
-        else if (text.includes('[ACTION]')) line.classList.add('text-accent');
+        let text = e.data;
+        if (text.includes('[MESSAGE]')) line.style.color = 'var(--text-main)';
+        else if (text.includes('[JOIN]')) line.style.color = 'var(--success)';
+        else if (text.includes('[PART]')) line.style.color = 'var(--error)';
+        else if (text.includes('[ACTION]')) line.style.color = 'var(--accent)';
         
         line.textContent = text;
         output.appendChild(line);
         output.scrollTop = output.scrollHeight;
     };
 
-    source.onerror = (err) => {
-        console.error(`SSE error for ${channel}`, err);
-        const errDiv = document.createElement('div');
-        errDiv.className = 'text-red-400 text-xs italic bg-red-400/5 p-2 rounded mt-2';
-        errDiv.textContent = "Connection lost. Retrying...";
-        output.appendChild(errDiv);
-    };
-
-    switchTab(channel);
+    switchLogTab(channel);
 }
 
-function switchTab(channel) {
+function switchLogTab(channel) {
     activeLogChannel = channel;
-    
-    // Update Tab Styles
-    document.querySelectorAll('#log-tabs > div').forEach(tab => {
-        const isSelected = tab.id === `tab-${channel.replace('#', '')}`;
-        if (isSelected) {
-            tab.classList.remove('bg-slate-900', 'border-white/5');
-            tab.classList.add('bg-card', 'border-primary/20', 'z-10');
-            tab.querySelector('span').classList.remove('text-slate-400');
-            tab.querySelector('span').classList.add('text-primary');
-        } else {
-            tab.classList.remove('bg-card', 'border-primary/20', 'z-10');
-            tab.classList.add('bg-slate-900', 'border-white/5');
-            tab.querySelector('span').classList.remove('text-primary');
-            tab.querySelector('span').classList.add('text-slate-400');
-        }
+    document.querySelectorAll('#log-tabs button').forEach(b => {
+        b.classList.toggle('active', b.id === `tab-${channel.replace(/#/g, '')}`);
     });
-
-    // Update Output Visibility
-    document.querySelectorAll('#log-outputs-wrapper > div').forEach(div => {
-        const isSelected = div.id === `output-${channel.replace('#', '')}`;
-        div.classList.toggle('hidden', !isSelected);
+    document.querySelectorAll('#log-outputs-wrapper > div').forEach(d => {
+        d.classList.toggle('hidden', d.id !== `output-${channel.replace(/#/g, '')}`);
     });
-
     document.getElementById('current-channel-title').textContent = `Logs: ${channel}`;
 }
 
-function closeTab(channel) {
-    if (logSources[channel]) {
-        logSources[channel].close();
-        delete logSources[channel];
-    }
-
-    const tab = document.getElementById(`tab-${channel.replace('#', '')}`);
-    const output = document.getElementById(`output-${channel.replace('#', '')}`);
+function closeLogTab(channel) {
+    if (logSources[channel]) { logSources[channel].close(); delete logSources[channel]; }
+    document.getElementById(`tab-${channel.replace(/#/g, '')}`)?.remove();
+    document.getElementById(`output-${channel.replace(/#/g, '')}`)?.remove();
     
-    if (tab) tab.remove();
-    if (output) output.remove();
-
-    if (activeLogChannel === channel) {
-        const remainingChannels = Object.keys(logSources);
-        if (remainingChannels.length > 0) {
-            switchTab(remainingChannels[remainingChannels.length - 1]);
-        } else {
-            closeAllLogs();
-        }
-    }
+    const remaining = Object.keys(logSources);
+    if (remaining.length > 0) switchLogTab(remaining[0]);
+    else closeAllLogs();
 }
 
 function closeAllLogs() {
-    Object.keys(logSources).forEach(closeTab);
+    Object.keys(logSources).forEach(closeLogTab);
     document.getElementById('log-container').classList.add('hidden');
 }
 
 function updateNewsStatus(enabled, isAdmin) {
-    const btn = document.getElementById('news-toggle');
     const indicator = document.getElementById('news-indicator');
-    const text = document.getElementById('news-status-text');
-
-    if (isAdmin !== undefined) {
-        btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
-        btn.style.opacity = isAdmin ? '1' : '0.7';
-    }
-
     if (enabled) {
-        btn.classList.remove('border-white/20', 'text-slate-400');
-        btn.classList.add('border-primary/50', 'text-primary', 'bg-primary/5');
-        indicator.classList.remove('bg-slate-600');
-        indicator.classList.add('bg-primary', 'animate-pulse');
-        text.textContent = 'ON';
+        indicator.classList.add('pulse');
+        indicator.style.background = 'var(--primary)';
     } else {
-        btn.classList.remove('border-primary/50', 'text-primary', 'bg-primary/5');
-        btn.classList.add('border-white/20', 'text-slate-400');
-        indicator.classList.remove('bg-primary', 'animate-pulse');
-        indicator.classList.add('bg-slate-600');
-        text.textContent = 'OFF';
-    }
-}
-
-function updateIRCAuthStatus(authenticated) {
-    const badge = document.getElementById('irc-auth-badge');
-    const indicator = document.getElementById('irc-auth-indicator');
-    const text = document.getElementById('irc-auth-text');
-
-    if (authenticated) {
-        badge.classList.remove('bg-slate-800', 'text-slate-500', 'border-white/10');
-        badge.classList.add('bg-green-500/10', 'text-green-500', 'border-green-500/20');
-        indicator.classList.remove('bg-slate-600');
-        indicator.classList.add('bg-green-500', 'animate-pulse');
-        text.textContent = 'Identified';
-    } else {
-        badge.classList.add('bg-slate-800', 'text-slate-500', 'border-white/10');
-        badge.classList.remove('bg-green-500/10', 'text-green-500', 'border-green-500/20');
-        indicator.classList.add('bg-slate-600');
-        indicator.classList.remove('bg-green-500', 'animate-pulse');
-        text.textContent = 'Guest';
+        indicator.classList.remove('pulse');
+        indicator.style.background = 'var(--text-muted)';
     }
 }
 
 async function toggleNews() {
     try {
         const res = await fetch('/api/rss/toggle', { method: 'POST' });
-        if (!res.ok) throw new Error('Toggle failed');
         const data = await res.json();
         updateNewsStatus(data.rss_enabled);
     } catch (e) {
@@ -225,894 +237,366 @@ async function toggleNews() {
     }
 }
 
-// Statistics Logic
+// FINANCE
+async function fetchFinance() {
+    try {
+        const res = await fetch('/api/finance');
+        const data = await res.json();
+        
+        const cryptoDiv = document.getElementById('crypto-prices');
+        cryptoDiv.innerHTML = '';
+        data.crypto.forEach(c => {
+            const up = c.change_24h >= 0;
+            cryptoDiv.innerHTML += `
+                <div class="price-tag">
+                    <span class="mono font-bold">${c.symbol.toUpperCase()}</span>
+                    <div>
+                        <span class="mono">$${c.price.toLocaleString()}</span>
+                        <span class="mono ${up ? 'price-up' : 'price-down'}" style="font-size: 0.7rem; margin-left: 0.5rem;">${up ? '▲' : '▼'} ${Math.abs(c.change_24h).toFixed(1)}%</span>
+                    </div>
+                </div>
+            `;
+        });
+
+        const forexDiv = document.getElementById('forex-rates');
+        forexDiv.innerHTML = '';
+        Object.entries(data.forex).forEach(([k, v]) => {
+            forexDiv.innerHTML += `
+                <div class="price-tag">
+                    <span class="mono font-bold">${k}</span>
+                    <span class="mono">$${v.toFixed(2)}</span>
+                </div>
+            `;
+        });
+    } catch (e) { console.error("Finance fetch error", e); }
+}
+
+let currentTimeframe = '1h';
 function updateStatsStatus(enabled, isAdmin) {
     const btn = document.getElementById('stats-toggle');
     const indicator = document.getElementById('stats-indicator');
-    const text = document.getElementById('stats-status-text');
-    const container = document.getElementById('stats-container');
-
-    if (isAdmin !== undefined) {
-        btn.style.pointerEvents = isAdmin ? 'auto' : 'none';
-        btn.style.opacity = isAdmin ? '1' : '0.7';
-    }
-
     if (enabled) {
-        btn.classList.remove('border-white/20', 'text-slate-400');
-        btn.classList.add('border-primary/50', 'text-primary', 'bg-primary/5');
-        indicator.classList.remove('bg-slate-600');
-        indicator.classList.add('bg-primary', 'animate-pulse');
-        text.textContent = 'ON';
-        container.classList.remove('hidden');
-        startStatsStream();
+        indicator.classList.add('pulse');
+        indicator.style.background = 'var(--primary)';
+        if (isAdmin) startStatsStream();
     } else {
-        btn.classList.remove('border-primary/50', 'text-primary', 'bg-primary/5');
-        btn.classList.add('border-white/20', 'text-slate-400');
-        indicator.classList.remove('bg-primary', 'animate-pulse');
-        indicator.classList.add('bg-slate-600');
-        text.textContent = 'OFF';
-        container.classList.add('hidden');
+        indicator.classList.remove('pulse');
+        indicator.style.background = 'var(--text-muted)';
         stopStatsStream();
     }
 }
 
 async function toggleStats() {
-    try {
-        const res = await fetch('/api/stats/toggle', { method: 'POST' });
-        if (!res.ok) throw new Error('Toggle failed');
-        const data = await res.json();
-        updateStatsStatus(data.stats_enabled);
-    } catch (e) {
-        console.error("Failed to toggle stats", e);
-    }
+    const res = await fetch('/api/stats/toggle', { method: 'POST' });
+    const data = await res.json();
+    updateStatsStatus(data.stats_enabled, true);
 }
 
 function initChart() {
-    if (activityChart) return;
-    
     const ctx = document.getElementById('activityChart').getContext('2d');
     activityChart = new Chart(ctx, {
         type: 'line',
         data: {
             labels: [],
             datasets: [
-                {
-                    label: 'Messages',
-                    data: [],
-                    borderColor: '#38bdf8',
-                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true,
-                    pointRadius: 2
-                },
-                {
-                    label: 'AI Requests',
-                    data: [],
-                    borderColor: '#c084fc',
-                    backgroundColor: 'rgba(192, 132, 252, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true,
-                    pointRadius: 2
-                },
-                {
-                    label: 'Users',
-                    data: [],
-                    borderColor: '#22c55e',
-                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true,
-                    pointRadius: 2
-                },
-                {
-                    label: 'Admin Cmds',
-                    data: [],
-                    borderColor: '#ef4444',
-                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true,
-                    pointRadius: 2
-                },
-                {
-                    label: 'Auth Fails',
-                    data: [],
-                    borderColor: '#f59e0b',
-                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true,
-                    pointRadius: 2
-                }
+                { label: 'Msgs', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.4 },
+                { label: 'AI', data: [], borderColor: '#c084fc', backgroundColor: 'rgba(192, 132, 252, 0.1)', fill: true, tension: 0.4 }
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             scales: {
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                    ticks: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 10 } }
-                },
-                x: {
-                    grid: { display: false },
-                    ticks: { 
-                        color: '#94a3b8', 
-                        font: { family: 'JetBrains Mono', size: 10 },
-                        autoSkip: true,
-                        maxTicksLimit: 10
-                    }
-                }
+                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
             },
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: '#1e293b',
-                    titleFont: { family: 'Inter' },
-                    bodyFont: { family: 'JetBrains Mono' },
-                    borderColor: 'rgba(255,255,255,0.1)',
-                    borderWidth: 1
-                }
-            },
-            interaction: {
-                intersect: false,
-                mode: 'index'
-            }
+            plugins: { legend: { display: false } }
         }
     });
 }
 
-let currentTimeframe = '1h';
-
-async function fetchHistory(timeframe = '1h') {
-    initChart();
-    try {
-        const res = await fetch(`/api/stats/history?timeframe=${timeframe}`);
-        if (!res.ok) throw new Error('History fetch failed');
-        const data = await res.json();
-        
-        activityChart.data.labels = [];
-        activityChart.data.datasets.forEach(ds => ds.data = []);
-        
-        data.forEach(entry => {
-            const time = formatTimestamp(entry.timestamp, timeframe);
-            activityChart.data.labels.push(time);
-            activityChart.data.datasets[0].data.push(entry.messages);
-            activityChart.data.datasets[1].data.push(entry.ai_requests);
-            activityChart.data.datasets[2].data.push(entry.user_count);
-            activityChart.data.datasets[3].data.push(entry.admin_commands || 0);
-            activityChart.data.datasets[4].data.push(entry.failed_auths || 0);
-        });
-        
-        activityChart.update();
-    } catch (e) {
-        console.error("Failed to load history", e);
-    }
-}
-
-function formatTimestamp(ts, timeframe) {
-    const date = new Date(ts);
-    if (timeframe === '1h' || timeframe === '6h') {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' });
-}
-
-async function changeTimeframe(tf) {
+async function fetchHistory(tf) {
     currentTimeframe = tf;
-    
-    // Update UI
-    document.querySelectorAll('.timeframe-btn').forEach(btn => {
-        if (btn.dataset.time === tf) {
-            btn.classList.add('active', 'border-primary/50', 'text-primary', 'bg-primary/5');
-            btn.classList.remove('border-white/5', 'bg-slate-800', 'text-slate-400');
-        } else {
-            btn.classList.remove('active', 'border-primary/50', 'text-primary', 'bg-primary/5');
-            btn.classList.add('border-white/5', 'bg-slate-800', 'text-slate-400');
-        }
-    });
-    
-    await fetchHistory(tf);
-    
-    // Reset stream if viewing last hour, else maybe stop it to avoid confusion?
-    // Actually, keep it running but only add to chart if it's the current timeframe
+    const res = await fetch(`/api/stats/history?timeframe=${tf}`);
+    const data = await res.json();
+    activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit'}));
+    activityChart.data.datasets[0].data = data.map(e => e.messages);
+    activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
+    activityChart.update();
 }
 
 function startStatsStream() {
     if (currentStatsSource) return;
-    
-    fetchHistory(currentTimeframe);
-    
     currentStatsSource = new EventSource('/api/stats/stream');
-    currentStatsSource.onmessage = (event) => {
-        const entry = JSON.parse(event.data);
-        
-        // Only append to chart if we are in "recent" view (1h)
-        // Otherwise, it might look weird to add a single point to a 30-day chart
-        if (currentTimeframe !== '1h') return;
-
-        const time = formatTimestamp(entry.timestamp, currentTimeframe);
-        
-        // Match keeping logic (e.g. last 60 points for 1h if interval is 1m)
-        if (activityChart.data.labels.length > 60) {
-            activityChart.data.labels.shift();
-            activityChart.data.datasets.forEach(ds => ds.data.shift());
+    currentStatsSource.onmessage = (e) => {
+        const entry = JSON.parse(e.data);
+        if (currentTimeframe === '1h') {
+            activityChart.data.labels.push(new Date(entry.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}));
+            activityChart.data.datasets[0].data.push(entry.messages);
+            activityChart.data.datasets[1].data.push(entry.ai_requests);
+            if (activityChart.data.labels.length > 30) {
+                 activityChart.data.labels.shift();
+                 activityChart.data.datasets.forEach(d => d.data.shift());
+            }
+            activityChart.update('none');
         }
-        
-        activityChart.data.labels.push(time);
-        activityChart.data.datasets[0].data.push(entry.messages);
-        activityChart.data.datasets[1].data.push(entry.ai_requests);
-        activityChart.data.datasets[2].data.push(entry.user_count);
-        activityChart.data.datasets[3].data.push(entry.admin_commands || 0);
-        activityChart.data.datasets[4].data.push(entry.failed_auths || 0);
-
-        if (entry.admin_nicknames) {
-            updateAdminsUI(entry.admin_nicknames, entry.channel_admins);
-        }
-        
-        activityChart.update('none'); // Update without animation for smooth streaming
     };
 }
 
-function stopStatsStream() {
-    if (currentStatsSource) {
-        currentStatsSource.close();
-        currentStatsSource = null;
-    }
-}
+function stopStatsStream() { if (currentStatsSource) { currentStatsSource.close(); currentStatsSource = null; } }
 
-// Bookmarks Logic
+// BOOKMARKS
 let bookmarkPage = 1;
-let totalBookmarkPages = 1;
-
-function updateBookmarksUI(show) {
-    const btn = document.getElementById('bookmarks-toggle');
-    const indicator = document.getElementById('bookmarks-indicator');
-    const container = document.getElementById('bookmarks-container');
-
-    if (show) {
-        btn.classList.add('border-accent/50', 'text-white', 'bg-accent/5');
-        btn.classList.remove('border-white/10', 'text-slate-400');
-        indicator.classList.add('bg-accent', 'animate-pulse');
-        indicator.classList.remove('bg-slate-500');
-        container.classList.remove('hidden');
-        fetchBookmarks(1);
-    } else {
-        btn.classList.remove('border-accent/50', 'text-white', 'bg-accent/5');
-        btn.classList.add('border-white/10', 'text-slate-400');
-        indicator.classList.remove('bg-accent', 'animate-pulse');
-        indicator.classList.add('bg-slate-500');
-        container.classList.add('hidden');
-    }
-}
-
-function toggleBookmarks() {
-    const container = document.getElementById('bookmarks-container');
-    const isHidden = container.classList.contains('hidden');
-    updateBookmarksUI(isHidden);
-}
-
 async function fetchBookmarks(page) {
     bookmarkPage = page;
-    const query = document.getElementById('bookmark-search')?.value || '';
-    try {
-        const res = await fetch(`/api/bookmarks?page=${page}&q=${encodeURIComponent(query)}`);
-        if (!res.ok) throw new Error('Bookmarks fetch failed');
-        const data = await res.json();
-        
-        totalBookmarkPages = data.total_pages;
-        document.getElementById('bookmarks-count').textContent = `${data.total_count} items`;
-        
-        const list = document.getElementById('bookmarks-list');
-        list.innerHTML = '';
-        
-        if (data.bookmarks && data.bookmarks.length > 0) {
-            data.bookmarks.forEach(b => {
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors group';
-                
-                const date = new Date(b.timestamp).toLocaleString([], { 
-                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-                });
-
-                // Shorten URL for display if too long
-                let displayUrl = b.url;
-                if (displayUrl.length > 50) {
-                    displayUrl = displayUrl.substring(0, 47) + '...';
-                }
-
-                tr.innerHTML = `
-                    <td class="py-4 text-slate-300 font-bold">${b.nickname}</td>
-                    <td class="py-4 text-slate-500 text-[10px]">${b.hostname}</td>
-                    <td class="py-4">
-                        <a href="${b.url}" target="_blank" class="text-primary hover:text-accent transition-colors flex items-center gap-2">
-                            ${displayUrl}
-                            <svg class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                        </a>
-                    </td>
-                    <td class="py-4 text-right text-slate-500 text-[10px]">${date}</td>
-                `;
-                list.appendChild(tr);
-            });
-        } else {
-            list.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-slate-500 italic">No bookmarks found yet. Use !bookmark &lt;URL&gt; in IRC!</td></tr>';
-        }
-        
-        // Update pagination buttons
-        document.getElementById('prev-page').disabled = bookmarkPage <= 1;
-        document.getElementById('next-page').disabled = bookmarkPage >= totalBookmarkPages;
-        
-    } catch (e) {
-        console.error("Failed to load bookmarks", e);
-    }
+    const q = document.getElementById('bookmark-search').value;
+    const res = await fetch(`/api/bookmarks?page=${page}&q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    document.getElementById('bookmarks-count').textContent = `${data.total_count} items`;
+    const list = document.getElementById('bookmarks-list');
+    list.innerHTML = data.bookmarks.map(b => `
+        <tr style="border-bottom: 1px solid var(--glass-border);">
+            <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${b.nickname}</td>
+            <td style="padding: 1rem;"><a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none;">${b.url.substring(0,40)}...</a></td>
+            <td style="padding: 1rem; text-align: right; color: var(--text-muted);">${new Date(b.timestamp).toLocaleDateString()}</td>
+        </tr>
+    `).join('');
 }
 
-function changeBookmarkPage(delta) {
-    const newPage = bookmarkPage + delta;
-    if (newPage >= 1 && newPage <= totalBookmarkPages) {
-        fetchBookmarks(newPage);
-    }
-}
+function debounceSearch() { clearTimeout(this.timeout); this.timeout = setTimeout(() => fetchBookmarks(1), 300); }
+function changeBookmarkPage(d) { fetchBookmarks(bookmarkPage + d); }
 
-let searchTimeout = null;
-function debounceSearch() {
-    if (searchTimeout) clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-        fetchBookmarks(1);
-    }, 300);
-}
-
-// Administrators UI Update
-function updateAdminsUI(nicks, chans) {
-    const container = document.getElementById('admins-container');
-    const globalList = document.getElementById('admins-list');
-    const presenceList = document.getElementById('admins-by-channel');
-
-    if (!nicks || nicks.length === 0) {
-        container.classList.add('hidden');
-        return;
-    }
-
-    container.classList.remove('hidden');
-    globalList.innerHTML = '';
-    nicks.forEach(nick => {
-        const span = document.createElement('span');
-        span.className = 'px-3 py-1 bg-accent/20 text-accent border border-accent/30 rounded-md mono text-[10px] font-bold';
-        span.textContent = nick;
-        globalList.appendChild(span);
-    });
-
-    presenceList.innerHTML = '';
-    if (chans) {
-        Object.entries(chans).forEach(([channel, admins]) => {
-            const card = document.createElement('div');
-            card.className = 'bg-slate-900/50 border border-white/5 rounded-lg p-3';
-            card.innerHTML = `
-                <div class="mono text-xs font-bold text-primary mb-2">${channel}</div>
-                <div class="flex flex-wrap gap-1">
-                    ${admins.map(a => `<span class="text-[9px] px-1.5 py-0.5 bg-slate-800 rounded text-slate-300 border border-white/5">${a}</span>`).join('')}
-                </div>
-            `;
-            presenceList.appendChild(card);
-        });
-    }
-}
-
-function showForcePassword() {
-    const modal = document.getElementById('force-password-modal');
-    modal.classList.remove('hidden');
-    setTimeout(() => {
-        modal.classList.remove('opacity-0');
-        document.getElementById('force-password-modal-content').classList.remove('scale-95');
-    }, 10);
-}
-
-async function updatePassword() {
-    const password = document.getElementById('new-password-input').value;
-    const errorDiv = document.getElementById('force-password-error');
-    if (!password) { errorDiv.textContent = "Password cannot be empty"; errorDiv.classList.remove('hidden'); return; }
-
-    try {
-        const res = await fetch('/api/users/password', {
-            method: 'POST',
-            body: JSON.stringify({ password }),
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (res.ok) {
-            const modal = document.getElementById('force-password-modal');
-            modal.classList.add('opacity-0');
-            setTimeout(() => modal.classList.add('hidden'), 300);
-            fetchStatus();
-        } else {
-            errorDiv.textContent = "Failed to update password";
-            errorDiv.classList.remove('hidden');
-        }
-    } catch (e) {
-        errorDiv.textContent = "Server error";
-        errorDiv.classList.remove('hidden');
-    }
-}
-
-function showResetPassword(id, username) {
-    document.getElementById('reset-user-id').value = id;
-    document.getElementById('reset-username-display').textContent = username;
-    const modal = document.getElementById('reset-password-modal');
-    modal.classList.remove('hidden');
-    setTimeout(() => {
-        modal.classList.remove('opacity-0');
-        document.getElementById('reset-password-modal-content').classList.remove('scale-95');
-    }, 10);
-}
-
-function hideResetPassword() {
-    const modal = document.getElementById('reset-password-modal');
-    modal.classList.add('opacity-0');
-    setTimeout(() => modal.classList.add('hidden'), 300);
-}
-
-async function adminResetPassword() {
-    const id = document.getElementById('reset-user-id').value;
-    const password = document.getElementById('reset-password-input').value;
-    const errorDiv = document.getElementById('reset-password-error');
-
-    try {
-        const res = await fetch('/api/users', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, new_password: password })
-        });
-
-        if (res.ok) {
-            hideResetPassword();
-            alert('Password reset successfully!');
-        } else {
-            errorDiv.textContent = "Failed to reset password";
-            errorDiv.classList.remove('hidden');
-        }
-    } catch (e) {
-        errorDiv.textContent = "Server error";
-        errorDiv.classList.remove('hidden');
-    }
-}
-
-// Authentication & User Management UI
-function updateAdminControls(isAdmin) {
-    const loginBtn = document.getElementById('login-btn');
-    const adminControls = document.getElementById('admin-controls');
-    const usersContainer = document.getElementById('users-container');
-    const adminsContainer = document.getElementById('admins-container');
-
-    if (isAdmin) {
-        loginBtn.classList.add('hidden');
-        adminControls.classList.remove('hidden');
-        adminsContainer.classList.remove('hidden');
-    } else {
-        loginBtn.classList.remove('hidden');
-        adminControls.classList.add('hidden');
-        usersContainer.classList.add('hidden');
-        adminsContainer.classList.add('hidden');
-    }
-}
-
-function showLogin() {
-    const modal = document.getElementById('login-modal');
-    modal.classList.remove('hidden');
-    setTimeout(() => {
-        modal.classList.remove('opacity-0');
-        document.getElementById('login-modal-content').classList.remove('scale-95');
-    }, 10);
-}
-
-function hideLogin() {
-    const modal = document.getElementById('login-modal');
-    modal.classList.add('opacity-0');
-    document.getElementById('login-modal-content').classList.add('scale-95');
-    setTimeout(() => modal.classList.add('hidden'), 300);
-    document.getElementById('login-error').classList.add('hidden');
-}
-
-async function login() {
-    const username = document.getElementById('login-username').value;
-    const password = document.getElementById('login-password').value;
-    const errorDiv = document.getElementById('login-error');
-
-    try {
-        const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-
-        if (res.ok) {
-            const data = await res.json();
-            hideLogin();
-            fetchStatus();
-            if (data.needs_password_change) {
-                showForcePassword();
-            }
-        } else {
-            errorDiv.textContent = "Invalid username or password";
-            errorDiv.classList.remove('hidden');
-        }
-    } catch (e) {
-        errorDiv.textContent = "Server error, try again";
-        errorDiv.classList.remove('hidden');
-    }
-}
-
-async function logout() {
-    await fetch('/api/logout', { method: 'POST' });
-    location.reload();
-}
-
-function toggleUsers() {
-    const container = document.getElementById('users-container');
-    const isHidden = container.classList.contains('hidden');
-    
-    if (isHidden) {
-        container.classList.remove('hidden');
-        fetchUsers();
-    } else {
-        container.classList.add('hidden');
-    }
-}
-
-async function fetchUsers() {
-    try {
-        const res = await fetch('/api/users');
-        const users = await res.json();
-        
-        const list = document.getElementById('users-list');
-        list.innerHTML = '';
-        
-        users.forEach(u => {
-            const tr = document.createElement('tr');
-            tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors';
-            
-            const date = new Date(u.created_at).toLocaleString();
-            
-            tr.innerHTML = `
-                <td class="py-4 text-slate-500">${u.id}</td>
-                <td class="py-4 text-slate-200 font-bold">${u.username}</td>
-                <td class="py-4"><span class="px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded text-[9px] uppercase font-bold">${u.role}</span></td>
-                <td class="py-4 text-slate-500">${date}</td>
-                <td class="py-4 text-right flex justify-end gap-2">
-                    <button onclick="showResetPassword(${u.id}, '${u.username}')" class="text-accent hover:text-accent/80 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Reset Pwd</button>
-                    <button onclick="deleteUser(${u.id})" class="text-red-500 hover:text-red-400 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Delete</button>
-                </td>
-            `;
-            list.appendChild(tr);
-        });
-    } catch (e) {
-        console.error("Failed to fetch users", e);
-    }
-}
-
-function showAddUser() {
-    const modal = document.getElementById('adduser-modal');
-    modal.classList.remove('hidden');
-    setTimeout(() => {
-        modal.classList.remove('opacity-0');
-        document.getElementById('adduser-modal-content').classList.remove('scale-95');
-    }, 10);
-}
-
-function hideAddUser() {
-    const modal = document.getElementById('adduser-modal');
-    modal.classList.add('opacity-0');
-    document.getElementById('adduser-modal-content').classList.add('scale-95');
-    setTimeout(() => modal.classList.add('hidden'), 300);
-}
-
-async function addUser() {
-    const username = document.getElementById('add-username').value;
-    const password = document.getElementById('add-password').value;
-    const errorDiv = document.getElementById('add-error');
-
-    try {
-        const res = await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-
-        if (res.ok) {
-            hideAddUser();
-            fetchUsers();
-        } else {
-            const txt = await res.text();
-            errorDiv.textContent = txt || "Failed to add user";
-            errorDiv.classList.remove('hidden');
-        }
-    } catch (e) {
-        errorDiv.textContent = "Server error";
-        errorDiv.classList.remove('hidden');
-    }
-}
-
-async function deleteUser(id) {
-    if (!confirm('Are you sure you want to remove this admin?')) return;
-    
-    try {
-        const res = await fetch(`/api/users?id=${id}`, { method: 'DELETE' });
-        if (res.ok) {
-            fetchUsers();
-        }
-    } catch (e) {
-        console.error("Failed to delete user", e);
-    }
-}
-
-// Initial load
-fetchStatus();
-fetchFinance();
-
-// Refresh metadata
-setInterval(fetchStatus, 30000);
-setInterval(fetchFinance, 60000);
-
-// Finance UI Logic
-async function fetchFinance() {
-    try {
-        const res = await fetch('/api/finance');
-        if (!res.ok) throw new Error('Finance fetch failed');
-        const data = await res.json();
-        
-        updateFinanceUI(data);
-        const updated = document.getElementById('finance-updated');
-        if (updated) updated.textContent = `Last update: ${new Date().toLocaleTimeString()}`;
-    } catch (e) {
-        console.error("Failed to load finance data", e);
-    }
-}
-
-function updateFinanceUI(data) {
-    const cryptoContainer = document.getElementById('crypto-prices');
-    const forexContainer = document.getElementById('forex-rates');
-    if (!cryptoContainer || !forexContainer) return;
-
-    // Update Crypto
-    cryptoContainer.innerHTML = '';
-    if (data.crypto && data.crypto.length > 0) {
-        data.crypto.forEach(coin => {
-            const card = document.createElement('div');
-            card.className = 'bg-slate-900/50 border border-white/5 rounded-lg p-3 hover:border-primary/30 transition-colors group';
-            
-            let symbolColor = 'text-slate-400';
-            if (coin.Symbol === 'BTC') symbolColor = 'text-yellow-500';
-            else if (coin.Symbol === 'ETH') symbolColor = 'text-blue-400';
-            
-            card.innerHTML = `
-                <div class="flex justify-between items-start mb-1">
-                    <span class="mono text-[10px] font-bold ${symbolColor}">${coin.Symbol}</span>
-                </div>
-                <div class="mono text-xs font-bold text-slate-200">$${coin.PriceUSD.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-            `;
-            cryptoContainer.appendChild(card);
-        });
-    }
-
-    // Update Forex
-    forexContainer.innerHTML = '';
-    if (data.forex) {
-        const pairs = [
-            { id: 'eur_usd', label: 'EUR/USD', value: data.forex.eur_usd, format: 4 },
-            { id: 'usd_ars', label: 'USD/ARS', value: data.forex.usd_ars, format: 2 },
-            { id: 'eur_ars', label: 'EUR/ARS', value: data.forex.eur_ars, format: 2 }
-        ];
-
-        pairs.forEach(pair => {
-            if (pair.value === undefined) return;
-            const card = document.createElement('div');
-            card.className = 'bg-slate-800/30 border border-white/5 rounded-lg p-3 hover:border-accent/30 transition-colors';
-            card.innerHTML = `
-                <div class="text-[9px] text-slate-500 uppercase tracking-widest font-bold mb-1">${pair.label}</div>
-                <div class="mono text-xs font-bold text-accent">${pair.value.toFixed(pair.format)}</div>
-            `;
-            forexContainer.appendChild(card);
-        });
-    }
-}
-
-// Pastes Logic
+// PASTES
 let pastePage = 1;
-let totalPastePages = 1;
-let lastIsAdmin = false;
-
-function updatePastesUI(show) {
-    const btn = document.getElementById('pastes-toggle');
-    const indicator = document.getElementById('pastes-indicator');
-    const container = document.getElementById('pastes-container');
-
-    if (show) {
-        btn.classList.add('border-primary/50', 'text-white', 'bg-primary/5');
-        btn.classList.remove('border-white/10', 'text-slate-400');
-        indicator.classList.add('bg-primary', 'animate-pulse');
-        indicator.classList.remove('bg-slate-500');
-        container.classList.remove('hidden');
-        fetchPastes(1);
-    } else {
-        btn.classList.remove('border-primary/50', 'text-white', 'bg-primary/5');
-        btn.classList.add('border-white/10', 'text-slate-400');
-        indicator.classList.remove('bg-primary', 'animate-pulse');
-        indicator.classList.add('bg-slate-500');
-        container.classList.add('hidden');
-        document.getElementById('pending-pastes-section').classList.add('hidden');
-    }
-}
-
-function togglePastes() {
-    const container = document.getElementById('pastes-container');
-    const isHidden = container.classList.contains('hidden');
-    updatePastesUI(isHidden);
-}
-
-async function fetchPastes(page) {
+async function fetchApprovedPastes(page) {
     pastePage = page;
-    
-    // If admin, fetch pending ones too
-    if (lastIsAdmin) {
-        fetchPendingPastes();
-    } else {
-        document.getElementById('pending-pastes-section').classList.add('hidden');
-    }
-
-    try {
-        const res = await fetch(`/api/pastes?page=${page}`);
-        if (!res.ok) throw new Error('Pastes fetch failed');
-        const data = await res.json();
-        
-        totalPastePages = data.total_pages;
-        document.getElementById('pastes-count').textContent = `${data.total_count} items`;
-        
-        const list = document.getElementById('pastes-list');
-        list.innerHTML = '';
-        
-        if (data.pastes && data.pastes.length > 0) {
-            data.pastes.forEach(p => {
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors group';
-                
-                const date = new Date(p.ApprovedAt.Time).toLocaleString([], { 
-                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-                });
-
-                tr.innerHTML = `
-                    <td class="py-4 text-primary font-bold">
-                        <a href="/p/${p.TicketID}" target="_blank" class="hover:underline">${p.TicketID}</a>
-                    </td>
-                    <td class="py-4 text-slate-200">${p.Title || '(No title)'}</td>
-                    <td class="py-4 text-slate-400">${p.Username}</td>
-                    <td class="py-4 text-slate-500">${p.Channel}</td>
-                    <td class="py-4 text-slate-500 text-[10px]">${date}</td>
-                    <td class="py-4 text-right flex justify-end gap-2">
-                        <button onclick="copyToClipboard('${window.location.origin}/p/${p.TicketID}', this)" class="text-primary hover:text-accent font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Copy Link</button>
-                        ${lastIsAdmin ? `<button onclick="deletePaste('${p.TicketID}')" class="text-red-500 hover:text-red-400 font-bold px-2 py-1 transition-colors cursor-pointer text-[10px] uppercase">Delete</button>` : ''}
-                    </td>
-                `;
-                list.appendChild(tr);
-            });
-        } else {
-            list.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-slate-500 italic">No approved pastes found yet.</td></tr>';
-        }
-        
-        document.getElementById('pastes-prev-page').disabled = pastePage <= 1;
-        document.getElementById('pastes-next-page').disabled = pastePage >= totalPastePages;
-        
-    } catch (e) {
-        console.error("Failed to load pastes", e);
-    }
+    const res = await fetch(`/api/pastes?page=${page}&t=${Date.now()}`);
+    const data = await res.json();
+    document.getElementById('pastes-count').textContent = `${data.total_count} items`;
+    document.getElementById('pastes-list').innerHTML = data.pastes.map(p => {
+        const tid = p.ticket_id || p.TicketID;
+        const title = p.title || p.Title;
+        const user = p.username || p.Username;
+        return `
+            <tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 1rem;" class="font-bold">${tid}</td>
+                <td style="padding: 1rem;">${title}</td>
+                <td style="padding: 1rem; color: var(--primary);">${user}</td>
+                <td style="padding: 1rem; text-align: right;">
+                    <a href="/p/${tid}" target="_blank" class="text-primary">View</a>
+                    ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
-function changePastePage(delta) {
-    const newPage = pastePage + delta;
-    if (newPage >= 1 && newPage <= totalPastePages) {
-        fetchPastes(newPage);
-    }
+function changePastePage(d) {
+    if (pastePage + d < 1) return;
+    fetchApprovedPastes(pastePage + d);
 }
 
 async function fetchPendingPastes() {
-    try {
-        const res = await fetch('/api/pastes/pending');
-        if (!res.ok) throw new Error('Pending fetch failed');
-        const pending = await res.json();
-        
-        const section = document.getElementById('pending-pastes-section');
-        const list = document.getElementById('pending-pastes-list');
-        list.innerHTML = '';
-        
-        if (pending && pending.length > 0) {
-            section.classList.remove('hidden');
-            pending.forEach(p => {
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-white/5 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group';
-                
-                const date = new Date(p.CreatedAt).toLocaleString([], { 
-                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-                });
+    const res = await fetch(`/api/pastes/pending?t=${Date.now()}`);
+    const data = await res.json();
+    document.getElementById('pending-pastes-list').innerHTML = data.map(p => {
+        const tid = p.ticket_id || p.TicketID;
+        const title = p.title || p.Title;
+        const user = p.username || p.Username;
+        return `
+            <tr style="border-bottom: 1px solid var(--glass-border); background: var(--accent-glow);">
+                <td style="padding: 1rem;">${tid}</td>
+                <td style="padding: 1rem;">${title}</td>
+                <td style="padding: 1rem;">${user}</td>
+                <td style="padding: 1rem; text-align: right;">
+                    <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
+                    <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
+                </td>
+            </tr>
+        `;
+    }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending approvals</td></tr>';
+}
 
-                tr.innerHTML = `
-                    <td class="py-4 text-yellow-500 font-bold mono italic">${p.TicketID}</td>
-                    <td class="py-4 text-slate-200">${p.Title || '(No title)'}</td>
-                    <td class="py-4 text-slate-400">${p.Username}</td>
-                    <td class="py-4 text-slate-500">${p.Channel}</td>
-                    <td class="py-4 text-slate-500 text-[10px]">${date}</td>
-                    <td class="py-4 text-right flex justify-end gap-2">
-                        <button onclick="approvePaste('${p.TicketID}')" class="bg-green-500/20 hover:bg-green-500/30 text-green-500 font-bold px-3 py-1 rounded transition-all cursor-pointer text-[10px] uppercase">Approve</button>
-                        <button onclick="rejectPaste('${p.TicketID}')" class="bg-red-500/20 hover:bg-red-500/30 text-red-500 font-bold px-3 py-1 rounded transition-all cursor-pointer text-[10px] uppercase">Reject</button>
-                    </td>
-                `;
-                list.appendChild(tr);
-            });
-        } else {
-            section.classList.add('hidden');
-        }
-    } catch (e) {
-        console.error("Failed to load pending pastes", e);
+// AUTH & ADMIN
+function showLogin() { 
+    document.getElementById('modal-overlay').classList.remove('hidden');
+    document.getElementById('login-modal').classList.remove('hidden'); 
+}
+function hideLogin() { 
+    document.getElementById('modal-overlay').classList.add('hidden');
+    document.getElementById('login-modal').classList.add('hidden'); 
+}
+
+async function login() {
+    const u = document.getElementById('login-username').value;
+    const p = document.getElementById('login-password').value;
+    const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+    });
+    if (res.ok) { hideLogin(); fetchStatus(); }
+    else document.getElementById('login-error').classList.remove('hidden');
+}
+
+async function logout() { await fetch('/api/logout', { method: 'POST' }); location.reload(); }
+
+async function fetchUsers() {
+    const res = await fetch('/api/users');
+    const users = await res.json();
+    document.getElementById('users-list').innerHTML = users.map(u => `
+        <tr style="border-bottom: 1px solid var(--glass-border);">
+            <td style="padding: 1rem;">${u.id}</td>
+            <td style="padding: 1rem;" class="font-bold">${u.username}</td>
+            <td style="padding: 1rem;"><span class="badge badge-admin">${u.role}</span></td>
+            <td style="padding: 1rem; text-align: right;">
+                <button onclick="deleteUser(${u.id})" style="color: var(--error);">Delete</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function updateAdminsUI(nicks, chans) {
+    const globalList = document.getElementById('admins-list');
+    if (!globalList) return;
+    globalList.innerHTML = nicks.map(nick => 
+        `<span class="badge badge-admin mono" style="font-size: 0.65rem;">${nick}</span>`
+    ).join('');
+}
+
+function showForcePassword() {
+    document.getElementById('modal-overlay').classList.remove('hidden');
+    document.getElementById('force-password-modal').classList.remove('hidden');
+}
+
+async function updatePassword() {
+    const p = document.getElementById('new-password-input').value;
+    const res = await fetch('/api/users/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: p })
+    });
+    if (res.ok) {
+        document.getElementById('modal-overlay').classList.add('hidden');
+        document.getElementById('force-password-modal').classList.add('hidden');
+        fetchStatus();
+    } else {
+        document.getElementById('force-password-error').textContent = "Update failed";
+        document.getElementById('force-password-error').classList.remove('hidden');
     }
 }
 
-async function approvePaste(ticketID) {
-    if (!confirm(`Approve and publish paste ${ticketID}?`)) return;
+// Global functions exposed to window
+window.showPanel = showPanel;
+window.showLogin = showLogin;
+window.hideLogin = hideLogin;
+window.login = login;
+window.logout = logout;
+window.openLogs = openLogs;
+window.closeLogTab = closeLogTab;
+window.closeAllLogs = closeAllLogs;
+window.switchLogTab = switchLogTab;
+window.toggleStats = toggleStats;
+window.toggleNews = toggleNews;
+window.updatePassword = updatePassword;
+window.changeTimeframe = changeTimeframe;
+async function deletePaste(id) {
+    if(!confirm('Are you sure you want to delete this paste?')) return;
     try {
-        const res = await fetch(`/api/pastes/approve?ticketID=${ticketID}`, { method: 'POST' });
+        const res = await fetch(`/api/pastes/delete?ticketID=${id}&t=${Date.now()}`, { method: 'DELETE' });
         if (res.ok) {
-            fetchPastes(1); // Refresh both
+            await fetchApprovedPastes(pastePage);
         } else {
-            alert('Approval failed');
+            alert('Delete failed');
         }
-    } catch (e) {
-        console.error("Approval error", e);
-    }
+    } catch (e) { console.error(e); }
 }
 
-async function rejectPaste(ticketID) {
-    if (!confirm(`Are you sure you want to REJECT and cancel paste ${ticketID}?`)) return;
+async function approvePaste(id) {
     try {
-        const res = await fetch(`/api/pastes/reject?ticketID=${ticketID}`, { method: 'POST' });
-        if (res.ok) {
-            fetchPendingPastes(); // Just refresh pending
-        } else {
-            alert('Rejection failed');
-        }
-    } catch (e) {
-        console.error("Rejection error", e);
-    }
-}
-
-async function deletePaste(ticketID) {
-    if (!confirm(`Are you sure you want to delete paste ${ticketID}?`)) return;
-    try {
-        const res = await fetch(`/api/pastes/delete?ticketID=${ticketID}`, { method: 'DELETE' });
-        if (res.ok) {
-            fetchPastes(pastePage);
-        } else {
-            alert('Failed to delete paste');
-        }
-    } catch (e) {
-        console.error("Delete failed", e);
-    }
-}
-
-async function copyToClipboard(text, btn) {
-    try {
-        await navigator.clipboard.writeText(text);
+        // Optimistic UI update: find and remove the row immediately
+        const btn = document.querySelector(`button[onclick*="approvePaste('${id}')"]`);
         if (btn) {
-            const originalText = btn.innerText;
-            btn.innerText = 'COPIED!';
-            btn.classList.add('text-green-500');
-            btn.classList.remove('text-primary');
-            setTimeout(() => {
-                btn.innerText = originalText;
-                btn.classList.remove('text-green-500');
-                btn.classList.add('text-primary');
-            }, 2000);
+            const row = btn.closest('tr');
+            if (row) row.style.opacity = '0.5'; // Visual cue that action is in progress
         }
-    } catch (err) {
-        console.error('Failed to copy: ', err);
-    }
+
+        const res = await fetch(`/api/pastes/approve?ticketID=${id}&t=${Date.now()}`, { method: 'POST' });
+        if (res.ok) {
+            // Remove from DOM immediately
+            if (btn && btn.closest('tr')) btn.closest('tr').remove();
+            
+            // Re-fetch data to sync with server
+            await fetchPendingPastes();
+            await fetchApprovedPastes(1);
+        } else {
+            const err = await res.text();
+            alert('Approval failed: ' + err);
+            fetchPendingPastes(); // Re-sync on failure
+        }
+    } catch (e) { console.error(e); }
 }
+
+async function rejectPaste(id) {
+    try {
+        const btn = document.querySelector(`button[onclick*="rejectPaste('${id}')"]`);
+        if (btn) {
+            const row = btn.closest('tr');
+            if (row) row.style.opacity = '0.5';
+        }
+
+        const res = await fetch(`/api/pastes/reject?ticketID=${id}&t=${Date.now()}`, { method: 'POST' });
+        if (res.ok) {
+            if (btn && btn.closest('tr')) btn.closest('tr').remove();
+            await fetchPendingPastes();
+        } else {
+            const err = await res.text();
+            alert('Rejection failed: ' + err);
+            fetchPendingPastes();
+        }
+    } catch (e) { console.error(e); }
+}
+
+async function deleteUser(id) {
+    if(!confirm('Delete user?')) return;
+    const res = await fetch(`/api/users?id=${id}&t=${Date.now()}`, { method: 'DELETE' });
+    if (res.ok) fetchUsers();
+}
+
+async function addUser() {
+    const u = document.getElementById('add-username').value;
+    const p = document.getElementById('add-password').value;
+    const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+    });
+    if (res.ok) { window.hideAddUser(); fetchUsers(); }
+}
+
+// Global functions exposed to window
+window.showPanel = showPanel;
+window.showLogin = showLogin;
+window.hideLogin = hideLogin;
+window.login = login;
+window.logout = logout;
+window.openLogs = openLogs;
+window.closeLogTab = closeLogTab;
+window.closeAllLogs = closeAllLogs;
+window.switchLogTab = switchLogTab;
+window.toggleStats = toggleStats;
+window.toggleNews = toggleNews;
+window.updatePassword = updatePassword;
+window.changeTimeframe = (tf) => {
+    document.querySelectorAll('#timeframe-selector button').forEach(b => b.classList.toggle('active', b.dataset.time === tf));
+    fetchHistory(tf);
+};
+window.changeBookmarkPage = changeBookmarkPage;
+window.changePastePage = changePastePage;
+window.debounceSearch = debounceSearch;
+window.deletePaste = deletePaste;
+window.approvePaste = approvePaste;
+window.rejectPaste = rejectPaste;
+window.deleteUser = deleteUser;
+window.showAddUser = () => { document.getElementById('modal-overlay').classList.remove('hidden'); document.getElementById('adduser-modal').classList.remove('hidden'); };
+window.hideAddUser = () => { document.getElementById('modal-overlay').classList.add('hidden'); document.getElementById('adduser-modal').classList.add('hidden'); };
+window.addUser = addUser;
