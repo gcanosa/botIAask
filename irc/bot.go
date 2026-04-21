@@ -13,6 +13,7 @@ import (
 
 	"botIAask/ai"
 	"botIAask/bookmarks"
+	"botIAask/meta"
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/logger"
@@ -92,7 +93,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		startTime:      time.Now(),
 		connectionTime: time.Now(),
 		channelMembers: make(map[string]map[string]struct{}),
-		version:        "0.3",
+		version:        meta.Version,
 		ignoreList:     make(map[string]bool),
 		loggedInAdmins: make(map[string]bool),
 	}
