@@ -105,6 +105,34 @@ func (d *Database) SaveForexSnapshot(m map[string]float64, fetchedAt time.Time) 
 	return tx.Commit()
 }
 
+// GetLatestForexPerKey returns the most recent stored value for each rate_key.
+func (d *Database) GetLatestForexPerKey() (map[string]float64, error) {
+	rows, err := d.db.Query(`
+		SELECT fr.rate_key, fr.value
+		FROM forex_rates fr
+		INNER JOIN (
+			SELECT rate_key, MAX(fetched_at) AS mx
+			FROM forex_rates
+			GROUP BY rate_key
+		) t ON fr.rate_key = t.rate_key AND fr.fetched_at = t.mx
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]float64)
+	for rows.Next() {
+		var key string
+		var v float64
+		if err := rows.Scan(&key, &v); err != nil {
+			return nil, err
+		}
+		out[key] = v
+	}
+	return out, rows.Err()
+}
+
 func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	// We want the latest price for each symbol that was fetched in the last "batch"
 	// For simplicity, we just fetch the last 10 entries ordered by fetched_at desc

@@ -71,17 +71,9 @@ func BuildForexChartResponse(rangeKey string, rows []ForexHistoryRow, now time.T
 		}, nil
 	}
 
-	tMin := int64(filtered[0].points[0][0])
-	tMaxEff := int64(filtered[0].points[len(filtered[0].points)-1][0])
-	for _, s := range filtered[1:] {
-		if int64(s.points[0][0]) > tMin {
-			tMin = int64(s.points[0][0])
-		}
-		last := int64(s.points[len(s.points)-1][0])
-		if last < tMaxEff {
-			tMaxEff = last
-		}
-	}
+	// Full selected window on the X axis (not the intersection of each pair's sample span).
+	tMin := cutoff
+	tMaxEff := tMax
 	if tMin >= tMaxEff {
 		return nil, fmt.Errorf("empty time window after merge")
 	}
@@ -99,7 +91,7 @@ func BuildForexChartResponse(rangeKey string, rows []ForexHistoryRow, now time.T
 	out := &ChartAPIResponse{
 		Range:     rangeKey,
 		UpdatedAt: now.UTC().Format(time.RFC3339),
-		Subtitle:  "Historic values from local snapshots (same range as above)",
+		Subtitle:  "Absolute rate per pair from local snapshots; horizontal axis = selected range above.",
 		Labels:    labels,
 		Series:    make([]ChartSeries, 0, len(filtered)),
 	}

@@ -1356,9 +1356,21 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	forexOut := s.forexCache
-	if forexOut == nil {
-		forexOut = map[string]float64{}
+	forexOut := map[string]float64{}
+	if s.forexCache != nil {
+		for k, v := range s.forexCache {
+			forexOut[k] = v
+		}
+	}
+	// Fill gaps (e.g. official USD/ARS) from DB when the live API omits a key but history exists.
+	if s.cryptoDB != nil {
+		if dbFX, err := s.cryptoDB.GetLatestForexPerKey(); err == nil {
+			for k, v := range dbFX {
+				if _, ok := forexOut[k]; !ok {
+					forexOut[k] = v
+				}
+			}
+		}
 	}
 	data["forex"] = forexOut
 	data["forex_last_update"] = s.forexUpdate.Format(time.RFC3339)
