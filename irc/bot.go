@@ -92,7 +92,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		startTime:      time.Now(),
 		connectionTime: time.Now(),
 		channelMembers: make(map[string]map[string]struct{}),
-		version:        "0.2.1",
+		version:        "0.3",
 		ignoreList:     make(map[string]bool),
 		loggedInAdmins: make(map[string]bool),
 	}
@@ -462,13 +462,26 @@ func (b *Bot) Start() error {
 		}
 	})
 
-	// Connect and run the event loop
-	err := b.conn.Connect()
+	// Initial connect: ircevent only enters its reconnect path after Loop() runs; a failed first
+	// Connect() returns here and never reaches Loop(), so transient TLS/DNS/handshake failures need retries.
+	const maxIRCConnectAttempts = 5
+	connectBackoff := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
+	var err error
+	for attempt := 1; attempt <= maxIRCConnectAttempts; attempt++ {
+		err = b.conn.Connect()
+		if err == nil {
+			break
+		}
+		log.Printf("IRC connect attempt %d/%d failed: %v", attempt, maxIRCConnectAttempts, err)
+		if attempt < maxIRCConnectAttempts {
+			time.Sleep(connectBackoff[attempt-1])
+		}
+	}
 	if err != nil {
-		return fmt.Errorf("failed to connect to IRC server: %w", err)
+		return fmt.Errorf("failed to connect to IRC server after %d attempts: %w", maxIRCConnectAttempts, err)
 	}
 
-	// The Loop handles reconnection automatically
+	// The Loop handles reconnection after disconnect
 	b.conn.Loop()
 
 	return nil
