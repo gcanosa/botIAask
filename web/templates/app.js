@@ -191,8 +191,13 @@ async function fetchStatus() {
         
         const statusText = document.getElementById('status-text');
         const statusBadge = document.getElementById('status-badge');
-        statusText.textContent = 'Operational';
-        statusBadge.classList.add('badge-online');
+        if (data.connected) {
+            statusText.textContent = 'Operational';
+            statusBadge.classList.add('badge-online');
+        } else {
+            statusText.textContent = 'IRC disconnected';
+            statusBadge.classList.remove('badge-online');
+        }
 
         if (data.needs_password_change && data.is_admin) {
             showForcePassword();

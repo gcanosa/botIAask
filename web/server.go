@@ -206,7 +206,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := map[string]interface{}{
 		"uptime":      s.bot.GetUptime(),
-		"connected":   true,
+		"connected":   s.bot.IsConnected(),
 		"server":      s.cfg.IRC.Server,
 		"nickname":    s.cfg.IRC.Nickname,
 		"channels":    s.cfg.IRC.Channels,
