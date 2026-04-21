@@ -1,6 +1,45 @@
 :root {
+    --sidebar-width: 260px;
+    --header-height: 60px;
+}
+
+html[data-theme="light"] {
+    --bg-page: #f1f5f9;
+    --bg-dark: #0f172a;
+    --bg-card: rgba(255, 255, 255, 0.94);
+    --sidebar-bg: rgba(255, 255, 255, 0.92);
+    --primary: #0284c7;
+    --primary-glow: rgba(2, 132, 199, 0.22);
+    --accent: #7c3aed;
+    --accent-glow: rgba(124, 58, 237, 0.2);
+    --success: #15803d;
+    --error: #dc2626;
+    --text-main: #0f172a;
+    --text-muted: #64748b;
+    --glass-border: rgba(15, 23, 42, 0.12);
+    --surface-ghost: rgba(15, 23, 42, 0.06);
+    --surface-ghost-hover: rgba(15, 23, 42, 0.1);
+    --nav-hover: rgba(15, 23, 42, 0.06);
+    --brand-gradient-start: #0284c7;
+    --brand-gradient-end: #7c3aed;
+    --card-hover-border: rgba(15, 23, 42, 0.18);
+    --mobile-nav-bg: rgba(255, 255, 255, 0.95);
+    --log-wrapper-bg: rgba(15, 23, 42, 0.04);
+    --chart-line-a: #0284c7;
+    --chart-line-b: #7c3aed;
+    --chart-fill-a: rgba(2, 132, 199, 0.12);
+    --chart-fill-b: rgba(124, 58, 237, 0.12);
+    --chart-grid: rgba(15, 23, 42, 0.08);
+    --chart-tick: #64748b;
+    --range-active-border: rgba(2, 132, 199, 0.45);
+    --range-active-bg: rgba(2, 132, 199, 0.1);
+}
+
+html[data-theme="dark"] {
+    --bg-page: #0f172a;
     --bg-dark: #0f172a;
     --bg-card: rgba(30, 41, 59, 0.7);
+    --sidebar-bg: rgba(15, 23, 42, 0.8);
     --primary: #38bdf8;
     --primary-glow: rgba(56, 189, 248, 0.3);
     --accent: #c084fc;
@@ -9,9 +48,55 @@
     --error: #ef4444;
     --text-main: #f1f5f9;
     --text-muted: #94a3b8;
-    --sidebar-width: 260px;
-    --header-height: 60px;
     --glass-border: rgba(255, 255, 255, 0.1);
+    --surface-ghost: rgba(255, 255, 255, 0.05);
+    --surface-ghost-hover: rgba(255, 255, 255, 0.1);
+    --nav-hover: rgba(255, 255, 255, 0.05);
+    --brand-gradient-start: #38bdf8;
+    --brand-gradient-end: #c084fc;
+    --card-hover-border: rgba(255, 255, 255, 0.2);
+    --mobile-nav-bg: rgba(15, 23, 42, 0.9);
+    --log-wrapper-bg: rgba(0, 0, 0, 0.2);
+    --chart-line-a: #38bdf8;
+    --chart-line-b: #c084fc;
+    --chart-fill-a: rgba(56, 189, 248, 0.1);
+    --chart-fill-b: rgba(192, 132, 252, 0.1);
+    --chart-grid: rgba(255, 255, 255, 0.05);
+    --chart-tick: #94a3b8;
+    --range-active-border: rgba(56, 189, 248, 0.45);
+    --range-active-bg: rgba(56, 189, 248, 0.1);
+}
+
+html[data-theme="mono"] {
+    --bg-page: #0a0a0a;
+    --bg-dark: #0a0a0a;
+    --bg-card: rgba(23, 23, 23, 0.92);
+    --sidebar-bg: rgba(10, 10, 10, 0.95);
+    --primary: #d4d4d4;
+    --primary-glow: rgba(212, 212, 212, 0.2);
+    --accent: #a3a3a3;
+    --accent-glow: rgba(163, 163, 163, 0.2);
+    --success: #a3a3a3;
+    --error: #737373;
+    --text-main: #fafafa;
+    --text-muted: #a3a3a3;
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --surface-ghost: rgba(255, 255, 255, 0.06);
+    --surface-ghost-hover: rgba(255, 255, 255, 0.1);
+    --nav-hover: rgba(255, 255, 255, 0.06);
+    --brand-gradient-start: #e5e5e5;
+    --brand-gradient-end: #737373;
+    --card-hover-border: rgba(255, 255, 255, 0.18);
+    --mobile-nav-bg: rgba(10, 10, 10, 0.95);
+    --log-wrapper-bg: rgba(0, 0, 0, 0.35);
+    --chart-line-a: #e5e5e5;
+    --chart-line-b: #a3a3a3;
+    --chart-fill-a: rgba(255, 255, 255, 0.08);
+    --chart-fill-b: rgba(163, 163, 163, 0.08);
+    --chart-grid: rgba(255, 255, 255, 0.06);
+    --chart-tick: #a3a3a3;
+    --range-active-border: rgba(212, 212, 212, 0.45);
+    --range-active-bg: rgba(212, 212, 212, 0.1);
 }
 
 * {
@@ -22,7 +107,7 @@
 
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background-color: var(--bg-dark);
+    background-color: var(--bg-page);
     color: var(--text-main);
     overflow-x: hidden;
     line-height: 1.5;
@@ -50,7 +135,7 @@ body {
 
 .sidebar {
     width: var(--sidebar-width);
-    background: rgba(15, 23, 42, 0.8);
+    background: var(--sidebar-bg);
     backdrop-filter: blur(12px);
     border-right: 1px solid var(--glass-border);
     padding: 2rem 1.5rem;
@@ -74,7 +159,7 @@ body {
     font-size: 1.5rem;
     font-weight: 800;
     margin-bottom: 3rem;
-    background: linear-gradient(135deg, var(--primary), var(--accent));
+    background: linear-gradient(135deg, var(--brand-gradient-start), var(--brand-gradient-end));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     display: flex;
@@ -106,8 +191,48 @@ body {
 }
 
 .nav-link:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--nav-hover);
     color: var(--text-main);
+}
+
+.nav-theme-row {
+    margin-bottom: 1rem;
+    padding: 0 0.25rem;
+}
+
+.theme-select-label {
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
+}
+
+.theme-select {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    border-radius: 10px;
+    border: 1px solid var(--glass-border);
+    background: var(--surface-ghost);
+    color: var(--text-main);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.theme-select:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.timeframe-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    align-items: center;
 }
 
 .nav-link.active {
@@ -209,7 +334,7 @@ body {
 }
 
 .card:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--card-hover-border);
 }
 
 .card-title {
@@ -252,13 +377,13 @@ body {
 }
 
 .btn-ghost {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--surface-ghost);
     color: var(--text-main);
     border: 1px solid var(--glass-border);
 }
 
 .btn-ghost:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-ghost-hover);
 }
 
 .btn:disabled {
@@ -295,7 +420,7 @@ input.btn-ghost:focus {
         bottom: 0;
         left: 0;
         right: 0;
-        background: rgba(15, 23, 42, 0.9);
+        background: var(--mobile-nav-bg);
         backdrop-filter: blur(12px);
         border-top: 1px solid var(--glass-border);
         padding: 0.75rem 1rem;
@@ -312,7 +437,7 @@ input.btn-ghost:focus {
 
 /* Log styles refactored for new design */
 #log-outputs-wrapper {
-    background: rgba(0, 0, 0, 0.2);
+    background: var(--log-wrapper-bg);
     border-radius: 12px;
     border: 1px solid var(--glass-border);
     padding: 1rem;
@@ -445,8 +570,8 @@ input.btn-ghost:focus {
 .crypto-range-btn.active {
     opacity: 1;
     color: var(--primary);
-    border-color: rgba(56, 189, 248, 0.45);
-    background: rgba(56, 189, 248, 0.1);
+    border-color: var(--range-active-border);
+    background: var(--range-active-bg);
 }
 
 .crypto-chart-canvas-wrap {

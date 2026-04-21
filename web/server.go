@@ -124,6 +124,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/bookmarks", s.handleBookmarks)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/logout", s.handleLogout)
+	mux.HandleFunc("/api/me/ui-theme", s.handleUITheme)
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
 	mux.HandleFunc("/api/pastes", s.handlePastesList)
@@ -232,8 +233,63 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["channel_admins"] = chans
 	}
 
+	if isAdmin {
+		uiTheme := "dark"
+		if cookie, err := r.Cookie("admin_session"); err == nil {
+			if uid, _, err := s.authDB.ValidateSession(cookie.Value); err == nil {
+				if t, err := s.authDB.GetUITheme(uid); err == nil && t != "" {
+					uiTheme = t
+				} else if err != nil {
+					log.Printf("ui_theme: %v", err)
+				}
+			}
+		}
+		status["ui_theme"] = uiTheme
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
+}
+
+func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userID, _, err := s.authDB.ValidateSession(cookie.Value)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var body struct {
+		Theme string `json:"theme"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	switch body.Theme {
+	case "dark", "light", "mono":
+	default:
+		http.Error(w, "Invalid theme", http.StatusBadRequest)
+		return
+	}
+	if err := s.authDB.SetUITheme(userID, body.Theme); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +627,10 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().AddDate(0, 0, -5)
 	case "1m":
 		since = time.Now().AddDate(0, -1, 0)
+	case "6m":
+		since = time.Now().AddDate(0, -6, 0)
+	case "1y":
+		since = time.Now().AddDate(-1, 0, 0)
 	default:
 		since = time.Now().Add(-1 * time.Hour)
 	}
