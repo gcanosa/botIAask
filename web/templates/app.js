@@ -1813,6 +1813,28 @@ async function login() {
 
 async function logout() { await fetch('/api/logout', { method: 'POST' }); location.reload(); }
 
+function showRehashToast(message, isError) {
+    const el = document.getElementById('rehash-toast');
+    if (!el) return;
+    el.textContent = message;
+    el.style.background = isError ? 'var(--error, #dc2626)' : 'var(--primary, #0ea5e9)';
+    el.style.color = '#fff';
+    el.classList.remove('hidden');
+    if (window._rehashToastTimer) clearTimeout(window._rehashToastTimer);
+    window._rehashToastTimer = setTimeout(() => el.classList.add('hidden'), 4500);
+}
+
+async function rehashConfigFromDisk() {
+    try {
+        const res = await fetch('/api/rehash', { method: 'POST', credentials: 'same-origin' });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || res.statusText);
+        showRehashToast('Configuration reloaded. Logged-in IRC admins were notified.', false);
+    } catch (e) {
+        showRehashToast('Rehash failed: ' + e.message, true);
+    }
+}
+
 async function fetchUsers() {
     const res = await fetch('/api/users');
     const users = await res.json();

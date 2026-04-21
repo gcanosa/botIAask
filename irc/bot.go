@@ -13,10 +13,10 @@ import (
 
 	"botIAask/ai"
 	"botIAask/bookmarks"
-	"botIAask/meta"
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/logger"
+	"botIAask/meta"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -81,6 +81,9 @@ type Bot struct {
 	// IRC Authentication status
 	authenticated bool
 	authMu        sync.RWMutex
+
+	rehashHook   func(source string) error
+	rehashHookMu sync.Mutex
 }
 
 // NewBot initializes a new Bot instance.
@@ -148,6 +151,79 @@ func (b *Bot) SetCryptoDatabase(db *crypto.Database) {
 	b.cryptoDB = db
 }
 
+// SetRehashHook registers the process-wide live reload handler (set from main).
+func (b *Bot) SetRehashHook(fn func(source string) error) {
+	b.rehashHookMu.Lock()
+	b.rehashHook = fn
+	b.rehashHookMu.Unlock()
+}
+
+// RunRehash invokes the live reload handler (IRC admin, web, or SIGHUP).
+func (b *Bot) RunRehash(source string) error {
+	b.rehashHookMu.Lock()
+	fn := b.rehashHook
+	b.rehashHookMu.Unlock()
+	if fn == nil {
+		return fmt.Errorf("rehash is not configured")
+	}
+	return fn(source)
+}
+
+func configPathOrDefault(b *Bot) string {
+	if b.configPath != "" {
+		return b.configPath
+	}
+	return "config/config.yaml"
+}
+
+func ircChannelTarget(s string) bool {
+	return len(s) > 0 && (s[0] == '#' || s[0] == '&')
+}
+
+func channelsNotInFold(list []string, ch string) bool {
+	for _, x := range list {
+		if strings.EqualFold(x, ch) {
+			return false
+		}
+	}
+	return true
+}
+
+func channelListDifference(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		if channelsNotInFold(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func (b *Bot) persistIRCChannelsToDisk() error {
+	return config.SaveConfig(configPathOrDefault(b), b.cfg)
+}
+
+func (b *Bot) addIRCChannelToConfig(ch string) error {
+	for _, existing := range b.cfg.IRC.Channels {
+		if strings.EqualFold(existing, ch) {
+			return nil
+		}
+	}
+	b.cfg.IRC.Channels = append(b.cfg.IRC.Channels, ch)
+	return b.persistIRCChannelsToDisk()
+}
+
+func (b *Bot) removeIRCChannelFromConfig(ch string) error {
+	out := b.cfg.IRC.Channels[:0]
+	for _, existing := range b.cfg.IRC.Channels {
+		if !strings.EqualFold(existing, ch) {
+			out = append(out, existing)
+		}
+	}
+	b.cfg.IRC.Channels = out
+	return b.persistIRCChannelsToDisk()
+}
+
 // GetUptime returns the human-readable uptime of the bot.
 func (b *Bot) GetUptime() string {
 	return formatDuration(time.Since(b.startTime))
@@ -200,14 +276,48 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 	return false
 }
 
-// Reload updates the bot's configuration.
-func (b *Bot) Reload(cfg *config.Config) {
+// ApplyLiveConfig swaps in a new config from disk, rebuilds rate limiting, and syncs channel membership without reconnecting.
+func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 	b.membersMu.Lock()
-	defer b.membersMu.Unlock()
-	b.cfg = cfg
-	b.prefix = cfg.Bot.CommandPrefix
-	b.cmdName = cfg.Bot.CommandName
-	log.Printf("Bot configuration reloaded.")
+	oldChans := append([]string(nil), b.cfg.IRC.Channels...)
+	oldSrv := b.cfg.IRC.Server
+	oldPort := b.cfg.IRC.Port
+	oldNick := b.cfg.IRC.Nickname
+	oldTLS := b.cfg.IRC.UseSSL
+
+	b.cfg = newCfg
+	b.prefix = newCfg.Bot.CommandPrefix
+	b.cmdName = newCfg.Bot.CommandName
+	if newCfg.Bot.RateLimiting != nil && newCfg.Bot.RateLimiting.Enabled {
+		w := time.Duration(newCfg.Bot.RateLimiting.Window) * time.Second
+		b.rateLimiter = NewRateLimiter(w)
+	} else {
+		b.rateLimiter = nil
+	}
+	b.membersMu.Unlock()
+
+	if oldSrv != newCfg.IRC.Server || oldPort != newCfg.IRC.Port || oldNick != newCfg.IRC.Nickname || oldTLS != newCfg.IRC.UseSSL {
+		log.Printf("config rehash: irc server/port/nick/tls changed in YAML — reconnect required for those to take effect")
+	}
+
+	b.statsMu.Lock()
+	conn := b.conn
+	ok := b.connected
+	b.statsMu.Unlock()
+
+	if conn == nil || !ok {
+		log.Printf("Bot configuration reloaded (not connected; channel sync skipped).")
+		return
+	}
+
+	newChans := append([]string(nil), newCfg.IRC.Channels...)
+	for _, ch := range channelListDifference(oldChans, newChans) {
+		conn.Part(ch)
+	}
+	for _, ch := range channelListDifference(newChans, oldChans) {
+		conn.Join(ch)
+	}
+	log.Printf("Bot configuration reloaded (channels synced).")
 }
 
 // Start connects to the IRC server and starts the bot event loop.
@@ -321,7 +431,7 @@ func (b *Bot) Start() error {
 		target := e.Params[0] // Channel
 		sender := e.Nick()
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventJoin, sender, "", "")
-		
+
 		b.membersMu.Lock()
 		if _, exists := b.channelMembers[target]; !exists {
 			b.channelMembers[target] = make(map[string]struct{})
@@ -361,7 +471,7 @@ func (b *Bot) Start() error {
 			message = e.Params[1]
 		}
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventPart, sender, message, "")
-		
+
 		b.membersMu.Lock()
 		if members, exists := b.channelMembers[target]; exists {
 			delete(members, sender)
@@ -386,13 +496,13 @@ func (b *Bot) Start() error {
 			message = e.Params[2]
 		}
 		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventKick, sender, message, kicked)
-		
+
 		b.membersMu.Lock()
 		if members, exists := b.channelMembers[target]; exists {
 			delete(members, kicked)
 		}
 		b.membersMu.Unlock()
-		
+
 		if b.tracker != nil {
 			b.updateTrackerAdmins()
 		}
@@ -501,8 +611,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
-				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
+				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		} else if isAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
 		}
@@ -551,6 +661,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			channel := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
 			if channel != "" {
 				b.conn.Join(channel)
+				if err := b.addIRCChannelToConfig(channel); err != nil {
+					log.Printf("persist irc channels: %v", err)
+					b.sendPrivmsg(target, fmt.Sprintf("Joined %s but failed to save config: %v", channel, err))
+				}
 				if b.tracker != nil {
 					b.tracker.LogAdminCommand()
 				}
@@ -565,6 +679,23 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				channel = parts[1]
 			}
 			b.conn.Part(channel)
+			if ircChannelTarget(channel) {
+				if err := b.removeIRCChannelFromConfig(channel); err != nil {
+					log.Printf("persist irc channels: %v", err)
+					b.sendPrivmsg(target, fmt.Sprintf("Parted %s but failed to save config: %v", channel, err))
+				}
+			}
+			if b.tracker != nil {
+				b.tracker.LogAdminCommand()
+			}
+			return
+		}
+		if message == b.prefix+"rehash" {
+			if err := b.RunRehash(sender); err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("Rehash failed: %v", err))
+			} else {
+				b.sendPrivmsg(target, "Config reloaded from disk.")
+			}
 			if b.tracker != nil {
 				b.tracker.LogAdminCommand()
 			}
@@ -593,7 +724,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("Stats: AI Requests=%d, Uptime=%s", count, b.GetUptime()))
 			return
 		}
-        if strings.HasPrefix(message, b.prefix+"say ") {
+		if strings.HasPrefix(message, b.prefix+"say ") {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) >= 3 {
 				ch := parts[1]
@@ -659,7 +790,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	} else if isAdmin {
 		// Log failed attempts to use admin commands without session
 		if strings.HasPrefix(message, b.prefix) {
-			adminCmds := []string{"join", "part", "ignore", "stats", "say", "quit", "op", "deop", "voice", "devoice"}
+			adminCmds := []string{"join", "part", "ignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice"}
 			parts := strings.Fields(message)
 			if len(parts) > 0 {
 				cmd := strings.TrimPrefix(parts[0], b.prefix)
@@ -734,7 +865,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	// Handle !news command
 	if strings.HasPrefix(message, b.prefix+"news") {
 		parts := strings.Fields(message)
-		
+
 		// Persist rss.announce_to_irc (global IRC broadcast on/off)
 		if len(parts) > 1 && (parts[1] == "start" || parts[1] == "stop") {
 			if isAdmin && isLoggedInAdmin {
@@ -831,7 +962,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			if displayLink == "" && e.Link != "" {
 				displayLink = rss.ShortenURL(e.Link)
 			}
-			
+
 			msg := fmt.Sprintf("\x0304,01[NEWS]\x03 %s - %s", e.PubDate.Format("15:04"), e.Title)
 			if displayLink != "" {
 				msg += fmt.Sprintf(" \x0312\x1f🔗\x1f\x03 %s", displayLink)
@@ -1235,7 +1366,7 @@ func (b *Bot) handleCTCPRequest(sender, target, content string) {
 	}
 
 	command := strings.ToUpper(parts[0])
-	
+
 	if b.cfg.Bot.Debug {
 		log.Printf("[DEBUG] CTCP Request - Sender: %s, Command: %s", sender, command)
 	}
@@ -1259,6 +1390,23 @@ func (b *Bot) NotifyAdmins(message string) {
 	defer b.loginsMu.RUnlock()
 	for nick := range b.loggedInAdmins {
 		b.sendPrivmsg(nick, message)
+	}
+}
+
+// NotifyLoggedInAdminsNotice sends a NOTICE to every admin in an active !admin session.
+func (b *Bot) NotifyLoggedInAdminsNotice(message string) {
+	if b.conn == nil || !b.IsConnected() {
+		return
+	}
+	b.loginsMu.RLock()
+	nicks := make([]string, 0, len(b.loggedInAdmins))
+	for nick := range b.loggedInAdmins {
+		nicks = append(nicks, nick)
+	}
+	b.loginsMu.RUnlock()
+	msg := b.sanitize(message)
+	for _, nick := range nicks {
+		b.sendNotice(nick, msg)
 	}
 }
 

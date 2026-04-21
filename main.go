@@ -8,16 +8,17 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"botIAask/ai"
 	"botIAask/bookmarks"
-	"botIAask/meta"
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/irc"
 	"botIAask/logger"
+	"botIAask/meta"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -35,6 +36,7 @@ func main() {
 	news := flag.Bool("news", false, "Enable RSS news fetcher")
 	updateNews := flag.Bool("updatenews", false, "Backfill RSS database (fetch last X items) and exit")
 	dropNews := flag.Bool("dropnews", false, "Clear all news from the local database and exit")
+	rehashCLI := flag.Bool("rehash", false, "Signal the running daemon (SIGHUP) to reload config/config.yaml")
 
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -53,8 +55,8 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin off       - Log out of admin session\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel   - Join a channel\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !part [#channel] - Leave a channel\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel   - Join a channel (updates config/config.yaml)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !part [#channel] - Leave a channel (updates config/config.yaml)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ignore <nick>   - Ignore a user\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !news on/off     - Toggle news in current channel (session only)\n")
@@ -65,7 +67,10 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !voice [nick]    - Give voice status to self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !devoice [nick]  - Remove voice status from self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ticket approve/cancel <ID> - Manage pending pastes\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !rehash          - Reload config from disk (live; notifies admins)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Disconnect and shutdown bot\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "\nCLI:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  -rehash          - Send SIGHUP to PID in daemon.pid (daemon mode only)\n")
 	}
 	flag.Parse()
 	// Handle version and about flags
@@ -101,6 +106,13 @@ func main() {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+	if *rehashCLI {
+		if err := signalDaemonRehash(cfg); err != nil {
+			log.Fatalf("rehash: %v", err)
+		}
+		fmt.Println("SIGHUP sent; running bot will reload config and NOTICE logged-in IRC admins.")
+		return
 	}
 	if cfg.Stats.Enabled && !cfg.Stats.SaveToDB {
 		log.Printf("Warning: stats enabled but save_to_db is false; activity history will not persist across restarts")
@@ -211,7 +223,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to initialize RSS database: %v", err)
 		}
-		
+
 		limit := 10
 		if flag.NArg() > 0 {
 			if val, err := strconv.Atoi(flag.Arg(0)); err == nil {
@@ -250,6 +262,9 @@ func main() {
 		go rssFetcher.Start()
 	}
 
+	var webServerMu sync.Mutex
+	var webServerRef *web.Server
+
 	// Initialize Stats Database
 	statsDB, err := stats.NewDatabase("data/stats.db")
 	if err != nil {
@@ -262,6 +277,28 @@ func main() {
 	statsTracker := stats.NewTracker(cfg, statsDB)
 	go statsTracker.Start()
 	bot.SetStatsTracker(statsTracker)
+
+	rehashCoordinator := func(source string) error {
+		newCfg, err := config.LoadConfig(configPath)
+		if err != nil {
+			return err
+		}
+		aiClient.UpdateConfig(newCfg.AI.LMStudioURL, newCfg.AI.Model)
+		bot.ApplyLiveConfig(newCfg)
+		rssFetcher.ApplyConfig(newCfg)
+		statsTracker.ApplyConfig(newCfg)
+		webServerMu.Lock()
+		ws := webServerRef
+		webServerMu.Unlock()
+		if ws != nil {
+			ws.SetConfig(newCfg)
+		}
+		bot.NotifyLoggedInAdminsNotice(fmt.Sprintf("Config rehashed (%s) at %s", source, time.Now().Format(time.RFC3339)))
+		log.Printf("Config rehash complete (%s)", source)
+		return nil
+	}
+	bot.SetRehashHook(rehashCoordinator)
+
 	// Initialize Bookmarks Database
 	bookmarksDB, err := bookmarks.NewDatabase("data/bookmarks.db")
 	if err != nil {
@@ -270,7 +307,7 @@ func main() {
 		defer bookmarksDB.Close()
 		bot.SetBookmarksDatabase(bookmarksDB)
 	}
-	
+
 	// Initialize Uploads Database (path relative to project root — same file for IRC + web even if cwd differs)
 	uploadsDBPath, err := resolveUploadsDBPath(configPath, cfg.Uploads.DBPath)
 	if err != nil {
@@ -307,17 +344,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehashCoordinator, &webServerMu, &webServerRef)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehashCoordinator, &webServerMu, &webServerRef)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) error {
 	fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
@@ -328,7 +365,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -347,17 +384,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	// Wait for signals or shutdown
 	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	
+
 	for {
 		sig := <-c
 		if sig == syscall.SIGHUP {
 			log.Println("SIGHUP received, reloading configuration...")
-			newCfg, err := config.LoadConfig("config/config.yaml")
-			if err != nil {
+			if err := rehash("CLI (SIGHUP)"); err != nil {
 				log.Printf("Failed to reload config: %v", err)
-				continue
 			}
-			bot.Reload(newCfg)
 			continue
 		}
 
@@ -373,14 +407,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
 	// Set up signal handling for graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	c := make(chan os.Signal, 2)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -401,12 +435,9 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 		sig := <-c
 		if sig == syscall.SIGHUP {
 			log.Println("SIGHUP received, reloading configuration...")
-			newCfg, err := config.LoadConfig("config/config.yaml")
-			if err != nil {
+			if err := rehash("CLI (SIGHUP)"); err != nil {
 				log.Printf("Failed to reload config: %v", err)
-				continue
 			}
-			bot.Reload(newCfg)
 			continue
 		}
 		log.Printf("Received signal: %v. Shutting down gracefully...", sig)
@@ -417,11 +448,35 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database) {
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
+	webRehash := func() error {
+		return rehash("web admin")
+	}
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, webRehash)
+	webMu.Lock()
+	*webRef = ws
+	webMu.Unlock()
 	if err := ws.Start(); err != nil {
 		log.Printf("Web server error: %v", err)
 	}
+}
+
+func signalDaemonRehash(cfg *config.Config) error {
+	if !cfg.Daemon.Enabled {
+		return fmt.Errorf("daemon is disabled in config; use !rehash in IRC or the web dashboard when not using a PID file")
+	}
+	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
+	if err != nil {
+		return fmt.Errorf("read pid file: %w", err)
+	}
+	if !IsProcessRunning(pid) {
+		return fmt.Errorf("no running process for PID %d", pid)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Signal(syscall.SIGHUP)
 }
 
 // resolveUploadsDBPath resolves a relative db path against the project root (parent of the config directory),

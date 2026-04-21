@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/sashabaranov/go-openai"
 )
 
 // Client handles communication with the LM Studio server using the OpenAI SDK.
 type Client struct {
+	mu        sync.RWMutex
 	apiClient *openai.Client
 	model     string
 }
@@ -27,8 +29,23 @@ func NewClient(baseURL string, model string) *Client {
 	}
 }
 
+// UpdateConfig replaces the LM Studio endpoint and model (e.g. after live config reload).
+func (c *Client) UpdateConfig(baseURL, model string) {
+	conf := openai.DefaultConfig(baseURL)
+	conf.BaseURL = baseURL
+	conf.HTTPClient = &http.Client{}
+	c.mu.Lock()
+	c.apiClient = openai.NewClientWithConfig(conf)
+	c.model = model
+	c.mu.Unlock()
+}
+
 // Ask sends a question to the LM Studio server and returns the response content.
 func (c *Client) Ask(ctx context.Context, question string) (string, error) {
+	c.mu.RLock()
+	client := c.apiClient
+	model := c.model
+	c.mu.RUnlock()
 	// We use a system message to define the persona and ensure speed/conciseness.
 	messages := []openai.ChatCompletionMessage{
 		{
@@ -42,8 +59,8 @@ func (c *Client) Ask(ctx context.Context, question string) (string, error) {
 	}
 
 	// We use the model name provided in the configuration.
-	resp, err := c.apiClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:    c.model,
+	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model:    model,
 		Messages: messages,
 	})
 
