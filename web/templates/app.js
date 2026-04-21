@@ -936,6 +936,116 @@ function changeBookmarkPage(d) {
     fetchBookmarks(target);
 }
 
+function formatApprovedAtSqlNull(approvedAt) {
+    if (!approvedAt || !approvedAt.Valid || !approvedAt.Time) return 'N/A';
+    return new Date(approvedAt.Time).toLocaleString();
+}
+
+function formatSubmittedAt(createdAt) {
+    if (!createdAt) return 'N/A';
+    return new Date(createdAt).toLocaleString();
+}
+
+function hideUploadDetail() {
+    document.getElementById('upload-detail-modal')?.classList.add('hidden');
+    document.getElementById('modal-overlay')?.classList.add('hidden');
+}
+
+async function openUploadDetail(ticketId) {
+    ['login-modal', 'adduser-modal', 'force-password-modal'].forEach((id) => {
+        document.getElementById(id)?.classList.add('hidden');
+    });
+    document.getElementById('modal-overlay')?.classList.remove('hidden');
+    document.getElementById('upload-detail-modal')?.classList.remove('hidden');
+    const body = document.getElementById('upload-detail-body');
+    const actions = document.getElementById('upload-detail-actions');
+    body.innerHTML = '<p style="color: var(--text-muted);">Loading…</p>';
+    actions.innerHTML = '';
+    try {
+        const res = await fetch(`/api/uploads/detail?ticketID=${encodeURIComponent(ticketId)}&t=${Date.now()}`);
+        if (res.status === 401) {
+            body.innerHTML = '<p style="color: var(--text-muted);">Log in to view full detail.</p>';
+            return;
+        }
+        if (!res.ok) {
+            body.innerHTML = '<p style="color: var(--error);">Could not load detail.</p>';
+            return;
+        }
+        const d = await res.json();
+        const host = d.client_host ? financeEscapeHtml(String(d.client_host)) : '—';
+        const md5 = d.md5_hex ? financeEscapeHtml(String(d.md5_hex)) : '—';
+        const sha = d.sha256_hex ? financeEscapeHtml(String(d.sha256_hex)) : '—';
+        const when = d.approved_at ? new Date(d.approved_at).toLocaleString() : 'N/A';
+        const sz = formatFileSize(d.size_bytes);
+        const fn = financeEscapeHtml(String(d.display_filename || '—'));
+        const ref = financeEscapeHtml(String(d.public_ref || '—'));
+        const statusLine = d.status && d.status !== 'approved'
+            ? `<div style="margin-bottom: 0.5rem; color: var(--accent);">Status: ${financeEscapeHtml(String(d.status))}</div>`
+            : '';
+        body.innerHTML = `
+            ${statusLine}
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Ticket</span> <span class="mono">${financeEscapeHtml(String(d.ticket_id))}</span></div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Ref</span> <span class="mono">${ref}</span></div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Title</span> ${financeEscapeHtml(String(d.title || '—'))}</div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">File</span> <span class="mono">${fn}</span></div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Size</span> ${sz}</div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Nickname</span> ${financeEscapeHtml(String(d.username || '—'))}</div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Host / IP</span> <span class="mono">${host}</span></div>
+            <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Published</span> ${when}</div>
+            ${d.is_file ? `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Downloads</span> ${Number(d.download_count) || 0}</div>` : ''}
+            <div style="margin-top: 0.75rem;"><span style="color: var(--text-muted);">MD5</span><br><span class="mono" style="font-size: 0.7rem; word-break: break-all;">${md5}</span></div>
+            <div style="margin-top: 0.5rem;"><span style="color: var(--text-muted);">SHA-256</span><br><span class="mono" style="font-size: 0.7rem; word-break: break-all;">${sha}</span></div>`;
+        let btns = '';
+        if (d.is_file && d.download_path) {
+            btns += `<a href="${financeEscapeHtml(d.download_path)}" target="_blank" rel="noopener" class="btn btn-primary" style="padding: 0.45rem 1rem;">Download</a>`;
+            if (lastIsAdmin && d.can_compress) {
+                btns += `<button type="button" class="btn btn-ghost" style="padding: 0.45rem 1rem;" onclick="compressUploadFile('${ticketId}')">Compress .tgz</button>`;
+            }
+        } else if (d.view_path) {
+            btns += `<a href="${financeEscapeHtml(d.view_path)}" target="_blank" rel="noopener" class="btn btn-primary" style="padding: 0.45rem 1rem;">View</a>`;
+        }
+        if (lastIsAdmin) {
+            btns += `<button type="button" class="btn btn-ghost" style="padding: 0.45rem 1rem; color: var(--error);" onclick="deletePasteFromDetail('${ticketId}')">Delete</button>`;
+        }
+        actions.innerHTML = btns;
+    } catch (e) {
+        console.error(e);
+        body.innerHTML = '<p style="color: var(--error);">Error loading detail.</p>';
+    }
+}
+
+async function compressUploadFile(ticketId) {
+    try {
+        const res = await fetch(`/api/uploads/files/compress?ticketID=${encodeURIComponent(ticketId)}&t=${Date.now()}`, { method: 'POST' });
+        if (res.ok) {
+            await fetchApprovedFiles(filePage);
+            await openUploadDetail(ticketId);
+        } else {
+            const t = await res.text();
+            alert(t || 'Compress failed');
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Compress failed');
+    }
+}
+
+async function deletePasteFromDetail(ticketId) {
+    if (!confirm('Delete this item?')) return;
+    try {
+        const res = await fetch(`/api/pastes/delete?ticketID=${encodeURIComponent(ticketId)}&t=${Date.now()}`, { method: 'DELETE' });
+        if (res.ok) {
+            hideUploadDetail();
+            await fetchApprovedPastes(pastePage);
+            await fetchApprovedFiles(filePage);
+        } else {
+            alert('Delete failed');
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
 // PASTES
 let pastePage = 1;
 async function fetchApprovedPastes(page) {
@@ -947,17 +1057,23 @@ async function fetchApprovedPastes(page) {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
-        const date = p.approved_at && p.approved_at.Valid ? new Date(p.approved_at.Time).toLocaleDateString() : 'N/A';
+        const ref = p.public_ref || p.PublicRef || '—';
+        const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
+        const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
+        const pub = formatApprovedAtSqlNull(p.approved_at || p.ApprovedAt);
         return `
             <tr style="border-bottom: 1px solid var(--glass-border);">
-                <td style="padding: 1rem;" class="font-bold">${tid}</td>
                 <td style="padding: 1rem;">
-                    <div>${title}</div>
-                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Published: ${date}</div>
+                    <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem; color: var(--primary);">${user}</td>
+                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">${financeEscapeHtml(String(title))}</td>
+                <td style="padding: 1rem;">${sz}</td>
+                <td style="padding: 1rem; color: var(--primary);">${financeEscapeHtml(String(user))}</td>
+                <td style="padding: 1rem;" class="mono">${host}</td>
+                <td style="padding: 1rem;">${pub}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <a href="/p/${tid}" target="_blank" class="text-primary">View</a>
+                    <a href="/p/${tid}" target="_blank" rel="noopener" class="text-primary">View</a>
                     ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
                 </td>
             </tr>
@@ -977,22 +1093,31 @@ async function fetchPendingPastes() {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
-        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A';
+        const ref = p.public_ref || p.PublicRef || '—';
+        const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
+        const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
+        const sub = formatSubmittedAt(p.created_at || p.CreatedAt);
         return `
             <tr style="border-bottom: 1px solid var(--glass-border); background: var(--accent-glow);">
-                <td style="padding: 1rem;">${tid}</td>
                 <td style="padding: 1rem;">
-                    <div>${title}</div>
-                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Submitted: ${date}</div>
+                    <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;">${user}</td>
+                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">
+                    <div>${financeEscapeHtml(String(title))}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Submitted: ${sub}</div>
+                </td>
+                <td style="padding: 1rem;">${sz}</td>
+                <td style="padding: 1rem;">${financeEscapeHtml(String(user))}</td>
+                <td style="padding: 1rem;" class="mono">${host}</td>
+                <td style="padding: 1rem;">${sub}</td>
                 <td style="padding: 1rem; text-align: right;">
                     <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
                     <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
                 </td>
             </tr>
         `;
-    }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending approvals</td></tr>';
+    }).join('') || '<tr><td colspan="8" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending approvals</td></tr>';
 }
 
 // FILE UPLOADS (!upload)
@@ -1065,17 +1190,25 @@ async function fetchApprovedFiles(page) {
         const fname = p.original_filename || p.OriginalFilename || '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
         const dl = p.download_count ?? p.DownloadCount ?? 0;
-        const date = p.approved_at && p.approved_at.Valid ? new Date(p.approved_at.Time).toLocaleDateString() : 'N/A';
+        const ref = p.public_ref || p.PublicRef || '—';
+        const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
+        const pub = formatApprovedAtSqlNull(p.approved_at || p.ApprovedAt);
         return `
             <tr style="border-bottom: 1px solid var(--glass-border);">
-                <td style="padding: 1rem;" class="font-bold">${tid}</td>
                 <td style="padding: 1rem;">
-                    <div>${title}</div>
-                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${dl} download(s) · ${financeEscapeHtml(fname)} · ${sz} · Published: ${date}</div>
+                    <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem; color: var(--primary);">${user}</td>
+                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">
+                    <div>${financeEscapeHtml(String(title))}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${dl} download(s) · ${financeEscapeHtml(String(fname))}</div>
+                </td>
+                <td style="padding: 1rem;">${sz}</td>
+                <td style="padding: 1rem; color: var(--primary);">${financeEscapeHtml(String(user))}</td>
+                <td style="padding: 1rem;" class="mono">${host}</td>
+                <td style="padding: 1rem;">${pub}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <a href="/f/${tid}" target="_blank" class="text-primary">Download</a>
+                    <a href="/f/${tid}" target="_blank" rel="noopener" class="text-primary">Download</a>
                     ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
                 </td>
             </tr>
@@ -1100,22 +1233,30 @@ async function fetchPendingFiles() {
         const user = p.username || p.Username;
         const fname = p.original_filename || p.OriginalFilename || '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
-        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A';
+        const ref = p.public_ref || p.PublicRef || '—';
+        const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
+        const sub = formatSubmittedAt(p.created_at || p.CreatedAt);
         return `
             <tr style="border-bottom: 1px solid var(--glass-border); background: var(--accent-glow);">
-                <td style="padding: 1rem;">${tid}</td>
                 <td style="padding: 1rem;">
-                    <div>${title}</div>
-                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(fname)} · ${sz} · Submitted: ${date}</div>
+                    <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;">${user}</td>
+                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">
+                    <div>${financeEscapeHtml(String(title))}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(String(fname))}</div>
+                </td>
+                <td style="padding: 1rem;">${sz}</td>
+                <td style="padding: 1rem;">${financeEscapeHtml(String(user))}</td>
+                <td style="padding: 1rem;" class="mono">${host}</td>
+                <td style="padding: 1rem;">${sub}</td>
                 <td style="padding: 1rem; text-align: right;">
                     <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
                     <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
                 </td>
             </tr>
         `;
-    }).join('') || '<tr><td colspan="4" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending file uploads</td></tr>';
+    }).join('') || '<tr><td colspan="8" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending file uploads</td></tr>';
 }
 
 // NEWS
@@ -1387,6 +1528,10 @@ window.debounceSearch = debounceSearch;
 window.deletePaste = deletePaste;
 window.approvePaste = approvePaste;
 window.rejectPaste = rejectPaste;
+window.openUploadDetail = openUploadDetail;
+window.hideUploadDetail = hideUploadDetail;
+window.compressUploadFile = compressUploadFile;
+window.deletePasteFromDetail = deletePasteFromDetail;
 window.changeFilePage = changeFilePage;
 window.saveUploadSettings = saveUploadSettings;
 window.deleteUser = deleteUser;

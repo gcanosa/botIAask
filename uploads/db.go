@@ -1,8 +1,13 @@
 package uploads
 
 import (
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +39,10 @@ type Upload struct {
 	ContentType      string       `json:"content_type"`
 	SizeBytes        int64        `json:"size_bytes"`
 	DownloadCount    int          `json:"download_count"`
+	PublicRef        string       `json:"public_ref"`
+	ClientHost       string       `json:"client_host"`
+	MD5Hex           string       `json:"md5_hex"`
+	SHA256Hex        string       `json:"sha256_hex"`
 }
 
 func (u *Upload) IsFile() bool {
@@ -80,6 +89,12 @@ func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
 		return nil, err
 	}
 
+	d := &Database{db: db, pastesDir: pastesDir, filesDir: filesDir}
+	if err := d.backfillLegacyUploadRows(); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	if err := os.MkdirAll(pastesDir, 0755); err != nil {
 		return nil, err
 	}
@@ -90,7 +105,7 @@ func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
 	db.Exec("PRAGMA journal_mode=WAL;")
 	db.Exec("PRAGMA synchronous=NORMAL;")
 
-	return &Database{db: db, pastesDir: pastesDir, filesDir: filesDir}, nil
+	return d, nil
 }
 
 func migrateUploadsSchema(db *sql.DB) error {
@@ -124,7 +139,101 @@ func migrateUploadsSchema(db *sql.DB) error {
 	if err := add("download_count", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := add("public_ref", "TEXT"); err != nil {
+		return err
+	}
+	if err := add("client_host", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := add("md5_hex", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := add("sha256_hex", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (d *Database) backfillLegacyUploadRows() error {
+	for {
+		var id int
+		err := d.db.QueryRow(`SELECT id FROM uploads WHERE public_ref IS NULL OR TRIM(COALESCE(public_ref,'')) = '' LIMIT 1`).Scan(&id)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("backfill public_ref select: %w", err)
+		}
+		ref, err := NewPublicRef()
+		if err != nil {
+			return err
+		}
+		if _, err := d.db.Exec(`UPDATE uploads SET public_ref = ? WHERE id = ?`, ref, id); err != nil {
+			return fmt.Errorf("backfill public_ref update: %w", err)
+		}
+	}
+	rows, err := d.db.Query(`
+		SELECT id, content_path FROM uploads
+		WHERE COALESCE(upload_type,'paste') = 'paste'
+		  AND TRIM(COALESCE(content_path,'')) != ''
+		  AND (COALESCE(size_bytes,0) = 0 OR COALESCE(md5_hex,'') = '')`)
+	if err != nil {
+		return fmt.Errorf("backfill paste meta: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var cpath string
+		if err := rows.Scan(&id, &cpath); err != nil {
+			return err
+		}
+		st, err := os.Stat(cpath)
+		if err != nil {
+			continue
+		}
+		mdH, shH, err := HexMD5SHA256FromFile(cpath)
+		if err != nil {
+			continue
+		}
+		_, err = d.db.Exec(`UPDATE uploads SET size_bytes = ?, md5_hex = ?, sha256_hex = ? WHERE id = ?`,
+			st.Size(), mdH, shH, id)
+		if err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows2, err := d.db.Query(`
+		SELECT id, content_path FROM uploads
+		WHERE upload_type = 'file' AND TRIM(COALESCE(content_path,'')) != ''
+		  AND (COALESCE(md5_hex,'') = '' OR COALESCE(sha256_hex,'') = '')`)
+	if err != nil {
+		return fmt.Errorf("backfill file hashes: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var id int
+		var cpath string
+		if err := rows2.Scan(&id, &cpath); err != nil {
+			return err
+		}
+		mdH, shH, err := HexMD5SHA256FromFile(cpath)
+		if err != nil {
+			continue
+		}
+		st, err := os.Stat(cpath)
+		if err != nil {
+			continue
+		}
+		_, err = d.db.Exec(`UPDATE uploads SET md5_hex = ?, sha256_hex = ?, size_bytes = ? WHERE id = ?`,
+			mdH, shH, st.Size(), id)
+		if err != nil {
+			return err
+		}
+	}
+	return rows2.Err()
 }
 
 func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
@@ -148,48 +257,62 @@ func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
 }
 
 func (d *Database) CreateUploadSession(token, username, channel string) error {
-	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type) VALUES (?, ?, ?, 'pending_form', ?, ?)`
-	_, err := d.db.Exec(q, token, username, channel, time.Now(), TypePaste)
+	ref, err := NewPublicRef()
+	if err != nil {
+		return err
+	}
+	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type, public_ref) VALUES (?, ?, ?, 'pending_form', ?, ?, ?)`
+	_, err = d.db.Exec(q, token, username, channel, time.Now(), TypePaste, ref)
 	return err
 }
 
 func (d *Database) CreateFileUploadSession(token, username, channel string) error {
-	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type) VALUES (?, ?, ?, 'pending_form', ?, ?)`
-	_, err := d.db.Exec(q, token, username, channel, time.Now(), TypeFile)
+	ref, err := NewPublicRef()
+	if err != nil {
+		return err
+	}
+	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type, public_ref) VALUES (?, ?, ?, 'pending_form', ?, ?, ?)`
+	_, err = d.db.Exec(q, token, username, channel, time.Now(), TypeFile, ref)
 	return err
 }
 
 func (d *Database) GetUploadByToken(token string) (*Upload, error) {
 	row := d.db.QueryRow(`
-		SELECT id, token,
+		SELECT id, COALESCE(ticket_id,''), token,
 		       COALESCE(username,''), COALESCE(channel,''), COALESCE(status,''), created_at,
-		       COALESCE(upload_type, 'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       COALESCE(upload_type, 'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE token = ?`, token)
 	var u Upload
-	err := row.Scan(&u.ID, &u.Token, &u.Username, &u.Channel, &u.Status, &u.CreatedAt,
-		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+	err := row.Scan(&u.ID, &u.TicketID, &u.Token, &u.Username, &u.Channel, &u.Status, &u.CreatedAt,
+		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+		&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
-func (d *Database) SubmitUpload(token, ticketID, title, description, content string, expiresInDays int) error {
+func (d *Database) SubmitUpload(token, ticketID, title, description, content string, expiresInDays int, clientHost string) error {
 	fileName := fmt.Sprintf("%s.txt", ticketID)
 	filePath := filepath.Join(d.pastesDir, fileName)
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	body := []byte(content)
+	if err := os.WriteFile(filePath, body, 0644); err != nil {
 		return err
 	}
+	mdH, shH := HexMD5SHA256FromBytes(body)
+	size := int64(len(body))
 
-	q := `UPDATE uploads SET ticket_id = ?, title = ?, description = ?, content_path = ?, expires_in_days = ?, status = 'pending_approval', upload_type = ? WHERE token = ?`
-	_, err := d.db.Exec(q, ticketID, title, description, filePath, expiresInDays, TypePaste, token)
+	q := `UPDATE uploads SET ticket_id = ?, title = ?, description = ?, content_path = ?, expires_in_days = ?, status = 'pending_approval', upload_type = ?,
+		size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ? WHERE token = ?`
+	_, err := d.db.Exec(q, ticketID, title, description, filePath, expiresInDays, TypePaste, size, clientHost, mdH, shH, token)
 	return err
 }
 
-func (d *Database) SubmitFileUpload(token, ticketID, title, description string, expiresInDays int, diskPath, originalFilename, contentType string, sizeBytes int64) error {
+func (d *Database) SubmitFileUpload(token, ticketID, title, description string, expiresInDays int, diskPath, originalFilename, contentType string, sizeBytes int64, clientHost, md5Hex, sha256Hex string) error {
 	q := `UPDATE uploads SET ticket_id = ?, title = ?, description = ?, content_path = ?, expires_in_days = ?, status = 'pending_approval',
-		upload_type = ?, original_filename = ?, content_type = ?, size_bytes = ? WHERE token = ?`
-	_, err := d.db.Exec(q, ticketID, title, description, diskPath, expiresInDays, TypeFile, originalFilename, contentType, sizeBytes, token)
+		upload_type = ?, original_filename = ?, content_type = ?, size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ? WHERE token = ?`
+	_, err := d.db.Exec(q, ticketID, title, description, diskPath, expiresInDays, TypeFile, originalFilename, contentType, sizeBytes, clientHost, md5Hex, sha256Hex, token)
 	return err
 }
 
@@ -223,11 +346,13 @@ func (d *Database) CancelTicket(ticketID string) error {
 func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
 	row := d.db.QueryRow(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE ticket_id = ?`, ticketID)
 	var u Upload
 	err := row.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+		&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +368,8 @@ func (d *Database) GetApprovedPastes(limit, offset int) ([]*Upload, int, error) 
 	}
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -261,7 +387,8 @@ func (d *Database) GetApprovedFiles(limit, offset int) ([]*Upload, int, error) {
 	}
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -283,7 +410,8 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	// IRC nicks: trim + case-insensitive; LOWER matches most cases.
 	q := `
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
 			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?)
 		ORDER BY approved_at DESC LIMIT ?`
@@ -302,7 +430,8 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	// Fallback: RFC 1459 casefold can differ from ASCII LOWER (e.g. [ vs {).
 	rows2, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
 		ORDER BY approved_at DESC`)
 	if err != nil {
@@ -313,7 +442,8 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	for rows2.Next() {
 		var u Upload
 		err := rows2.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, err
 		}
@@ -333,7 +463,8 @@ func scanApprovedFileRows(rows *sql.Rows) ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +503,8 @@ func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -385,7 +517,8 @@ func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
 func (d *Database) GetPendingTickets() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE status = 'pending_approval' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -396,7 +529,8 @@ func (d *Database) GetPendingTickets() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, err
 		}
@@ -409,7 +543,8 @@ func (d *Database) GetPendingTickets() ([]*Upload, error) {
 func (d *Database) GetPendingPastes() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE status = 'pending_approval' AND COALESCE(upload_type,'paste') = 'paste' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -420,7 +555,8 @@ func (d *Database) GetPendingPastes() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, err
 		}
@@ -433,7 +569,8 @@ func (d *Database) GetPendingPastes() ([]*Upload, error) {
 func (d *Database) GetPendingFiles() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
+		       COALESCE(public_ref,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,'')
 		FROM uploads WHERE status = 'pending_approval' AND upload_type = 'file' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -444,7 +581,8 @@ func (d *Database) GetPendingFiles() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
+			&u.PublicRef, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex)
 		if err != nil {
 			return nil, err
 		}
@@ -489,6 +627,25 @@ func (d *Database) DeletePaste(ticketID string) error {
 	return err
 }
 
+// ReplaceApprovedFileContent updates stored path and metadata after replacing the on-disk blob (e.g. compress to .tgz).
+func (d *Database) ReplaceApprovedFileContent(ticketID, newPath, origName, contentType string, sizeBytes int64, md5Hex, sha256Hex string) error {
+	res, err := d.db.Exec(`
+		UPDATE uploads SET content_path = ?, original_filename = ?, content_type = ?, size_bytes = ?, md5_hex = ?, sha256_hex = ?
+		WHERE ticket_id = ? AND upload_type = 'file' AND status = 'approved'`,
+		newPath, origName, contentType, sizeBytes, md5Hex, sha256Hex, ticketID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // FilesDiskDir returns the directory used for binary uploads (for saving temp files).
 func (d *Database) FilesDiskDir() string {
 	return d.filesDir
@@ -507,6 +664,37 @@ func SafeFileExt(original string) string {
 		return ".bin"
 	}
 	return ext
+}
+
+// HexMD5SHA256FromBytes returns lowercase hex digests of b.
+func HexMD5SHA256FromBytes(b []byte) (md5Hex, sha256Hex string) {
+	h1 := md5.Sum(b)
+	h2 := sha256.Sum256(b)
+	return hex.EncodeToString(h1[:]), hex.EncodeToString(h2[:])
+}
+
+// HexMD5SHA256FromFile reads path and returns lowercase hex digests.
+func HexMD5SHA256FromFile(path string) (md5Hex, sha256Hex string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+	mw := md5.New()
+	sw := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(mw, sw), f); err != nil {
+		return "", "", err
+	}
+	return hex.EncodeToString(mw.Sum(nil)), hex.EncodeToString(sw.Sum(nil)), nil
+}
+
+// NewPublicRef returns a 16-character lowercase hex string (8 random bytes).
+func NewPublicRef() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (d *Database) Close() error {
