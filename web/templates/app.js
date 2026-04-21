@@ -48,6 +48,67 @@ function syncThemeSelectFromState(isAuthenticated, serverTheme) {
     applyTheme(t);
 }
 
+const MOBILE_SIDEBAR_MAX_WIDTH = 1024;
+
+function isMobileNavLayout() {
+    return window.innerWidth <= MOBILE_SIDEBAR_MAX_WIDTH;
+}
+
+function updateMobileSidebarAria() {
+    const sidebar = document.getElementById('sidebar');
+    const toggle = document.getElementById('sidebar-toggle');
+    if (!sidebar) return;
+    if (isMobileNavLayout()) {
+        const open = sidebar.classList.contains('open');
+        sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+        }
+    } else {
+        sidebar.removeAttribute('aria-hidden');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.setAttribute('aria-label', 'Open menu');
+        }
+    }
+}
+
+function openSidebar() {
+    if (!isMobileNavLayout()) return;
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (!sidebar) return;
+    sidebar.classList.add('open');
+    backdrop?.classList.remove('hidden');
+    backdrop?.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    updateMobileSidebarAria();
+}
+
+function closeSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    sidebar?.classList.remove('open');
+    backdrop?.classList.add('hidden');
+    backdrop?.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+    updateMobileSidebarAria();
+}
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar?.classList.contains('open')) {
+        closeSidebar();
+    } else {
+        openSidebar();
+    }
+}
+
+function closeSidebarIfMobile() {
+    if (isMobileNavLayout()) closeSidebar();
+}
+
 // Routing logic
 function showPanel(panelId) {
     // Update links
@@ -85,6 +146,8 @@ function showPanel(panelId) {
         fetchLogCatalog();
         bindLogsPanelListeners();
     }
+
+    closeSidebarIfMobile();
 }
 
 // Handle browser navigation
@@ -106,7 +169,20 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.hash = 'uploads';
         showPanel('uploads');
     });
-    
+
+    document.getElementById('sidebar-backdrop')?.addEventListener('click', closeSidebar);
+    window.addEventListener('resize', () => {
+        if (!isMobileNavLayout()) closeSidebar();
+        else updateMobileSidebarAria();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (document.getElementById('sidebar')?.classList.contains('open')) {
+            closeSidebar();
+        }
+    });
+    updateMobileSidebarAria();
+
     fetchStatus();
     setInterval(fetchStatus, 30000); // 30s status refresh
     
@@ -154,6 +230,10 @@ async function fetchStatus() {
         const data = await res.json();
         lastIsAdmin = data.is_admin;
 
+        const appVersionEl = document.getElementById('app-version');
+        if (appVersionEl && data.version) {
+            appVersionEl.textContent = 'v' + String(data.version);
+        }
         document.getElementById('uptime').textContent = data.uptime;
         document.getElementById('server').textContent = (data.nickname || 'Bot') + ' @ ' + data.server;
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
@@ -1806,6 +1886,8 @@ async function onThemeSelectChange() {
 
 // Global functions exposed to window
 window.showPanel = showPanel;
+window.toggleSidebar = toggleSidebar;
+window.closeSidebar = closeSidebar;
 window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
@@ -1893,6 +1975,8 @@ async function addUser() {
 
 // Global functions exposed to window (re-export for late-loaded handlers)
 window.showPanel = showPanel;
+window.toggleSidebar = toggleSidebar;
+window.closeSidebar = closeSidebar;
 window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
