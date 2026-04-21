@@ -62,6 +62,9 @@ type Bot struct {
 	// Connection status
 	connected bool
 
+	// Path for persisting config (e.g. announce_to_irc via !news start/stop)
+	configPath string
+
 	// RSS Database for !news
 	rssDB *rss.Database
 
@@ -103,9 +106,25 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	return bot
 }
 
+// SetConfigPath sets the YAML path used when persisting config from IRC (e.g. !news start/stop).
+func (b *Bot) SetConfigPath(path string) {
+	b.configPath = path
+}
+
 // SetRSSDatabase sets the RSS database for the bot
 func (b *Bot) SetRSSDatabase(db *rss.Database) {
 	b.rssDB = db
+}
+
+// persistAnnounceToIRC updates rss.announce_to_irc and writes config to disk. The RSS fetcher reads the same cfg pointer, so the next broadcast in an in-flight Fetch() respects the new value.
+func (b *Bot) persistAnnounceToIRC(enabled bool) error {
+	v := enabled
+	b.cfg.RSS.AnnounceToIRC = &v
+	path := b.configPath
+	if path == "" {
+		path = "config/config.yaml"
+	}
+	return config.SaveConfig(path, b.cfg)
 }
 
 // SetBookmarksDatabase sets the bookmarks database for the bot
@@ -468,8 +487,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
-				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
+				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		} else if isAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
 		}
@@ -702,6 +721,23 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	if strings.HasPrefix(message, b.prefix+"news") {
 		parts := strings.Fields(message)
 		
+		// Persist rss.announce_to_irc (global IRC broadcast on/off)
+		if len(parts) > 1 && (parts[1] == "start" || parts[1] == "stop") {
+			if isAdmin && isLoggedInAdmin {
+				enabled := parts[1] == "start"
+				if err := b.persistAnnounceToIRC(enabled); err != nil {
+					b.sendPrivmsg(target, fmt.Sprintf("Failed to save config: %v", err))
+				} else if enabled {
+					b.sendPrivmsg(target, "RSS posting to IRC: ON (saved to config; applies to upcoming fetches).")
+				} else {
+					b.sendPrivmsg(target, "RSS posting to IRC: OFF (saved to config; in-flight fetch stops announcing).")
+				}
+			} else {
+				b.sendPrivmsg(target, "Not authorized or session expired.")
+			}
+			return
+		}
+
 		// In-memory news toggling
 		if len(parts) > 1 && (parts[1] == "on" || parts[1] == "off") {
 			if isAdmin && isLoggedInAdmin {

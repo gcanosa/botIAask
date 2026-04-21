@@ -107,7 +107,8 @@ In **`config/config.yaml`**, under `rss`, **`announce_to_irc`** defaults to `tru
 | `!join #channel` | Commands the bot to join a specific channel. |
 | `!part [#channel]` | Commands the bot to leave a channel. |
 | `!stats` | Displays internal bot statistics. |
-| `!news on/off` | Toggles automatic news broadcasts in the current channel. |
+| `!news on/off` | Toggles automatic news broadcasts in the current channel (session only). |
+| `!news start` / `!news stop` | Turns global RSS-to-IRC announcements on or off, saves `rss.announce_to_irc` in config, and applies immediately (in-flight fetch stops posting when stopped). Requires admin hostmask and `!admin` session. |
 | `!quit [reason]` | Shuts down the bot safely. |
 
 ---
