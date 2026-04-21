@@ -1,5 +1,13 @@
-let logSources = {};
-let activeLogChannel = null;
+let logCatalog = null;
+let logState = {
+    channelLabel: null,
+    joined: false,
+    selectedDate: null,
+    eventSource: null,
+    stickToBottom: true,
+    calendarMonth: null,
+};
+let logPanelListenersBound = false;
 let currentStatsSource = null;
 let activityChart = null;
 let cryptoMarketChart = null;
@@ -40,6 +48,10 @@ function showPanel(panelId) {
     if (panelId === 'finance') {
         fetchCryptoChart();
         fetchForexChart();
+    }
+    if (panelId === 'logs') {
+        fetchLogCatalog();
+        bindLogsPanelListeners();
     }
 }
 
@@ -154,18 +166,6 @@ async function fetchStatus() {
             showForcePassword();
         }
 
-        const channelsContainer = document.getElementById('channels');
-        channelsContainer.innerHTML = '';
-        if (data.channels) {
-            data.channels.forEach(ch => {
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-ghost mono';
-                btn.textContent = ch;
-                btn.onclick = () => openLogs(ch);
-                channelsContainer.appendChild(btn);
-            });
-        }
-
         if (data.admin_nicknames) {
             updateAdminsUI(data.admin_nicknames, data.channel_admins);
         }
@@ -224,80 +224,354 @@ function updateIRCAuthStatus(authenticated) {
     }
 }
 
-// LOGS SYSTEM
-function openLogs(channel) {
-    const container = document.getElementById('log-container');
-    container.classList.remove('hidden');
+// LOGS SYSTEM (catalog, calendar, SSE / history)
+function bindLogsPanelListeners() {
+    if (logPanelListenersBound) return;
+    logPanelListenersBound = true;
 
-    if (logSources[channel]) {
-        switchLogTab(channel);
-        return;
+    document.getElementById('logs-channel-filter')?.addEventListener('input', () => renderLogChannelList());
+    document.getElementById('logs-close-view')?.addEventListener('click', closeLogsView);
+
+    const calToggle = document.getElementById('log-calendar-toggle');
+    const calPop = document.getElementById('log-calendar-popover');
+    calToggle?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        calPop?.classList.toggle('hidden');
+        const expanded = calPop && !calPop.classList.contains('hidden');
+        calToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        if (expanded) renderLogCalendar();
+    });
+    document.getElementById('log-cal-prev')?.addEventListener('click', () => {
+        if (!logState.calendarMonth) return;
+        logState.calendarMonth = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth() - 1, 1);
+        renderLogCalendar();
+    });
+    document.getElementById('log-cal-next')?.addEventListener('click', () => {
+        if (!logState.calendarMonth) return;
+        logState.calendarMonth = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth() + 1, 1);
+        renderLogCalendar();
+    });
+
+    document.addEventListener('click', () => {
+        calPop?.classList.add('hidden');
+        calToggle?.setAttribute('aria-expanded', 'false');
+    });
+    calPop?.addEventListener('click', (e) => e.stopPropagation());
+
+    document.getElementById('log-jump-latest')?.addEventListener('click', () => {
+        logState.stickToBottom = true;
+        scrollLogToEnd();
+        document.getElementById('log-jump-latest')?.classList.add('hidden');
+    });
+
+    const scrollEl = document.getElementById('log-scroll');
+    scrollEl?.addEventListener('scroll', () => {
+        if (!scrollEl) return;
+        const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 80;
+        logState.stickToBottom = nearBottom;
+        document.getElementById('log-jump-latest')?.classList.toggle('hidden', nearBottom);
+    });
+}
+
+function parseISODate(s) {
+    const p = String(s).split('-').map(Number);
+    if (p.length !== 3 || p.some((n) => !Number.isFinite(n))) return null;
+    return new Date(p[0], p[1] - 1, p[2]);
+}
+
+function dateISOLocal(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+async function fetchLogCatalog() {
+    try {
+        const res = await fetch('/api/logs/catalog');
+        if (!res.ok) throw new Error('catalog failed');
+        logCatalog = await res.json();
+        const hint = document.getElementById('logs-retention-hint');
+        if (hint && logCatalog.calendar) {
+            const c = logCatalog.calendar;
+            hint.textContent =
+                c.rotation_days > 0
+                    ? `Retention window: ${c.min_date} → ${c.max_date} (local)`
+                    : `All log files on disk (local today ${c.server_local_today})`;
+        }
+        renderLogChannelList();
+        if (logState.channelLabel) renderLogCalendar();
+    } catch (e) {
+        console.error('log catalog', e);
     }
+}
 
-    // Create Tab
-    const tabsContainer = document.getElementById('log-tabs');
-    const tab = document.createElement('button');
-    tab.id = `tab-${channel.replace(/#/g, '')}`;
-    tab.className = 'btn btn-ghost active mono';
-    tab.style.padding = '0.25rem 0.75rem';
-    tab.innerHTML = `<span>${channel}</span> <small onclick="event.stopPropagation(); closeLogTab('${channel}')" style="margin-left: 0.5rem; color: var(--error);">×</small>`;
-    tab.onclick = () => switchLogTab(channel);
-    tabsContainer.appendChild(tab);
+function getLogChannelEntry(label) {
+    if (!logCatalog?.channels) return null;
+    return logCatalog.channels.find((c) => c.label === label) || null;
+}
 
-    // Create Output
-    const wrapper = document.getElementById('log-outputs-wrapper');
-    const output = document.createElement('div');
-    output.id = `output-${channel.replace(/#/g, '')}`;
-    output.className = 'log-view-pane hidden';
-    output.innerHTML = '<div class="text-slate-500 italic">Connecting to stream...</div>';
-    wrapper.appendChild(output);
+function renderLogChannelList() {
+    const host = document.getElementById('logs-channel-groups');
+    if (!host || !logCatalog?.channels) return;
+    const q = (document.getElementById('logs-channel-filter')?.value || '').trim().toLowerCase();
+    const joined = logCatalog.channels.filter((c) => c.joined && (!q || c.label.toLowerCase().includes(q)));
+    const other = logCatalog.channels.filter((c) => !c.joined && (!q || c.label.toLowerCase().includes(q)));
 
-    // Start Stream
-    const source = new EventSource(`/api/logs/stream?channel=${encodeURIComponent(channel)}`);
-    logSources[channel] = source;
-
-    source.onmessage = (e) => {
-        const line = document.createElement('div');
-        line.className = 'log-entry';
-        
-        let text = e.data;
-        if (text.includes('[MESSAGE]')) line.style.color = 'var(--text-main)';
-        else if (text.includes('[JOIN]')) line.style.color = 'var(--success)';
-        else if (text.includes('[PART]')) line.style.color = 'var(--error)';
-        else if (text.includes('[ACTION]')) line.style.color = 'var(--accent)';
-        
-        line.textContent = text;
-        output.appendChild(line);
-        output.scrollTop = output.scrollHeight;
+    const mkRow = (c) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'logs-channel-row mono' + (logState.channelLabel === c.label ? ' active' : '');
+        row.innerHTML = `<span>${financeEscapeHtml(c.label)}</span><span class="logs-channel-meta">${
+            c.joined
+                ? '<span class="log-badge log-badge-live"><span class="dot pulse"></span>Live</span>'
+                : '<span class="log-badge log-badge-disk">Disk</span>'
+        }</span>`;
+        row.addEventListener('click', () => selectLogChannel(c.label, c.joined));
+        return row;
     };
 
-    switchLogTab(channel);
+    host.innerHTML = '';
+    const addGroup = (title, items) => {
+        if (!items.length) return;
+        const wrap = document.createElement('div');
+        const t = document.createElement('div');
+        t.className = 'logs-group-title';
+        t.textContent = title;
+        wrap.appendChild(t);
+        items.forEach((c) => wrap.appendChild(mkRow(c)));
+        host.appendChild(wrap);
+    };
+    addGroup('Joined', joined);
+    addGroup('Not joined / archive', other);
+    if (!host.children.length) {
+        host.innerHTML = '<p class="section-subtitle" style="margin:0;">No channels match.</p>';
+    }
 }
 
-function switchLogTab(channel) {
-    activeLogChannel = channel;
-    document.querySelectorAll('#log-tabs button').forEach(b => {
-        b.classList.toggle('active', b.id === `tab-${channel.replace(/#/g, '')}`);
+function selectLogChannel(label, joined) {
+    logState.channelLabel = label;
+    logState.joined = joined;
+    if (logCatalog?.calendar?.server_local_today) {
+        logState.selectedDate = logCatalog.calendar.server_local_today;
+    }
+    logState.calendarMonth = parseISODate(logState.selectedDate) || new Date();
+
+    document.getElementById('logs-viewer-placeholder')?.classList.add('hidden');
+    document.getElementById('logs-viewer')?.classList.remove('hidden');
+    renderLogChannelList();
+    updateLogToolbarBadges();
+    updateLogDateLabel();
+    reloadLogsForSelection();
+}
+
+function updateLogToolbarBadges() {
+    const el = document.getElementById('logs-view-badges');
+    if (!el) return;
+    const today = logCatalog?.calendar?.server_local_today;
+    const hist = logState.selectedDate && today && logState.selectedDate < today;
+    const parts = [];
+    if (logState.joined) {
+        parts.push('<span class="log-badge log-badge-live"><span class="dot pulse"></span>Joined</span>');
+    } else {
+        parts.push('<span class="log-badge log-badge-disk">Not joined</span>');
+    }
+    if (hist) {
+        parts.push('<span class="log-badge log-badge-disk">Historical</span>');
+    } else if (logState.selectedDate === today) {
+        parts.push('<span class="log-badge log-badge-live"><span class="dot pulse"></span>Today</span>');
+    }
+    el.innerHTML = parts.join('');
+    const title = document.getElementById('logs-view-title');
+    if (title) title.textContent = logState.channelLabel || '—';
+}
+
+function updateLogDateLabel() {
+    const el = document.getElementById('log-selected-date-label');
+    if (el) el.textContent = logState.selectedDate || '—';
+}
+
+function closeLogsView() {
+    teardownLogStream();
+    logState.channelLabel = null;
+    logState.joined = false;
+    logState.selectedDate = null;
+    logState.stickToBottom = true;
+    document.getElementById('logs-viewer')?.classList.add('hidden');
+    document.getElementById('logs-viewer-placeholder')?.classList.remove('hidden');
+    document.getElementById('log-scroll').innerHTML = '';
+    renderLogChannelList();
+}
+
+function teardownLogStream() {
+    if (logState.eventSource) {
+        logState.eventSource.close();
+        logState.eventSource = null;
+    }
+}
+
+function appendLogLine(text) {
+    const scrollEl = document.getElementById('log-scroll');
+    if (!scrollEl) return;
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
+    else if (text.includes('***') && (text.includes('left') || text.includes('quit'))) line.style.color = 'var(--error)';
+    else if (text.includes('* ') && text.includes('***') === false) line.style.color = 'var(--accent)';
+    line.textContent = text;
+    scrollEl.appendChild(line);
+    if (logState.stickToBottom) scrollLogToEnd();
+}
+
+function scrollLogToEnd() {
+    const scrollEl = document.getElementById('log-scroll');
+    if (!scrollEl) return;
+    requestAnimationFrame(() => {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+        requestAnimationFrame(() => {
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+        });
     });
-    document.querySelectorAll('#log-outputs-wrapper > div').forEach(d => {
-        d.classList.toggle('hidden', d.id !== `output-${channel.replace(/#/g, '')}`);
-    });
-    document.getElementById('current-channel-title').textContent = `Logs: ${channel}`;
 }
 
-function closeLogTab(channel) {
-    if (logSources[channel]) { logSources[channel].close(); delete logSources[channel]; }
-    document.getElementById(`tab-${channel.replace(/#/g, '')}`)?.remove();
-    document.getElementById(`output-${channel.replace(/#/g, '')}`)?.remove();
-    
-    const remaining = Object.keys(logSources);
-    if (remaining.length > 0) switchLogTab(remaining[0]);
-    else closeAllLogs();
+function reloadLogsForSelection() {
+    if (!logState.channelLabel || !logState.selectedDate) return;
+    teardownLogStream();
+    const scrollEl = document.getElementById('log-scroll');
+    if (scrollEl) scrollEl.innerHTML = '';
+    logState.stickToBottom = true;
+    document.getElementById('log-jump-latest')?.classList.add('hidden');
+
+    const today = logCatalog?.calendar?.server_local_today;
+    updateLogToolbarBadges();
+
+    if (logState.selectedDate === today) {
+        const url = `/api/logs/stream?channel=${encodeURIComponent(logState.channelLabel)}&date=${encodeURIComponent(logState.selectedDate)}`;
+        const source = new EventSource(url);
+        logState.eventSource = source;
+        source.onmessage = (e) => {
+            appendLogLine(e.data);
+        };
+        source.onerror = () => {
+            /* browser reconnects EventSource; avoid noisy logs */
+        };
+    } else {
+        (async () => {
+            try {
+                const res = await fetch(
+                    `/api/logs/history?channel=${encodeURIComponent(logState.channelLabel)}&date=${encodeURIComponent(logState.selectedDate)}`
+                );
+                if (!res.ok) {
+                    appendLogLine('[ERROR] Failed to load history');
+                    return;
+                }
+                const data = await res.json();
+                const lines = Array.isArray(data.lines) ? data.lines : [];
+                const frag = document.createDocumentFragment();
+                lines.forEach((t) => {
+                    const line = document.createElement('div');
+                    line.className = 'log-line';
+                    const text = String(t);
+                    if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
+                    else if (text.includes('***') && (text.includes('left') || text.includes('quit'))) line.style.color = 'var(--error)';
+                    else if (text.includes('* ') && !text.includes('***')) line.style.color = 'var(--accent)';
+                    line.textContent = text;
+                    frag.appendChild(line);
+                });
+                scrollEl?.appendChild(frag);
+                if (data.truncated) {
+                    const note = document.createElement('div');
+                    note.className = 'log-line';
+                    note.style.color = 'var(--text-muted)';
+                    note.textContent = '[… truncated to last ' + lines.length + ' lines …]';
+                    scrollEl?.appendChild(note);
+                }
+                scrollLogToEnd();
+            } catch (e) {
+                console.error(e);
+                appendLogLine('[ERROR] History fetch failed');
+            }
+        })();
+    }
 }
 
-function closeAllLogs() {
-    Object.keys(logSources).forEach(closeLogTab);
-    document.getElementById('log-container').classList.add('hidden');
+function renderLogCalendar() {
+    if (!logCatalog?.calendar || !logState.channelLabel) return;
+    const { min_date, max_date, server_local_today } = logCatalog.calendar;
+    const minD = parseISODate(min_date);
+    const maxD = parseISODate(max_date);
+    if (!logState.calendarMonth) logState.calendarMonth = parseISODate(server_local_today) || new Date();
+
+    const monthLabel = document.getElementById('log-cal-month-label');
+    if (monthLabel) {
+        monthLabel.textContent = logState.calendarMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    }
+
+    const foot = document.getElementById('log-cal-footnote');
+    if (foot) {
+        foot.textContent = `Selectable days: ${min_date} — ${max_date} (server local). Dots = log file on disk.`;
+    }
+
+    const prev = document.getElementById('log-cal-prev');
+    const next = document.getElementById('log-cal-next');
+    const firstOfMonth = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth(), 1);
+    const firstDow = firstOfMonth.getDay();
+    const daysInMonth = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth() + 1, 0).getDate();
+
+    const prevLast = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth(), 0);
+    const nextFirst = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth() + 1, 1);
+    if (prev) {
+        prev.disabled = !!(minD && prevLast < new Date(minD.getFullYear(), minD.getMonth(), minD.getDate()));
+    }
+    if (next) {
+        next.disabled = !!(maxD && nextFirst > new Date(maxD.getFullYear(), maxD.getMonth(), maxD.getDate()));
+    }
+
+    const entry = getLogChannelEntry(logState.channelLabel);
+    const hasLogSet = new Set(entry?.dates_with_logs || []);
+
+    const grid = document.getElementById('log-cal-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    const pad = firstDow;
+    for (let i = 0; i < pad; i++) {
+        const x = document.createElement('div');
+        x.className = 'log-cal-cell';
+        x.style.visibility = 'hidden';
+        grid.appendChild(x);
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const d = new Date(logState.calendarMonth.getFullYear(), logState.calendarMonth.getMonth(), day);
+        const iso = dateISOLocal(d);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'log-cal-cell';
+        btn.textContent = String(day);
+
+        const inRange = (!minD || d >= new Date(minD.getFullYear(), minD.getMonth(), minD.getDate())) &&
+            (!maxD || d <= new Date(maxD.getFullYear(), maxD.getMonth(), maxD.getDate()));
+        if (!inRange) {
+            btn.disabled = true;
+        } else {
+            btn.addEventListener('click', () => {
+                logState.selectedDate = iso;
+                logState.calendarMonth = d;
+                document.getElementById('log-calendar-popover')?.classList.add('hidden');
+                document.getElementById('log-calendar-toggle')?.setAttribute('aria-expanded', 'false');
+                updateLogDateLabel();
+                updateLogToolbarBadges();
+                reloadLogsForSelection();
+            });
+        }
+
+        if (iso === server_local_today) btn.classList.add('today');
+        if (iso === logState.selectedDate) btn.classList.add('selected');
+        if (hasLogSet.has(iso)) btn.classList.add('has-log');
+
+        grid.appendChild(btn);
+    }
 }
 
 function updateNewsStatus(enabled, isAdmin) {
@@ -1415,10 +1689,6 @@ window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
 window.logout = logout;
-window.openLogs = openLogs;
-window.closeLogTab = closeLogTab;
-window.closeAllLogs = closeAllLogs;
-window.switchLogTab = switchLogTab;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
@@ -1505,10 +1775,6 @@ window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
 window.logout = logout;
-window.openLogs = openLogs;
-window.closeLogTab = closeLogTab;
-window.closeAllLogs = closeAllLogs;
-window.switchLogTab = switchLogTab;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;

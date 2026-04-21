@@ -235,19 +235,51 @@
             <section id="panel-logs" class="panel">
                 <div class="section-header">
                     <h1 class="section-title">Network Streams</h1>
-                    <p class="section-subtitle">Real-time interaction logs across IRC channels.</p>
+                    <p class="section-subtitle">Live and archived IRC logs (server local dates). Pick a channel, then a day within retention.</p>
                 </div>
-                <div class="card" style="margin-bottom: 1.5rem;">
-                    <h3 class="card-title">Active Channels</h3>
-                    <div id="channels" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
-                </div>
-                <div id="log-container" class="card hidden" style="padding: 0; overflow: hidden; height: 600px; display: flex; flex-direction: column;">
-                     <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
-                         <div id="current-channel-title" class="mono" style="font-weight: 700; color: var(--primary);">Channel Logs</div>
-                         <button onclick="closeAllLogs()" class="btn btn-ghost" style="padding: 0.25rem 0.5rem; font-size: 0.7rem;">Clear View</button>
-                     </div>
-                     <div id="log-tabs" style="display: flex; background: rgba(0,0,0,0.2); padding: 0.5rem 1rem; gap: 0.5rem; border-bottom: 1px solid var(--glass-border);"></div>
-                     <div id="log-outputs-wrapper" style="flex: 1; overflow-y: auto; padding: 1rem;" class="mono"></div>
+                <div class="logs-workspace">
+                    <aside class="card logs-sidebar">
+                        <div class="logs-sidebar-head">
+                            <h3 class="card-title" style="margin:0;">Channels</h3>
+                            <span class="logs-sidebar-hint mono" id="logs-retention-hint"></span>
+                        </div>
+                        <input type="search" id="logs-channel-filter" class="logs-filter-input" placeholder="Filter…" autocomplete="off" aria-label="Filter channels">
+                        <div id="logs-channel-groups" class="logs-channel-groups"></div>
+                    </aside>
+                    <div class="logs-main">
+                        <div id="logs-viewer-placeholder" class="card logs-viewer-placeholder">
+                            <p class="section-subtitle" style="margin:0;">Select a channel to load logs.</p>
+                        </div>
+                        <div id="logs-viewer" class="card logs-viewer hidden">
+                            <header class="logs-toolbar">
+                                <div class="logs-toolbar-left">
+                                    <h3 id="logs-view-title" class="logs-view-title mono">—</h3>
+                                    <div id="logs-view-badges" class="logs-view-badges"></div>
+                                </div>
+                                <div class="logs-toolbar-right">
+                                    <div class="log-calendar-wrap">
+                                        <button type="button" id="log-calendar-toggle" class="btn btn-ghost log-calendar-btn mono" aria-expanded="false" aria-haspopup="dialog">
+                                            <span class="log-calendar-btn-icon" aria-hidden="true"></span>
+                                            <span id="log-selected-date-label">—</span>
+                                        </button>
+                                        <div id="log-calendar-popover" class="log-calendar-popover hidden" role="dialog" aria-label="Choose log date">
+                                            <div class="log-calendar-head">
+                                                <button type="button" id="log-cal-prev" class="btn btn-ghost log-cal-nav" aria-label="Previous month">‹</button>
+                                                <span id="log-cal-month-label" class="mono log-cal-month-label"></span>
+                                                <button type="button" id="log-cal-next" class="btn btn-ghost log-cal-nav" aria-label="Next month">›</button>
+                                            </div>
+                                            <div class="log-cal-weekdays mono">Sun Mon Tue Wed Thu Fri Sat</div>
+                                            <div id="log-cal-grid" class="log-cal-grid"></div>
+                                            <p id="log-cal-footnote" class="log-cal-footnote mono"></p>
+                                        </div>
+                                    </div>
+                                    <button type="button" id="log-jump-latest" class="btn btn-ghost hidden">Jump to latest</button>
+                                    <button type="button" id="logs-close-view" class="btn btn-ghost">Close</button>
+                                </div>
+                            </header>
+                            <div id="log-scroll" class="logs-scroll mono" tabindex="0"></div>
+                        </div>
+                    </div>
                 </div>
             </section>
 

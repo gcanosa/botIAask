@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -47,13 +46,7 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 	dateStr := now.Format("2006-01-02")
 	timeStr := now.Format("15:04:05")
 
-	// Ensure filename safety
-	safeChannel := strings.ReplaceAll(channel, "/", "_")
-	if len(safeChannel) > 0 && (safeChannel[0] == '#' || safeChannel[0] == '&') {
-		safeChannel = safeChannel[1:]
-	} else if len(safeChannel) == 0 || (safeChannel[0] != '#' && safeChannel[0] != '&') {
-		safeChannel = serverName
-	}
+	safeChannel := ChannelFileKey(channel, serverName)
 
 	filename := fmt.Sprintf("%s_%s.log", safeChannel, dateStr)
 	fullpath := filepath.Join(logsDir, filename)
