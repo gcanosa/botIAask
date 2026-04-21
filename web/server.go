@@ -29,6 +29,7 @@ import (
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/irc"
+	"botIAask/logger"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -110,6 +111,8 @@ func (s *Server) Start() error {
 
 	// API endpoints
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/logs/catalog", s.handleLogCatalog)
+	mux.HandleFunc("/api/logs/history", s.handleLogHistory)
 	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
@@ -234,13 +237,26 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
-	channel := r.URL.Query().Get("channel")
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
 	if channel == "" {
 		http.Error(w, "Channel is required", http.StatusBadRequest)
 		return
 	}
 
-	// Set SSE headers
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	localToday := time.Now().Format("2006-01-02")
+	if date == "" {
+		date = localToday
+	}
+	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
+		http.Error(w, "invalid date", http.StatusBadRequest)
+		return
+	}
+	if date != localToday {
+		http.Error(w, "live stream is only available for server local today; use /api/logs/history for past dates", http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -252,34 +268,24 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine log file path for today
-	// Replicate logger's safeChannel logic
-	safeChannel := strings.ReplaceAll(channel, "/", "_")
-	if len(safeChannel) > 0 && (safeChannel[0] == '#' || safeChannel[0] == '&') {
-		safeChannel = safeChannel[1:]
-	}
-	
-	today := time.Now().Format("2006-01-02")
-	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", safeChannel, today))
+	key := logger.ChannelFileKey(channel, s.cfg.IRC.Server)
+	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
 
-	file, err := os.Open(logFile)
+	var file *os.File
+	var reader *bufio.Reader
+	var err error
+	file, err = os.Open(logFile)
 	if err != nil {
 		fmt.Fprintf(w, "data: Error opening log file: %v\n\n", err)
 		flusher.Flush()
-		// We don't return here because the file might be created later
-	}
-
-	var reader *bufio.Reader
-	if file != nil {
+	} else {
 		reader = bufio.NewReader(file)
 	}
 
-	// Ticker for polling new data if file is at EOF
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	// Notify client that stream is open
-	fmt.Fprintf(w, "data: [CONNECTED to %s]\n\n", channel)
+	fmt.Fprintf(w, "data: [CONNECTED %s %s]\n\n", channel, date)
 	flusher.Flush()
 
 	ctx := r.Context()
@@ -292,31 +298,40 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case <-ticker.C:
-			// If file was not open or was closed, try to open/reopen it
+			newToday := time.Now().Format("2006-01-02")
+			if newToday != date {
+				date = newToday
+				logFile = filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
+				if file != nil {
+					file.Close()
+					file = nil
+					reader = nil
+				}
+				fmt.Fprintf(w, "data: [ROLLOVER %s]\n\n", date)
+				flusher.Flush()
+			}
+
 			if file == nil {
 				file, err = os.Open(logFile)
 				if err == nil {
 					reader = bufio.NewReader(file)
 				} else {
-					continue // Still no file
+					continue
 				}
 			}
 
-			// Read all available lines
 			for {
 				line, err := reader.ReadString('\n')
 				if err != nil {
 					if err == io.EOF {
-						break // End of current data, wait for next tick
+						break
 					}
-					// Real error
 					fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
 					flusher.Flush()
 					break
 				}
-				// Send line to client
-				fmt.Fprintf(w, "data: %s", line) // line already has \n
-				fmt.Fprint(w, "\n")              // data block ends with extra \n
+				fmt.Fprintf(w, "data: %s", line)
+				fmt.Fprint(w, "\n")
 				flusher.Flush()
 			}
 		}
