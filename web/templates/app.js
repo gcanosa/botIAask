@@ -4,7 +4,6 @@ let currentStatsSource = null;
 let activityChart = null;
 let cryptoMarketChart = null;
 let cryptoChartRange = '1w';
-let forexHistoryChart = null;
 let forexChartRange = '1w';
 const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
@@ -388,6 +387,18 @@ function normalizeForexObject(raw) {
     return out;
 }
 
+const FOREX_PANEL_ORDER = ['eur_usd', 'usd_ars', 'usd_ars_blue', 'eur_ars'];
+
+function sortForexEntries(entries) {
+    const rank = new Map(FOREX_PANEL_ORDER.map((k, i) => [k, i]));
+    return [...entries].sort(([a], [b]) => {
+        const ra = rank.has(a) ? rank.get(a) : FOREX_PANEL_ORDER.length;
+        const rb = rank.has(b) ? rank.get(b) : FOREX_PANEL_ORDER.length;
+        if (ra !== rb) return ra - rb;
+        return a.localeCompare(b);
+    });
+}
+
 async function fetchFinance() {
     let data;
     try {
@@ -458,7 +469,7 @@ async function fetchFinance() {
 
         if (forexDiv) {
             const fx = normalizeForexObject(data.forex);
-            const entries = Object.entries(fx);
+            const entries = sortForexEntries(Object.entries(fx));
             if (entries.length) {
                 forexDiv.innerHTML = entries.map(([k, v]) => {
                     const m = forexMeta(k);
@@ -509,6 +520,16 @@ function formatForexChartLabel(ms) {
         return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function clearForexChartsGrid() {
+    const grid = document.getElementById('forex-charts-grid');
+    if (!grid) return;
+    grid.querySelectorAll('canvas').forEach((c) => {
+        const ch = typeof Chart !== 'undefined' && Chart.getChart ? Chart.getChart(c) : null;
+        if (ch) ch.destroy();
+    });
+    grid.innerHTML = '';
 }
 
 async function fetchCryptoChart(range) {
@@ -600,8 +621,8 @@ async function fetchForexChart(range) {
         forexChartRange = range;
     }
     const subEl = document.getElementById('forex-chart-subtitle');
-    const canvas = document.getElementById('forexHistoryChart');
-    if (!canvas) return;
+    const grid = document.getElementById('forex-charts-grid');
+    if (!grid) return;
 
     try {
         const res = await fetch(`/api/finance/forex-chart?range=${encodeURIComponent(forexChartRange)}`);
@@ -609,11 +630,7 @@ async function fetchForexChart(range) {
             if (subEl) {
                 subEl.textContent = 'Chart unavailable.';
             }
-            if (forexHistoryChart) {
-                forexHistoryChart.data.labels = [];
-                forexHistoryChart.data.datasets = [];
-                forexHistoryChart.update();
-            }
+            clearForexChartsGrid();
             return;
         }
         const data = await res.json();
@@ -621,51 +638,105 @@ async function fetchForexChart(range) {
             subEl.textContent = data.subtitle || '';
         }
 
-        const labels = (data.labels || []).map(formatForexChartLabel);
-        const datasets = (data.series || []).map((s, i) => {
-            const m = forexMeta(s.symbol);
-            const pairLabel = m.hint ? `${m.label} (${m.hint})` : (m.label || s.symbol);
-            return {
-            label: pairLabel,
-            data: (s.values || []).map((v) => (v == null ? null : v)),
-            borderColor: cryptoChartColors[i % cryptoChartColors.length],
-            backgroundColor: 'transparent',
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 1.5,
-            spanGaps: true,
-        };
-        });
+        const labelsMs = Array.isArray(data.labels) ? data.labels.map((t) => Number(t)) : [];
+        const series = Array.isArray(data.series) ? data.series : [];
 
-        if (!forexHistoryChart) {
-            forexHistoryChart = new Chart(canvas.getContext('2d'), {
+        clearForexChartsGrid();
+
+        if (!labelsMs.length || !series.length) {
+            return;
+        }
+
+        const xMin = Math.min(...labelsMs);
+        const xMax = Math.max(...labelsMs);
+
+        series.forEach((s, i) => {
+            const vals = s.values || [];
+            const points = [];
+            for (let j = 0; j < labelsMs.length && j < vals.length; j++) {
+                const v = vals[j];
+                if (v == null || typeof v !== 'number' || !Number.isFinite(v)) continue;
+                points.push({ x: labelsMs[j], y: v });
+            }
+            if (points.length < 2) return;
+
+            const m = forexMeta(s.symbol);
+            const titleText = m.hint ? `${m.label} (${m.hint})` : (m.label || s.symbol);
+
+            const cell = document.createElement('div');
+            cell.className = 'forex-mini-chart-cell';
+            cell.setAttribute('data-forex-key', s.symbol);
+
+            const h = document.createElement('h4');
+            h.className = 'forex-mini-chart-title';
+            h.textContent = titleText;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'forex-mini-chart-canvas-wrap';
+
+            const canvas = document.createElement('canvas');
+            wrap.appendChild(canvas);
+            cell.appendChild(h);
+            cell.appendChild(wrap);
+            grid.appendChild(cell);
+
+            const color = cryptoChartColors[i % cryptoChartColors.length];
+
+            new Chart(canvas.getContext('2d'), {
                 type: 'line',
-                data: { labels, datasets },
+                data: {
+                    datasets: [
+                        {
+                            label: titleText,
+                            data: points,
+                            borderColor: color,
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            spanGaps: true,
+                        },
+                    ],
+                },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    parsing: false,
                     interaction: { mode: 'index', intersect: false },
                     scales: {
                         x: {
-                            ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 10 },
+                            type: 'linear',
+                            min: xMin,
+                            max: xMax,
+                            ticks: {
+                                color: '#94a3b8',
+                                maxRotation: 45,
+                                maxTicksLimit: 5,
+                                callback(val) {
+                                    return formatForexChartLabel(val);
+                                },
+                            },
                             grid: { color: 'rgba(255,255,255,0.05)' },
                         },
                         y: {
                             ticks: {
                                 color: '#94a3b8',
-                                callback: (v) => (typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : v),
+                                callback: (v) =>
+                                    typeof v === 'number'
+                                        ? v.toLocaleString(undefined, { maximumFractionDigits: 4 })
+                                        : v,
                             },
                             grid: { color: 'rgba(255,255,255,0.05)' },
                         },
                     },
                     plugins: {
-                        legend: {
-                            display: true,
-                            position: 'bottom',
-                            labels: { color: '#94a3b8', boxWidth: 10, padding: 8, font: { size: 10 } },
-                        },
+                        legend: { display: false },
                         tooltip: {
                             callbacks: {
+                                title(items) {
+                                    const x = items[0]?.parsed?.x;
+                                    return x != null ? new Date(x).toLocaleString() : '';
+                                },
                                 label(ctx) {
                                     const v = ctx.parsed.y;
                                     if (v == null) return `${ctx.dataset.label}: —`;
@@ -676,13 +747,10 @@ async function fetchForexChart(range) {
                     },
                 },
             });
-        } else {
-            forexHistoryChart.data.labels = labels;
-            forexHistoryChart.data.datasets = datasets;
-            forexHistoryChart.update();
-        }
+        });
     } catch (e) {
         console.error('Forex chart fetch error', e);
+        clearForexChartsGrid();
     }
 }
 
