@@ -10,6 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+    <div id="rehash-toast" class="hidden" role="status" style="position:fixed;top:1rem;right:1rem;z-index:400;max-width:min(90vw,360px);padding:0.75rem 1rem;border-radius:8px;font-size:0.875rem;line-height:1.4;box-shadow:0 4px 24px rgba(0,0,0,0.18);"></div>
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar" aria-label="Main navigation">
@@ -546,6 +547,11 @@
                 <div class="section-header">
                     <h1 class="section-title">Identity Management</h1>
                     <p class="section-subtitle">Administrator access control and security configurations.</p>
+                </div>
+                <div class="card" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">Live config reload</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Re-read <span class="mono">config/config.yaml</span> into the running process (IRC connection stays up). Logged-in IRC admins receive a NOTICE.</p>
+                    <button type="button" onclick="rehashConfigFromDisk()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Rehash from disk</button>
                 </div>
                 <div class="card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">

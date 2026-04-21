@@ -41,8 +41,9 @@ var templatesFS embed.FS
 
 // Server handles the web dashboard
 type Server struct {
-	cfg        *config.Config
-	bot        *irc.Bot
+	cfgMu        sync.RWMutex
+	cfg          *config.Config
+	bot          *irc.Bot
 	rssFetcher   *rss.Fetcher
 	statsTracker *stats.Tracker
 	bookmarksDB  *bookmarks.Database
@@ -61,6 +62,8 @@ type Server struct {
 
 	marketChartRawMu    sync.Mutex
 	marketChartRawCache map[string]marketChartRawCacheEntry
+
+	rehashFn func() error
 }
 
 type marketChartRawCacheEntry struct {
@@ -77,8 +80,21 @@ type cryptoChartCacheEntry struct {
 	body []byte
 }
 
+func (s *Server) getConfig() *config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+// SetConfig replaces the in-memory config after a live reload (shared pointer with IRC/RSS).
+func (s *Server) SetConfig(cfg *config.Config) {
+	s.cfgMu.Lock()
+	s.cfg = cfg
+	s.cfgMu.Unlock()
+}
+
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehashFn func() error) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -103,6 +119,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		uploadsDB:    uploadsDB,
 		cryptoDB:     cryptoDB,
 		templates:    tmpl,
+		rehashFn:     rehashFn,
 	}
 }
 
@@ -119,6 +136,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
 	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
+	mux.HandleFunc("/api/rehash", s.handleRehash)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
@@ -154,7 +172,8 @@ func (s *Server) Start() error {
 	// Dashboard page
 	mux.HandleFunc("/", s.handleDashboard)
 
-	addr := fmt.Sprintf("%s:%d", s.cfg.Web.Host, s.cfg.Web.Port)
+	cfg := s.getConfig()
+	addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
 	log.Printf("Starting web dashboard on http://%s", addr)
 	fmt.Printf("\n--------------------------------------------------\n")
 	fmt.Printf("🚀 Web Dashboard: http://%s\n", addr)
@@ -206,23 +225,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := map[string]interface{}{
-		"version":     meta.Version,
-		"uptime":      s.bot.GetUptime(),
-		"connected":   s.bot.IsConnected(),
-		"server":      s.cfg.IRC.Server,
-		"nickname":    s.cfg.IRC.Nickname,
-		"channels":    s.cfg.IRC.Channels,
-		"ai_model":    s.cfg.AI.Model,
-		"ai_status":   "Online",
-		"ai_requests": s.bot.GetAIRequestCount(),
-		"rss_enabled": s.rssFetcher.IsEnabled(),
-		"stats_enabled": s.statsTracker.IsEnabled(),
-		"start_time":  s.bot.GetStartTime().Format(time.RFC3339),
-		"is_admin":    isAdmin,
+		"version":               meta.Version,
+		"uptime":                s.bot.GetUptime(),
+		"connected":             s.bot.IsConnected(),
+		"server":                s.getConfig().IRC.Server,
+		"nickname":              s.getConfig().IRC.Nickname,
+		"channels":              s.getConfig().IRC.Channels,
+		"ai_model":              s.getConfig().AI.Model,
+		"ai_status":             "Online",
+		"ai_requests":           s.bot.GetAIRequestCount(),
+		"rss_enabled":           s.rssFetcher.IsEnabled(),
+		"stats_enabled":         s.statsTracker.IsEnabled(),
+		"start_time":            s.bot.GetStartTime().Format(time.RFC3339),
+		"is_admin":              isAdmin,
 		"needs_password_change": needsChange,
-		"irc_authenticated": s.bot.IsAuthenticated(),
-		"pending_pastes":  pendingPastes,
-		"pending_uploads": pendingUploads,
+		"irc_authenticated":     s.bot.IsAuthenticated(),
+		"pending_pastes":        pendingPastes,
+		"pending_uploads":       pendingUploads,
 	}
 
 	if isAdmin && s.statsTracker.IsEnabled() {
@@ -326,7 +345,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := logger.ChannelFileKey(channel, s.cfg.IRC.Server)
+	key := logger.ChannelFileKey(channel, s.getConfig().IRC.Server)
 	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
 
 	var file *os.File
@@ -473,7 +492,7 @@ func (s *Server) handleRSSNews(w http.ResponseWriter, r *http.Request) {
 		}
 
 		lastFetch := s.rssFetcher.GetLastFetchTime()
-		
+
 		response := map[string]interface{}{
 			"news":        items,
 			"page":        page,
@@ -529,6 +548,28 @@ func (s *Server) handleRSSFetchNow(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "Fetching started"})
 }
 
+func (s *Server) handleRehash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.rehashFn == nil {
+		http.Error(w, "Rehash unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.rehashFn(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.checkAuth(r)
 	if !isAdmin {
@@ -538,10 +579,10 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		response := map[string]interface{}{
-			"interval_minutes":  s.cfg.RSS.IntervalMinutes,
-			"retention_count":   s.cfg.RSS.RetentionCount,
-			"feed_urls":         s.cfg.RSS.FeedURLs,
-			"announce_to_irc":   s.cfg.RSS.AnnounceToIRCEnabled(),
+			"interval_minutes": s.getConfig().RSS.IntervalMinutes,
+			"retention_count":  s.getConfig().RSS.RetentionCount,
+			"feed_urls":        s.getConfig().RSS.FeedURLs,
+			"announce_to_irc":  s.getConfig().RSS.AnnounceToIRCEnabled(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -553,7 +594,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			IntervalMinutes int      `json:"interval_minutes"`
 			RetentionCount  int      `json:"retention_count"`
 			FeedURLs        []string `json:"feed_urls"`
-			AnnounceToIRC *bool    `json:"announce_to_irc,omitempty"`
+			AnnounceToIRC   *bool    `json:"announce_to_irc,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -561,7 +602,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Update config
+		s.cfgMu.Lock()
 		oldInterval := s.cfg.RSS.IntervalMinutes
 		s.cfg.RSS.IntervalMinutes = req.IntervalMinutes
 		s.cfg.RSS.RetentionCount = req.RetentionCount
@@ -570,12 +611,12 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			v := *req.AnnounceToIRC
 			s.cfg.RSS.AnnounceToIRC = &v
 		}
-
-		// Save config
 		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.cfgMu.Unlock()
 
 		// Restart fetcher if enabled and interval changed
 		if s.rssFetcher.IsEnabled() && oldInterval != req.IntervalMinutes {
@@ -933,7 +974,7 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) effectiveMaxFileMB() int {
-	mb := s.cfg.Uploads.MaxFileMB
+	mb := s.getConfig().Uploads.MaxFileMB
 	if mb <= 0 {
 		return 200
 	}
@@ -948,7 +989,7 @@ func (s *Server) maxUploadBytes() int64 {
 const multipartSlack int64 = 1 << 20
 
 func (s *Server) clientHostFromRequest(r *http.Request) string {
-	if s.cfg.Web.TrustForwardedFor {
+	if s.getConfig().Web.TrustForwardedFor {
 		xff := r.Header.Get("X-Forwarded-For")
 		if xff != "" {
 			parts := strings.Split(xff, ",")
@@ -1030,7 +1071,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		err := s.templates.ExecuteTemplate(w, "upload.html", map[string]interface{}{
 			"Upload":  upload,
-			"BaseURL": s.cfg.Web.BaseURL,
+			"BaseURL": s.getConfig().Web.BaseURL,
 		})
 		if err != nil {
 			log.Printf("ExecuteTemplate upload.html error: %v", err)
@@ -1072,9 +1113,9 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 	if r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		err := s.templates.ExecuteTemplate(w, "file_upload.html", map[string]interface{}{
-			"Upload":     sess,
-			"BaseURL":    s.cfg.Web.BaseURL,
-			"MaxFileMB":  s.effectiveMaxFileMB(),
+			"Upload":    sess,
+			"BaseURL":   s.getConfig().Web.BaseURL,
+			"MaxFileMB": s.effectiveMaxFileMB(),
 		})
 		if err != nil {
 			log.Printf("ExecuteTemplate file_upload.html error: %v", err)
@@ -1201,7 +1242,7 @@ func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bot.SendMessage(channel, fmt.Sprintf("\x0304[CANCEL]\x03 User %s cancelled their upload session.", username))
-	
+
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>")
 	fmt.Fprintf(w, "<h1 style='color:#f87171;'>Session Cancelled</h1>")
@@ -1384,9 +1425,9 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
 	if err == nil {
-		pubURL := fmt.Sprintf("%s/p/%s", s.cfg.Web.BaseURL, ticketID)
+		pubURL := fmt.Sprintf("%s/p/%s", s.getConfig().Web.BaseURL, ticketID)
 		if upload.IsFile() {
-			pubURL = fmt.Sprintf("%s/f/%s", s.cfg.Web.BaseURL, ticketID)
+			pubURL = fmt.Sprintf("%s/f/%s", s.getConfig().Web.BaseURL, ticketID)
 		}
 		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s", ticketID, pubURL))
 	}
@@ -2070,11 +2111,14 @@ func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "max_file_mb must be between 1 and 2048", http.StatusBadRequest)
 			return
 		}
+		s.cfgMu.Lock()
 		s.cfg.Uploads.MaxFileMB = req.MaxFileMB
 		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.cfgMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	default:

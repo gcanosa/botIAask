@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"log"
 	"sync"
 	"time"
@@ -35,7 +36,10 @@ type Tracker struct {
 	subMu       sync.RWMutex
 
 	enabled bool
-	quit    chan struct{}
+	loopMu  sync.Mutex
+	runWG   sync.WaitGroup
+	// runCancel stops the active snapshot loop (restarted on ApplyConfig / SetEnabled / Start).
+	runCancel context.CancelFunc
 }
 
 // NewTracker initializes a new statistics tracker.
@@ -46,39 +50,73 @@ func NewTracker(cfg *config.Config, db *Database) *Tracker {
 		users:       make(map[string]struct{}),
 		subscribers: make(map[chan StatEntry]bool),
 		enabled:     cfg.Stats.Enabled,
-		quit:        make(chan struct{}),
 	}
 }
 
-// Start begins the snapshot loop.
+// Start begins the snapshot loop when stats are enabled.
 func (t *Tracker) Start() {
-	if !t.enabled {
+	t.subMu.Lock()
+	t.enabled = t.cfg.Stats.Enabled
+	t.subMu.Unlock()
+	t.restartTrackingLoop()
+}
+
+func (t *Tracker) restartTrackingLoop() {
+	t.loopMu.Lock()
+	if t.runCancel != nil {
+		t.runCancel()
+		t.runCancel = nil
+	}
+	t.loopMu.Unlock()
+	t.runWG.Wait()
+
+	if !t.IsEnabled() {
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.loopMu.Lock()
+	t.runCancel = cancel
+	t.loopMu.Unlock()
+	t.runWG.Add(1)
+	go func() {
+		defer t.runWG.Done()
+		t.runLoop(ctx)
+	}()
+}
 
-	interval := time.Duration(t.cfg.Stats.Interval) * time.Second
-	if interval <= 0 {
-		interval = 60 * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	log.Printf("Stats tracker started (Interval: %v)", interval)
-
+func (t *Tracker) runLoop(ctx context.Context) {
 	for {
+		if !t.IsEnabled() {
+			return
+		}
+		t.subMu.RLock()
+		interval := time.Duration(t.cfg.Stats.Interval) * time.Second
+		t.subMu.RUnlock()
+		if interval <= 0 {
+			interval = 60 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		select {
 		case <-ticker.C:
+			ticker.Stop()
+			if !t.IsEnabled() {
+				return
+			}
 			t.snapshot()
-		case <-t.quit:
+		case <-ctx.Done():
+			ticker.Stop()
 			return
 		}
 	}
 }
 
-// Stop halts the snapshot loop.
-func (t *Tracker) Stop() {
-	close(t.quit)
+// ApplyConfig replaces config and restarts the snapshot loop to pick up interval / enabled flags.
+func (t *Tracker) ApplyConfig(cfg *config.Config) {
+	t.cfg = cfg
+	t.subMu.Lock()
+	t.enabled = cfg.Stats.Enabled
+	t.subMu.Unlock()
+	t.restartTrackingLoop()
 }
 
 // LogMessage records a message event.
@@ -229,6 +267,7 @@ func (t *Tracker) SetEnabled(enabled bool) {
 	t.subMu.Lock()
 	t.enabled = enabled
 	t.subMu.Unlock()
+	t.restartTrackingLoop()
 }
 
 // Subscribe returns a channel that receives real-time stat snapshots.

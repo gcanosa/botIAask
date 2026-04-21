@@ -8,8 +8,8 @@ import (
 
 	"botIAask/config"
 	"github.com/mmcdole/gofeed"
-	"net/http"
 	"io"
+	"net/http"
 	"net/url"
 )
 
@@ -19,12 +19,12 @@ type BotInterface interface {
 }
 
 type Fetcher struct {
-	cfg      *config.Config
-	bot      BotInterface
-	db       *Database
-	mu       sync.Mutex
-	enabled  bool
-	stopChan chan struct{}
+	cfg       *config.Config
+	bot       BotInterface
+	db        *Database
+	mu        sync.Mutex
+	enabled   bool
+	stopChan  chan struct{}
 	lastFetch time.Time
 	lfMu      sync.RWMutex
 }
@@ -85,7 +85,7 @@ func (f *Fetcher) Stop() {
 func (f *Fetcher) SetEnabled(enabled bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	
+
 	if f.enabled == enabled {
 		return
 	}
@@ -104,6 +104,20 @@ func (f *Fetcher) IsEnabled() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.enabled
+}
+
+// ApplyConfig swaps in a new root config and restarts the fetch loop when RSS.Enabled or the ticker interval must change.
+func (f *Fetcher) ApplyConfig(cfg *config.Config) {
+	f.mu.Lock()
+	f.cfg = cfg
+	f.mu.Unlock()
+	was := f.IsEnabled()
+	if was {
+		f.Stop()
+	}
+	if cfg.RSS.Enabled {
+		f.SetEnabled(true)
+	}
 }
 
 func (f *Fetcher) GetLastFetchTime() time.Time {
@@ -168,10 +182,10 @@ func (f *Fetcher) Fetch() {
 	// Send new entries to IRC with anti-spam delay
 	// Sort by PubDate to send oldest first among the new ones
 	// Actually we might want to sort all newEntries by PubDate if they come from different feeds
-	
+
 	for i := len(newEntries) - 1; i >= 0; i-- {
 		entry := newEntries[i]
-		
+
 		// Shorten link and store it in entry
 		entry.ShortLink = ShortenURL(entry.Link)
 
@@ -224,7 +238,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			if count >= limit {
 				break
 			}
-			
+
 			id := item.GUID
 			if id == "" {
 				id = item.Link
@@ -232,13 +246,13 @@ func (f *Fetcher) Backfill(limit int) int {
 			if id == "" {
 				continue
 			}
-			
+
 			exists, _, err := f.db.GetEntryStatus(id)
 			if err != nil {
 				log.Printf("[RSS] DB Error during backfill: %v", err)
 				continue
 			}
-			
+
 			if !exists {
 				pubDate := time.Now()
 				if item.PublishedParsed != nil {
@@ -262,31 +276,30 @@ func (f *Fetcher) Backfill(limit int) int {
 	return count
 }
 
-
 func ShortenURL(longURL string) string {
 	if longURL == "" {
 		return ""
 	}
-	
+
 	apiURL := fmt.Sprintf("https://is.gd/create.php?format=simple&url=%s", url.QueryEscape(longURL))
-	
+
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		log.Printf("[RSS] Error shortening URL: %v", err)
 		return longURL // Fallback to long URL
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[RSS] Shortener returned status: %s", resp.Status)
 		return longURL
 	}
-	
+
 	shortURL, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[RSS] Error reading shortener response: %v", err)
 		return longURL
 	}
-	
+
 	return string(shortURL)
 }
