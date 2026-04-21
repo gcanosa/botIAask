@@ -4,33 +4,17 @@
 !_TAG_PROGRAM_NAME	Exuberant Ctags	//
 !_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
 !_TAG_PROGRAM_VERSION	5.8	//
+cancelSession	web/templates/file_upload.html	/^        function cancelSession() {$/;"	f
 cancelSession	web/templates/upload.html	/^        function cancelSession() {$/;"	f
-changeBookmarkPage	web/templates/app.js	/^function changeBookmarkPage(d) {$/;"	f
-changeNewsPage	web/templates/app.js	/^function changeNewsPage(d) {$/;"	f
-changePastePage	web/templates/app.js	/^function changePastePage(d) {$/;"	f
 closeAllLogs	web/templates/app.js	/^function closeAllLogs() {$/;"	f
 closeLogTab	web/templates/app.js	/^function closeLogTab(channel) {$/;"	f
-const.eur_ars	web/templates/app.js	/^            'eur_ars': 'EUR\/ARS'$/;"	p
-const.eur_usd	web/templates/app.js	/^            'eur_usd': 'EUR\/USD',$/;"	p
-const.usd_ars	web/templates/app.js	/^            'usd_ars': 'USD\/ARS (Official)',$/;"	p
-const.usd_ars_blue	web/templates/app.js	/^            'usd_ars_blue': 'USD\/ARS (Blue)',$/;"	p
-debounceNewsSearch	web/templates/app.js	/^function debounceNewsSearch() {$/;"	f
-debounceSearch	web/templates/app.js	/^function debounceSearch() {$/;"	f
 generateLineNumbers	web/templates/paste.html	/^        function generateLineNumbers() {$/;"	f
-hideLogin	web/templates/app.js	/^function hideLogin() { $/;"	f
 init	web/templates/paste.html	/^        function init() {$/;"	f
-initChart	web/templates/app.js	/^function initChart() {$/;"	f
 openLogs	web/templates/app.js	/^function openLogs(channel) {$/;"	f
-showForcePassword	web/templates/app.js	/^function showForcePassword() {$/;"	f
-showLogin	web/templates/app.js	/^function showLogin() { $/;"	f
 showPanel	web/templates/app.js	/^function showPanel(panelId) {$/;"	f
-startStatsStream	web/templates/app.js	/^function startStatsStream() {$/;"	f
-stopStatsStream	web/templates/app.js	/^function stopStatsStream() { if (currentStatsSource) { currentStatsSource.close(); currentStatsSource = null; } }$/;"	f
 switchLogTab	web/templates/app.js	/^function switchLogTab(channel) {$/;"	f
 toggleHighlight	web/templates/paste.html	/^        function toggleHighlight() {$/;"	f
 toggleLines	web/templates/paste.html	/^        function toggleLines() {$/;"	f
 updateAdminView	web/templates/app.js	/^function updateAdminView(isAdmin) {$/;"	f
-updateAdminsUI	web/templates/app.js	/^function updateAdminsUI(nicks, chans) {$/;"	f
 updateIRCAuthStatus	web/templates/app.js	/^function updateIRCAuthStatus(authenticated) {$/;"	f
 updateNewsStatus	web/templates/app.js	/^function updateNewsStatus(enabled, isAdmin) {$/;"	f
-updateStatsStatus	web/templates/app.js	/^function updateStatsStatus(enabled, isAdmin) {$/;"	f
