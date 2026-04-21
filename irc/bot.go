@@ -313,6 +313,21 @@ func (b *Bot) Start() error {
 			b.tracker.LogJoin()
 			b.updateTrackerAdmins()
 		}
+
+		if b.bookmarksDB != nil && bookmarks.IRCCaseFoldNick(sender) != bookmarks.IRCCaseFoldNick(b.cfg.IRC.Nickname) {
+			rems, err := b.bookmarksDB.ListReminders(sender)
+			if err != nil {
+				if b.cfg.Bot.Debug {
+					log.Printf("[DEBUG] ListReminders on JOIN: %v", err)
+				}
+			} else {
+				const maxJoinNoteBytes = 380
+				for _, r := range rems {
+					note := truncateReminderNotice(r.Note, maxJoinNoteBytes)
+					b.sendNotice(sender, fmt.Sprintf("[Reminder %s] %s", r.PublicID, note))
+				}
+			}
+		}
 	})
 
 	b.conn.AddCallback("PART", func(e ircmsg.Message) {
@@ -450,8 +465,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto", 
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -829,6 +844,78 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	if strings.HasPrefix(message, b.prefix+"reminder") {
+		if b.bookmarksDB == nil {
+			b.sendPrivmsg(target, "Bookmarks database not initialized.")
+			return
+		}
+		body := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"reminder"))
+		if body == "" {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list", b.prefix, b.prefix, b.prefix))
+			return
+		}
+		firstSpace := strings.IndexByte(body, ' ')
+		var sub, rest string
+		if firstSpace < 0 {
+			sub = body
+			rest = ""
+		} else {
+			sub = strings.TrimSpace(body[:firstSpace])
+			rest = strings.TrimSpace(body[firstSpace:])
+		}
+		switch strings.ToLower(sub) {
+		case "add":
+			if rest == "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note>", b.prefix))
+				return
+			}
+			id, err := b.bookmarksDB.AddReminder(sender, rest)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error adding reminder: %v", sender, err))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder added (id %s).", sender, id))
+		case "del":
+			fields := strings.Fields(rest)
+			if len(fields) < 1 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder del <id>", b.prefix))
+				return
+			}
+			pid := fields[0]
+			ok, err := b.bookmarksDB.DeleteReminder(sender, pid)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error deleting reminder: %v", sender, err))
+				return
+			}
+			if !ok {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: No reminder with that id, or not yours.", sender))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder %s deleted.", sender, pid))
+		case "list":
+			if rest != "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder list", b.prefix))
+				return
+			}
+			rems, err := b.bookmarksDB.ListReminders(sender)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error listing reminders: %v", sender, err))
+				return
+			}
+			if len(rems) == 0 {
+				return
+			}
+			const maxListNoteBytes = 120
+			for _, r := range rems {
+				note := truncateReminderNotice(r.Note, maxListNoteBytes)
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, note))
+			}
+		default:
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list", b.prefix, b.prefix, b.prefix))
+		}
+		return
+	}
+
 	// Handle !spec command (Restored)
 	if strings.HasPrefix(message, b.prefix+"spec") {
 		spec := "System Prompt: You are a helpful IRC bot. Keep responses concise and suitable for IRC."
@@ -1095,6 +1182,22 @@ func (b *Bot) SendMessage(target, message string) {
 func (b *Bot) sendPrivmsg(target, message string) {
 	b.conn.Privmsg(target, message)
 	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
+}
+
+// sendNotice wraps conn.Notice and logs outbound notices (e.g. join reminders).
+func (b *Bot) sendNotice(target, message string) {
+	b.conn.Notice(target, message)
+	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventNotice, b.cfg.IRC.Nickname, message, "")
+}
+
+func truncateReminderNotice(s string, maxBytes int) string {
+	if maxBytes <= 3 {
+		return "..."
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	return s[:maxBytes-3] + "..."
 }
 
 // formatDuration formats a time.Duration into a human-readable string.
