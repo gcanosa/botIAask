@@ -53,6 +53,7 @@ func NewAuthDatabase(dbPath string) (*AuthDatabase, error) {
 
 	// Migration: Add needs_password_change if it doesn't exist
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN needs_password_change INTEGER DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN ui_theme TEXT DEFAULT 'dark'")
 
 	return &AuthDatabase{db: db}, nil
 }
@@ -226,6 +227,28 @@ func (a *AuthDatabase) UpdateUserPassword(id string, newPassword string) error {
 
 func (a *AuthDatabase) RemoveUser(id string) error {
 	_, err := a.db.Exec("DELETE FROM web_users WHERE id = ?", id)
+	return err
+}
+
+// GetUITheme returns stored theme for the user, or "dark" if unset.
+func (a *AuthDatabase) GetUITheme(userID int) (string, error) {
+	var theme sql.NullString
+	err := a.db.QueryRow("SELECT ui_theme FROM web_users WHERE id = ?", userID).Scan(&theme)
+	if err == sql.ErrNoRows {
+		return "dark", nil
+	}
+	if err != nil {
+		return "dark", err
+	}
+	if !theme.Valid || theme.String == "" {
+		return "dark", nil
+	}
+	return theme.String, nil
+}
+
+// SetUITheme persists UI theme (caller validates allowed values).
+func (a *AuthDatabase) SetUITheme(userID int, theme string) error {
+	_, err := a.db.Exec("UPDATE web_users SET ui_theme = ? WHERE id = ?", theme, userID)
 	return err
 }
 

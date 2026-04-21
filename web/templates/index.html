@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,6 +19,14 @@
             </div>
 
             <nav class="nav-menu">
+                <div class="nav-item nav-theme-row">
+                    <label for="theme-select" class="theme-select-label">Theme</label>
+                    <select id="theme-select" class="theme-select" aria-label="Color theme" disabled onchange="onThemeSelectChange()">
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="mono">Mono</option>
+                    </select>
+                </div>
                 <div class="nav-item">
                     <a href="#dashboard" class="nav-link active" onclick="showPanel('dashboard')">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
@@ -136,9 +144,14 @@
                 <div class="card" style="margin-bottom: 2rem;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">System Activity</h3>
-                        <div id="timeframe-selector" style="display: flex; gap: 0.5rem;">
-                            <button onclick="changeTimeframe('1h')" data-time="1h" class="btn btn-ghost active" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1H</button>
-                            <button onclick="changeTimeframe('1d')" data-time="1d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1D</button>
+                        <div id="timeframe-selector" class="timeframe-selector" role="group" aria-label="Activity chart range">
+                            <button type="button" onclick="changeTimeframe('1h')" data-time="1h" class="btn btn-ghost active" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1H</button>
+                            <button type="button" onclick="changeTimeframe('6h')" data-time="6h" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">6H</button>
+                            <button type="button" onclick="changeTimeframe('1d')" data-time="1d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1D</button>
+                            <button type="button" onclick="changeTimeframe('5d')" data-time="5d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">5D</button>
+                            <button type="button" onclick="changeTimeframe('1m')" data-time="1m" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1M</button>
+                            <button type="button" onclick="changeTimeframe('6m')" data-time="6m" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">6M</button>
+                            <button type="button" onclick="changeTimeframe('1y')" data-time="1y" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1Y</button>
                         </div>
                     </div>
                     <div style="height: 300px;">

@@ -16,6 +16,33 @@ let forexChartRange = '1w';
 const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
 
+const VALID_THEMES = ['dark', 'light', 'mono'];
+
+function normalizeTheme(t, fallback = 'light') {
+    return VALID_THEMES.includes(t) ? t : fallback;
+}
+
+function applyTheme(theme) {
+    const t = normalizeTheme(theme, 'light');
+    document.documentElement.setAttribute('data-theme', t);
+    syncActivityChartColors();
+}
+
+function syncThemeSelectFromState(isAdmin, serverTheme) {
+    const sel = document.getElementById('theme-select');
+    if (!sel) return;
+    if (!isAdmin) {
+        sel.value = 'light';
+        sel.disabled = true;
+        applyTheme('light');
+        return;
+    }
+    sel.disabled = false;
+    const t = normalizeTheme(serverTheme, 'dark');
+    sel.value = t;
+    applyTheme(t);
+}
+
 // Routing logic
 function showPanel(panelId) {
     // Update links
@@ -120,7 +147,8 @@ async function fetchStatus() {
         const res = await fetch('/api/status');
         if (!res.ok) throw new Error('Status fetch failed');
         const data = await res.json();
-        
+        lastIsAdmin = data.is_admin;
+
         document.getElementById('uptime').textContent = data.uptime;
         document.getElementById('server').textContent = (data.nickname || 'Bot') + ' @ ' + data.server;
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
@@ -133,7 +161,11 @@ async function fetchStatus() {
         // State updates
         updateAdminView(data.is_admin);
         updateIRCAuthStatus(data.irc_authenticated);
-        lastIsAdmin = data.is_admin;
+        if (data.is_admin) {
+            syncThemeSelectFromState(true, data.ui_theme);
+        } else {
+            syncThemeSelectFromState(false, 'light');
+        }
 
         const pendBanner = document.getElementById('pending-approvals-banner');
         const pendText = document.getElementById('pending-approvals-banner-text');
@@ -1029,13 +1061,69 @@ async function fetchForexChart(range) {
 }
 
 let currentTimeframe = '1h';
+let statsEnabledState = false;
+
+function formatActivityChartLabel(d, tf) {
+    const t = d instanceof Date ? d : new Date(d);
+    if (Number.isNaN(t.getTime())) return '';
+    switch (tf) {
+        case '1h':
+            return t.toLocaleString([], { hour: '2-digit', minute: '2-digit' });
+        case '6h':
+            return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        case '1d':
+            return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        case '5d':
+            return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' });
+        case '1m':
+        case '6m':
+            return t.toLocaleString([], { month: 'short', day: 'numeric' });
+        case '1y':
+            return t.toLocaleString([], { month: 'short', year: 'numeric' });
+        default:
+            return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+}
+
+function activityChartLiveMaxPoints() {
+    return 60;
+}
+
+function syncActivityChartColors() {
+    if (!activityChart) return;
+    const st = getComputedStyle(document.documentElement);
+    const primary = (st.getPropertyValue('--chart-line-a').trim() || '#38bdf8');
+    const accent = (st.getPropertyValue('--chart-line-b').trim() || '#c084fc');
+    const grid = st.getPropertyValue('--chart-grid').trim() || 'rgba(255,255,255,0.05)';
+    const tick = st.getPropertyValue('--chart-tick').trim() || '#94a3b8';
+    const fillA = st.getPropertyValue('--chart-fill-a').trim() || 'rgba(56, 189, 248, 0.1)';
+    const fillB = st.getPropertyValue('--chart-fill-b').trim() || 'rgba(192, 132, 252, 0.1)';
+    activityChart.data.datasets[0].borderColor = primary;
+    activityChart.data.datasets[0].backgroundColor = fillA;
+    activityChart.data.datasets[1].borderColor = accent;
+    activityChart.data.datasets[1].backgroundColor = fillB;
+    activityChart.options.scales.y.grid.color = grid;
+    activityChart.options.scales.y.ticks.color = tick;
+    activityChart.options.scales.x.ticks.color = tick;
+    activityChart.update('none');
+}
+
+function refreshStatsStreamState() {
+    if (!statsEnabledState || !lastIsAdmin || currentTimeframe !== '1h') {
+        stopStatsStream();
+        return;
+    }
+    startStatsStream();
+}
+
 function updateStatsStatus(enabled, isAdmin) {
+    statsEnabledState = enabled;
     const btn = document.getElementById('stats-toggle');
     const indicator = document.getElementById('stats-indicator');
     if (enabled) {
         indicator.classList.add('pulse');
         indicator.style.background = 'var(--primary)';
-        if (isAdmin) startStatsStream();
+        refreshStatsStreamState();
     } else {
         indicator.classList.remove('pulse');
         indicator.style.background = 'var(--text-muted)';
@@ -1069,6 +1157,7 @@ function initChart() {
             plugins: { legend: { display: false } }
         }
     });
+    syncActivityChartColors();
 }
 
 async function fetchHistory(tf) {
@@ -1086,22 +1175,24 @@ async function fetchHistory(tf) {
         const raw = await res.json();
         const data = Array.isArray(raw) ? raw : [];
 
-        const format = tf === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
-        activityChart.data.labels = data.map(e => new Date(e.timestamp).toLocaleTimeString([], format));
+        activityChart.data.labels = data.map(e => formatActivityChartLabel(new Date(e.timestamp), tf));
         activityChart.data.datasets[0].data = data.map(e => e.messages);
         activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
         activityChart._seenTs = new Set(data.map(e => new Date(e.timestamp).getTime()));
+        syncActivityChartColors();
         activityChart.update();
+        refreshStatsStreamState();
     } catch (err) {
         console.error('Stats history fetch error', err);
     }
 }
 
 function startStatsStream() {
+    if (currentTimeframe !== '1h' || !statsEnabledState || !lastIsAdmin) return;
     if (currentStatsSource) return;
     currentStatsSource = new EventSource('/api/stats/stream');
     currentStatsSource.onmessage = (e) => {
-        if (!activityChart) return;
+        if (!activityChart || currentTimeframe !== '1h') return;
         let entry;
         try {
             entry = JSON.parse(e.data);
@@ -1114,16 +1205,14 @@ function startStatsStream() {
         if (!activityChart._seenTs) activityChart._seenTs = new Set();
         activityChart._seenTs.add(ts);
 
-        const format = currentTimeframe === '1h' ? { hour: '2-digit', minute:'2-digit'} : { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'};
-
-        activityChart.data.labels.push(new Date(entry.timestamp).toLocaleTimeString([], format));
+        activityChart.data.labels.push(formatActivityChartLabel(new Date(entry.timestamp), '1h'));
         activityChart.data.datasets[0].data.push(entry.messages);
         activityChart.data.datasets[1].data.push(entry.ai_requests);
 
-        const limit = currentTimeframe === '1h' ? 30 : 100;
+        const limit = activityChartLiveMaxPoints();
         if (activityChart.data.labels.length > limit) {
-             activityChart.data.labels.shift();
-             activityChart.data.datasets.forEach(d => d.data.shift());
+            activityChart.data.labels.shift();
+            activityChart.data.datasets.forEach(d => d.data.shift());
         }
         activityChart.update('none');
     };
@@ -1683,12 +1772,31 @@ async function updatePassword() {
     }
 }
 
+async function onThemeSelectChange() {
+    const sel = document.getElementById('theme-select');
+    if (!sel || sel.disabled) return;
+    const v = normalizeTheme(sel.value, 'dark');
+    applyTheme(v);
+    try {
+        const res = await fetch('/api/me/ui-theme', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ theme: v }),
+        });
+        if (!res.ok) await fetchStatus();
+    } catch (e) {
+        console.error(e);
+        await fetchStatus();
+    }
+}
+
 // Global functions exposed to window
 window.showPanel = showPanel;
 window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
 window.logout = logout;
+window.onThemeSelectChange = onThemeSelectChange;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
@@ -1769,12 +1877,13 @@ async function addUser() {
     if (res.ok) { window.hideAddUser(); fetchUsers(); }
 }
 
-// Global functions exposed to window
+// Global functions exposed to window (re-export for late-loaded handlers)
 window.showPanel = showPanel;
 window.showLogin = showLogin;
 window.hideLogin = hideLogin;
 window.login = login;
 window.logout = logout;
+window.onThemeSelectChange = onThemeSelectChange;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
