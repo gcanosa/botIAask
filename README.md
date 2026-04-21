@@ -78,6 +78,8 @@
 | `-version` | Displays current version information. |
 | `-about` | Shows project details and developer info. |
 
+In **`config/config.yaml`**, under `rss`, **`announce_to_irc`** defaults to `true`. Set it to `false` to keep fetching and updating the local news database without posting to IRC (avoids flooding the channel after long downtime). You can also run **`-updatenews [limit]`** once to backfill the database before starting the bot.
+
 ---
 
 ## 💬 IRC Commands

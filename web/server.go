@@ -460,9 +460,10 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		response := map[string]interface{}{
-			"interval_minutes": s.cfg.RSS.IntervalMinutes,
-			"retention_count":  s.cfg.RSS.RetentionCount,
-			"feed_urls":        s.cfg.RSS.FeedURLs,
+			"interval_minutes":  s.cfg.RSS.IntervalMinutes,
+			"retention_count":   s.cfg.RSS.RetentionCount,
+			"feed_urls":         s.cfg.RSS.FeedURLs,
+			"announce_to_irc":   s.cfg.RSS.AnnounceToIRCEnabled(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -474,6 +475,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			IntervalMinutes int      `json:"interval_minutes"`
 			RetentionCount  int      `json:"retention_count"`
 			FeedURLs        []string `json:"feed_urls"`
+			AnnounceToIRC *bool    `json:"announce_to_irc,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -486,6 +488,10 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 		s.cfg.RSS.IntervalMinutes = req.IntervalMinutes
 		s.cfg.RSS.RetentionCount = req.RetentionCount
 		s.cfg.RSS.FeedURLs = req.FeedURLs
+		if req.AnnounceToIRC != nil {
+			v := *req.AnnounceToIRC
+			s.cfg.RSS.AnnounceToIRC = &v
+		}
 
 		// Save config
 		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
