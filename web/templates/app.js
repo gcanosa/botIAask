@@ -17,9 +17,18 @@ const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24'
 let lastIsAdmin = false;
 
 const VALID_THEMES = ['dark', 'light', 'mono'];
+const UI_THEME_STORAGE_KEY = 'botIAask_ui_theme';
 
 function normalizeTheme(t, fallback = 'light') {
     return VALID_THEMES.includes(t) ? t : fallback;
+}
+
+function readGuestTheme() {
+    try {
+        return normalizeTheme(localStorage.getItem(UI_THEME_STORAGE_KEY), 'light');
+    } catch {
+        return 'light';
+    }
 }
 
 function applyTheme(theme) {
@@ -28,17 +37,13 @@ function applyTheme(theme) {
     syncActivityChartColors();
 }
 
-function syncThemeSelectFromState(isAdmin, serverTheme) {
+function syncThemeSelectFromState(isAuthenticated, serverTheme) {
     const sel = document.getElementById('theme-select');
     if (!sel) return;
-    if (!isAdmin) {
-        sel.value = 'light';
-        sel.disabled = true;
-        applyTheme('light');
-        return;
-    }
     sel.disabled = false;
-    const t = normalizeTheme(serverTheme, 'dark');
+    const t = isAuthenticated
+        ? normalizeTheme(serverTheme, 'dark')
+        : readGuestTheme();
     sel.value = t;
     applyTheme(t);
 }
@@ -161,11 +166,7 @@ async function fetchStatus() {
         // State updates
         updateAdminView(data.is_admin);
         updateIRCAuthStatus(data.irc_authenticated);
-        if (data.is_admin) {
-            syncThemeSelectFromState(true, data.ui_theme);
-        } else {
-            syncThemeSelectFromState(false, 'light');
-        }
+        syncThemeSelectFromState(!!data.is_admin, data.ui_theme);
 
         const pendBanner = document.getElementById('pending-approvals-banner');
         const pendText = document.getElementById('pending-approvals-banner-text');
@@ -1779,19 +1780,27 @@ async function updatePassword() {
 
 async function onThemeSelectChange() {
     const sel = document.getElementById('theme-select');
-    if (!sel || sel.disabled) return;
+    if (!sel) return;
     const v = normalizeTheme(sel.value, 'dark');
     applyTheme(v);
-    try {
-        const res = await fetch('/api/me/ui-theme', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ theme: v }),
-        });
-        if (!res.ok) await fetchStatus();
-    } catch (e) {
-        console.error(e);
-        await fetchStatus();
+    if (lastIsAdmin) {
+        try {
+            const res = await fetch('/api/me/ui-theme', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ theme: v }),
+            });
+            if (!res.ok) await fetchStatus();
+        } catch (e) {
+            console.error(e);
+            await fetchStatus();
+        }
+    } else {
+        try {
+            localStorage.setItem(UI_THEME_STORAGE_KEY, v);
+        } catch (e) {
+            console.error(e);
+        }
     }
 }
 
