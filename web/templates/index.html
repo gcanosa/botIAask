@@ -104,6 +104,16 @@
                     <p class="section-subtitle">Real-time system performance and bot health metrics.</p>
                 </div>
 
+                <div id="pending-approvals-banner" class="card hidden" style="margin-bottom: 1.5rem; border-color: var(--accent); background: var(--accent-glow);">
+                    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem;">
+                        <p id="pending-approvals-banner-text" class="section-subtitle" style="margin: 0; flex: 1; min-width: 12rem;"></p>
+                        <div id="pending-approvals-actions" class="hidden" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button type="button" id="pending-approvals-goto-pastes" class="btn btn-ghost" style="padding: 0.35rem 0.85rem; font-size: 0.75rem;">Pastes</button>
+                            <button type="button" id="pending-approvals-goto-uploads" class="btn btn-ghost" style="padding: 0.35rem 0.85rem; font-size: 0.75rem;">Uploads</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="grid grid-4">
                     <div class="card">
                         <h3 class="card-title">Uptime</h3>

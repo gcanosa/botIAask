@@ -23,7 +23,10 @@ function showPanel(panelId) {
 
     // Specific panel initializers
     if (panelId === 'bookmarks') fetchBookmarks(1);
-    if (panelId === 'pastes') fetchApprovedPastes(1);
+    if (panelId === 'pastes') {
+        fetchApprovedPastes(1);
+        fetchPendingPastes();
+    }
     if (panelId === 'uploads') {
         fetchUploadSettings();
         fetchPendingFiles();
@@ -51,6 +54,15 @@ window.addEventListener('hashchange', () => {
 document.addEventListener('DOMContentLoaded', () => {
     const initialHash = window.location.hash.substring(1) || 'dashboard';
     showPanel(initialHash);
+
+    document.getElementById('pending-approvals-goto-pastes')?.addEventListener('click', () => {
+        window.location.hash = 'pastes';
+        showPanel('pastes');
+    });
+    document.getElementById('pending-approvals-goto-uploads')?.addEventListener('click', () => {
+        window.location.hash = 'uploads';
+        showPanel('uploads');
+    });
     
     fetchStatus();
     setInterval(fetchStatus, 30000); // 30s status refresh
@@ -111,6 +123,28 @@ async function fetchStatus() {
         updateAdminView(data.is_admin);
         updateIRCAuthStatus(data.irc_authenticated);
         lastIsAdmin = data.is_admin;
+
+        const pendBanner = document.getElementById('pending-approvals-banner');
+        const pendText = document.getElementById('pending-approvals-banner-text');
+        const pendActions = document.getElementById('pending-approvals-actions');
+        const btnPastes = document.getElementById('pending-approvals-goto-pastes');
+        const btnUploads = document.getElementById('pending-approvals-goto-uploads');
+        if (pendBanner && pendText) {
+            const pp = data.pending_pastes ?? 0;
+            const pu = data.pending_uploads ?? 0;
+            if (data.is_admin && (pp > 0 || pu > 0)) {
+                pendText.textContent = `Reminder: ${pp} pending paste(s) and ${pu} pending file upload(s) awaiting approval.`;
+                pendBanner.classList.remove('hidden');
+                if (pendActions) {
+                    pendActions.classList.remove('hidden');
+                    if (btnPastes) btnPastes.classList.toggle('hidden', pp <= 0);
+                    if (btnUploads) btnUploads.classList.toggle('hidden', pu <= 0);
+                }
+            } else {
+                pendBanner.classList.add('hidden');
+                if (pendActions) pendActions.classList.add('hidden');
+            }
+        }
         
         const statusText = document.getElementById('status-text');
         const statusBadge = document.getElementById('status-badge');
@@ -962,13 +996,14 @@ async function fetchApprovedFiles(page) {
         const user = p.username || p.Username;
         const fname = p.original_filename || p.OriginalFilename || '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
+        const dl = p.download_count ?? p.DownloadCount ?? 0;
         const date = p.approved_at && p.approved_at.Valid ? new Date(p.approved_at.Time).toLocaleDateString() : 'N/A';
         return `
             <tr style="border-bottom: 1px solid var(--glass-border);">
                 <td style="padding: 1rem;" class="font-bold">${tid}</td>
                 <td style="padding: 1rem;">
                     <div>${title}</div>
-                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(fname)} · ${sz} · Published: ${date}</div>
+                    <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${dl} download(s) · ${financeEscapeHtml(fname)} · ${sz} · Published: ${date}</div>
                 </td>
                 <td style="padding: 1rem; color: var(--primary);">${user}</td>
                 <td style="padding: 1rem; text-align: right;">

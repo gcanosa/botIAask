@@ -465,8 +465,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark <URL> [nickname], %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %snews on/off, %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]", 
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -492,11 +492,16 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			if isAdmin {
 				b.loginsMu.Lock()
 				b.loggedInAdmins[sender] = true
+				recipients := make([]string, 0, len(b.loggedInAdmins))
+				for n := range b.loggedInAdmins {
+					recipients = append(recipients, n)
+				}
 				b.loginsMu.Unlock()
 				if b.tracker != nil {
 					b.updateTrackerAdmins()
 				}
 				b.sendPrivmsg(target, fmt.Sprintf("%s logged in to admin session.", sender))
+				b.notifyLoggedInAdminsPendingApprovals(recipients)
 			} else {
 				if b.tracker != nil {
 					b.tracker.LogFailedAuth()
@@ -794,53 +799,87 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			return
 		}
 
-		parts := strings.Fields(message)
-		if len(parts) < 2 {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark <URL> [nickname]", b.prefix))
+		body := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"bookmark"))
+		if body == "" {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.prefix, b.prefix))
 			return
 		}
-
-		url := parts[1]
-		nickname := ""
-		if len(parts) > 2 {
-			nickname = parts[2]
+		firstSpace := strings.IndexByte(body, ' ')
+		var sub, rest string
+		if firstSpace < 0 {
+			sub = strings.ToUpper(body)
+			rest = ""
+		} else {
+			sub = strings.ToUpper(strings.TrimSpace(body[:firstSpace]))
+			rest = strings.TrimSpace(body[firstSpace:])
 		}
 
-		// Rate limiting: 3 within 10 minutes
-		if !isAdmin {
-			tenMinutesAgo := time.Now().Add(-10 * time.Minute)
-			count, err := b.bookmarksDB.CountUserBookmarksSince(sender, tenMinutesAgo)
-			if err != nil {
-				log.Printf("Error checking bookmark rate limit: %v", err)
-			} else if count >= 3 {
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: Rate limit reached. You can only add 3 bookmarks every 10 minutes.", sender))
+		switch sub {
+		case "ADD":
+			parts := strings.Fields(rest)
+			if len(parts) < 1 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname]", b.prefix))
 				return
 			}
-		}
-
-		// Use sender's nickname if none provided
-		if nickname == "" {
-			nickname = sender
-		}
-
-		// Get hostname of the user (from source)
-		hostname := "unknown"
-		if idx := strings.Index(source, "@"); idx != -1 {
-			hostname = source[idx+1:]
-		}
-
-		id, err := b.bookmarksDB.AddBookmark(url, nickname, hostname)
-		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: URL already bookmarked.", sender))
-			} else {
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error adding bookmark: %v", sender, err))
+			urlStr := parts[0]
+			nickname := sender
+			if len(parts) >= 2 {
+				nickname = parts[1]
 			}
-			return
-		}
+			if !bookmarks.ValidBookmarkURL(urlStr) {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Invalid URL. Use http:// or https:// with a host (encode spaces in the URL).", sender))
+				return
+			}
+			if !isAdmin {
+				tenMinutesAgo := time.Now().Add(-10 * time.Minute)
+				count, err := b.bookmarksDB.CountUserBookmarksSince(sender, tenMinutesAgo)
+				if err != nil {
+					log.Printf("Error checking bookmark rate limit: %v", err)
+				} else if count >= 3 {
+					b.sendPrivmsg(target, fmt.Sprintf("@%s: Rate limit reached. You can only add 3 bookmarks every 10 minutes.", sender))
+					return
+				}
+			}
+			hostname := "unknown"
+			if idx := strings.Index(source, "@"); idx != -1 {
+				hostname = source[idx+1:]
+			}
+			id, err := b.bookmarksDB.AddBookmark(urlStr, nickname, hostname)
+			if err != nil {
+				if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+					b.sendPrivmsg(target, fmt.Sprintf("@%s: URL already bookmarked.", sender))
+				} else {
+					b.sendPrivmsg(target, fmt.Sprintf("@%s: Error adding bookmark: %v", sender, err))
+				}
+				return
+			}
+			prefix := "\x0303,01[BOOKMARK]\x03"
+			b.sendPrivmsg(target, fmt.Sprintf("%s @%s: Bookmark added successfully! (ID: %d)", prefix, sender, id))
 
-		prefix := "\x0303,01[BOOKMARK]\x03"
-		b.sendPrivmsg(target, fmt.Sprintf("%s @%s: Bookmark added successfully! (ID: %d)", prefix, sender, id))
+		case "FIND":
+			if strings.TrimSpace(rest) == "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark FIND <text>", b.prefix))
+				return
+			}
+			list, err := b.bookmarksDB.FindBookmarksByURLContains(strings.TrimSpace(rest), 10)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error searching bookmarks: %v", sender, err))
+				return
+			}
+			if len(list) == 0 {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: No bookmarks matched that URL pattern.", sender))
+				return
+			}
+			pairs := make([]string, 0, len(list))
+			for _, bm := range list {
+				pairs = append(pairs, fmt.Sprintf("#%d %s", bm.ID, bm.URL))
+			}
+			out := strings.Join(pairs, " | ")
+			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, out)))
+
+		default:
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.prefix, b.prefix))
+		}
 		return
 	}
 
@@ -1188,6 +1227,25 @@ func (b *Bot) sendPrivmsg(target, message string) {
 func (b *Bot) sendNotice(target, message string) {
 	b.conn.Notice(target, message)
 	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventNotice, b.cfg.IRC.Nickname, message, "")
+}
+
+// notifyLoggedInAdminsPendingApprovals sends each logged-in admin a NOTICE with paste/file queue depth.
+func (b *Bot) notifyLoggedInAdminsPendingApprovals(recipients []string) {
+	msg := "Pending approvals: (uploads unavailable)."
+	if b.uploadsDB != nil {
+		pastes, err1 := b.uploadsDB.CountPendingPastes()
+		files, err2 := b.uploadsDB.CountPendingFiles()
+		if err1 != nil || err2 != nil {
+			log.Printf("pending counts for admin NOTICE: %v %v", err1, err2)
+			msg = "Pending approvals: could not read queue."
+		} else {
+			msg = fmt.Sprintf("Pending approvals: %d paste(s), %d file upload(s).", pastes, files)
+		}
+	}
+	msg = b.sanitize(msg)
+	for _, nick := range recipients {
+		b.sendNotice(nick, msg)
+	}
 }
 
 func truncateReminderNotice(s string, maxBytes int) string {

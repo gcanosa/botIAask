@@ -33,6 +33,7 @@ type Upload struct {
 	OriginalFilename string       `json:"original_filename"`
 	ContentType      string       `json:"content_type"`
 	SizeBytes        int64        `json:"size_bytes"`
+	DownloadCount    int          `json:"download_count"`
 }
 
 func (u *Upload) IsFile() bool {
@@ -120,6 +121,9 @@ func migrateUploadsSchema(db *sql.DB) error {
 	if err := add("size_bytes", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := add("download_count", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -159,11 +163,11 @@ func (d *Database) GetUploadByToken(token string) (*Upload, error) {
 	row := d.db.QueryRow(`
 		SELECT id, token,
 		       COALESCE(username,''), COALESCE(channel,''), COALESCE(status,''), created_at,
-		       COALESCE(upload_type, 'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       COALESCE(upload_type, 'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE token = ?`, token)
 	var u Upload
 	err := row.Scan(&u.ID, &u.Token, &u.Username, &u.Channel, &u.Status, &u.CreatedAt,
-		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 	if err != nil {
 		return nil, err
 	}
@@ -219,11 +223,11 @@ func (d *Database) CancelTicket(ticketID string) error {
 func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
 	row := d.db.QueryRow(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE ticket_id = ?`, ticketID)
 	var u Upload
 	err := row.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +243,7 @@ func (d *Database) GetApprovedPastes(limit, offset int) ([]*Upload, int, error) 
 	}
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -257,7 +261,7 @@ func (d *Database) GetApprovedFiles(limit, offset int) ([]*Upload, int, error) {
 	}
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -279,7 +283,7 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	// IRC nicks: trim + case-insensitive; LOWER matches most cases.
 	q := `
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
 			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?)
 		ORDER BY approved_at DESC LIMIT ?`
@@ -298,7 +302,7 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	// Fallback: RFC 1459 casefold can differ from ASCII LOWER (e.g. [ vs {).
 	rows2, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
 		ORDER BY approved_at DESC`)
 	if err != nil {
@@ -309,7 +313,7 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 	for rows2.Next() {
 		var u Upload
 		err := rows2.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, err
 		}
@@ -329,7 +333,7 @@ func scanApprovedFileRows(rows *sql.Rows) ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, err
 		}
@@ -368,7 +372,7 @@ func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -381,7 +385,7 @@ func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
 func (d *Database) GetPendingTickets() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE status = 'pending_approval' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -392,7 +396,7 @@ func (d *Database) GetPendingTickets() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, err
 		}
@@ -405,7 +409,7 @@ func (d *Database) GetPendingTickets() ([]*Upload, error) {
 func (d *Database) GetPendingPastes() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE status = 'pending_approval' AND COALESCE(upload_type,'paste') = 'paste' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -416,7 +420,7 @@ func (d *Database) GetPendingPastes() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, err
 		}
@@ -429,7 +433,7 @@ func (d *Database) GetPendingPastes() ([]*Upload, error) {
 func (d *Database) GetPendingFiles() ([]*Upload, error) {
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0)
+		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0)
 		FROM uploads WHERE status = 'pending_approval' AND upload_type = 'file' ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -440,13 +444,39 @@ func (d *Database) GetPendingFiles() ([]*Upload, error) {
 	for rows.Next() {
 		var u Upload
 		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes)
+			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount)
 		if err != nil {
 			return nil, err
 		}
 		list = append(list, &u)
 	}
 	return list, rows.Err()
+}
+
+// IncrementFileDownloadCount bumps the counter for an approved file ticket (no-op if row missing or not a file).
+func (d *Database) IncrementFileDownloadCount(ticketID string) error {
+	_, err := d.db.Exec(`
+		UPDATE uploads SET download_count = COALESCE(download_count, 0) + 1
+		WHERE ticket_id = ? AND upload_type = 'file' AND status = 'approved'`, ticketID)
+	return err
+}
+
+// CountPendingPastes returns how many text pastes await approval.
+func (d *Database) CountPendingPastes() (int, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM uploads
+		WHERE status = 'pending_approval' AND COALESCE(upload_type,'paste') = 'paste'`).Scan(&n)
+	return n, err
+}
+
+// CountPendingFiles returns how many file uploads await approval.
+func (d *Database) CountPendingFiles() (int, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM uploads
+		WHERE status = 'pending_approval' AND upload_type = 'file'`).Scan(&n)
+	return n, err
 }
 
 func (d *Database) DeletePaste(ticketID string) error {

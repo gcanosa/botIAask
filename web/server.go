@@ -180,6 +180,21 @@ func mergeUniqueSortedStrings(a, b []string) []string {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	isAdmin, needsChange := s.checkAuth(r)
+	pendingPastes, pendingUploads := 0, 0
+	if isAdmin && s.uploadsDB != nil {
+		var err error
+		pendingPastes, err = s.uploadsDB.CountPendingPastes()
+		if err != nil {
+			log.Printf("pending pastes count: %v", err)
+			pendingPastes = 0
+		}
+		pendingUploads, err = s.uploadsDB.CountPendingFiles()
+		if err != nil {
+			log.Printf("pending uploads count: %v", err)
+			pendingUploads = 0
+		}
+	}
+
 	status := map[string]interface{}{
 		"uptime":      s.bot.GetUptime(),
 		"connected":   true,
@@ -195,6 +210,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"is_admin":    isAdmin,
 		"needs_password_change": needsChange,
 		"irc_authenticated": s.bot.IsAuthenticated(),
+		"pending_pastes":  pendingPastes,
+		"pending_uploads": pendingUploads,
 	}
 
 	if isAdmin && s.statsTracker.IsEnabled() {
@@ -1578,7 +1595,14 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", contentDispositionAttachment(upload.OriginalFilename, ticketID, filepath.Ext(upload.ContentPath)))
-	_, _ = io.Copy(w, f)
+	_, copyErr := io.Copy(w, f)
+	if copyErr != nil {
+		log.Printf("file download %s: %v", ticketID, copyErr)
+		return
+	}
+	if err := s.uploadsDB.IncrementFileDownloadCount(ticketID); err != nil {
+		log.Printf("increment download count %s: %v", ticketID, err)
+	}
 }
 
 func (s *Server) handleUploadsFilesList(w http.ResponseWriter, r *http.Request) {
