@@ -57,6 +57,7 @@ logs/
 # Uploads and pastes
 pastes/
 uploads/
+uploads_files/
 
 # Scratch folder
 scratch/
