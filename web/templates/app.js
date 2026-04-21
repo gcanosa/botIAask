@@ -1347,6 +1347,8 @@ async function fetchRSSSettings() {
         document.getElementById('rss-interval').value = data.interval_minutes;
         document.getElementById('rss-retention').value = data.retention_count;
         document.getElementById('rss-urls').value = (data.feed_urls || []).join('\n');
+        const announce = document.getElementById('rss-announce-irc');
+        if (announce) announce.checked = !!data.announce_to_irc;
     } catch (e) { console.error("Failed to fetch RSS settings", e); }
 }
 
@@ -1358,6 +1360,8 @@ async function saveRSSSettings() {
     const interval = parseInt(document.getElementById('rss-interval').value);
     const retention = parseInt(document.getElementById('rss-retention').value);
     const urls = document.getElementById('rss-urls').value.split('\n').map(u => u.trim()).filter(u => u !== '');
+    const announceEl = document.getElementById('rss-announce-irc');
+    const announce_to_irc = announceEl ? announceEl.checked : true;
 
     try {
         const res = await fetch('/api/rss/settings', {
@@ -1366,7 +1370,8 @@ async function saveRSSSettings() {
             body: JSON.stringify({
                 interval_minutes: interval,
                 retention_count: retention,
-                feed_urls: urls
+                feed_urls: urls,
+                announce_to_irc
             })
         });
 

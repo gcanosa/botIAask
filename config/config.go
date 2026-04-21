@@ -106,6 +106,16 @@ type RSSConfig struct {
 	Channels        []string `yaml:"channels"`
 	RetentionCount  int      `yaml:"retention_count"`
 	FeedURLs        []string `yaml:"feed_urls"`
+	// AnnounceToIRC: nil means true (see applyRSSDefaults). When false, feeds are still fetched and the DB updated, but nothing is posted to IRC.
+	AnnounceToIRC *bool `yaml:"announce_to_irc,omitempty"`
+}
+
+// AnnounceToIRCEnabled returns whether new RSS items should be broadcast to channels.
+func (r RSSConfig) AnnounceToIRCEnabled() bool {
+	if r.AnnounceToIRC == nil {
+		return true
+	}
+	return *r.AnnounceToIRC
 }
 
 // StatsConfig holds settings for real-time statistics collection.
@@ -131,6 +141,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	applyStatsDefaults(&cfg)
 	applyUploadsDefaults(&cfg)
+	applyRSSDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -144,6 +155,13 @@ func applyStatsDefaults(cfg *Config) {
 func applyUploadsDefaults(cfg *Config) {
 	if cfg.Uploads.MaxFileMB <= 0 {
 		cfg.Uploads.MaxFileMB = 200
+	}
+}
+
+func applyRSSDefaults(cfg *Config) {
+	if cfg.RSS.AnnounceToIRC == nil {
+		t := true
+		cfg.RSS.AnnounceToIRC = &t
 	}
 }
 
