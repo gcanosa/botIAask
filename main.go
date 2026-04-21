@@ -13,6 +13,7 @@ import (
 
 	"botIAask/ai"
 	"botIAask/bookmarks"
+	"botIAask/meta"
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/irc"
@@ -36,7 +37,9 @@ func main() {
 	dropNews := flag.Bool("dropnews", false, "Clear all news from the local database and exit")
 
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage of botIAask:\n")
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
+		fmt.Fprintf(out, "Usage of %s:\n", meta.Name)
 		flag.PrintDefaults()
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Commands (prefix configurable, default '!'):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ask <query>     - Ask the AI a question\n")
@@ -67,14 +70,14 @@ func main() {
 	flag.Parse()
 	// Handle version and about flags
 	if *version {
-		fmt.Println("botIAask v0.3")
+		fmt.Printf("%s v%s\n", meta.Name, meta.Version)
 		return
 	}
 
 	if *about {
 		fmt.Println("botIAask - An IRC bot powered by AI")
-		fmt.Println("Version: 0.3")
-		fmt.Println("Programmer: Gerardo Canosa (gera.canosa@gmail.com)")
+		fmt.Printf("Version: %s\n", meta.Version)
+		fmt.Printf("Programmer: %s\n", meta.Author)
 		fmt.Println("Features:")
 		fmt.Println("  - AI-powered responses via LM Studio")
 		fmt.Println("  - Rate limiting for commands")
@@ -148,6 +151,7 @@ func main() {
 
 		switch effectiveMode {
 		case "start":
+			fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
 			if *dashboard {
 				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
 				fmt.Printf("\n--------------------------------------------------\n")
@@ -169,6 +173,7 @@ func main() {
 			}
 			return
 		case "restart":
+			fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
 			if *dashboard {
 				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
 				fmt.Printf("\n--------------------------------------------------\n")
@@ -313,6 +318,7 @@ func main() {
 }
 
 func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database) error {
+	fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
 	err := WritePIDFile(pidFile)
