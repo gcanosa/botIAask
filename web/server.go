@@ -30,6 +30,7 @@ import (
 	"botIAask/crypto"
 	"botIAask/irc"
 	"botIAask/logger"
+	"botIAask/meta"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -205,6 +206,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := map[string]interface{}{
+		"version":     meta.Version,
 		"uptime":      s.bot.GetUptime(),
 		"connected":   s.bot.IsConnected(),
 		"server":      s.cfg.IRC.Server,
