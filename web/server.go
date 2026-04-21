@@ -1,26 +1,29 @@
 package web
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
+	"crypto/rand"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"crypto/rand"
-	"encoding/hex"
 
 	"botIAask/bookmarks"
 	"botIAask/config"
@@ -127,6 +130,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/pastes/reject", s.handlePasteReject)
 	mux.HandleFunc("/api/uploads/files", s.handleUploadsFilesList)
 	mux.HandleFunc("/api/uploads/files/pending", s.handleUploadsFilesPending)
+	mux.HandleFunc("/api/uploads/files/compress", s.handleUploadFileCompress)
+	mux.HandleFunc("/api/uploads/detail", s.handleUploadDetail)
 	mux.HandleFunc("/api/uploads/settings", s.handleUploadSettings)
 	mux.HandleFunc("/api/finance", s.handleFinance)
 	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
@@ -865,6 +870,37 @@ func (s *Server) maxUploadBytes() int64 {
 // multipartSlack adds headroom for multipart boundaries and small form fields.
 const multipartSlack int64 = 1 << 20
 
+func (s *Server) clientHostFromRequest(r *http.Request) string {
+	if s.cfg.Web.TrustForwardedFor {
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (s *Server) pathWithinDir(path, dir string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func parseUploadToken(r *http.Request) string {
 	raw := strings.TrimSpace(r.URL.Query().Get("token"))
 	if raw == "" {
@@ -937,7 +973,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		ticketID := generateHex(4)
 
-		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays)
+		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays, s.clientHostFromRequest(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1047,7 +1083,14 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 		ctype = ""
 	}
 
-	err = s.uploadsDB.SubmitFileUpload(token, ticketID, title, desc, expiresDays, diskPath, hdr.Filename, ctype, n)
+	mdH, shH, err := uploads.HexMD5SHA256FromFile(diskPath)
+	if err != nil {
+		os.Remove(diskPath)
+		http.Error(w, "Error hashing file", http.StatusInternalServerError)
+		return
+	}
+
+	err = s.uploadsDB.SubmitFileUpload(token, ticketID, title, desc, expiresDays, diskPath, hdr.Filename, ctype, n, s.clientHostFromRequest(r), mdH, shH)
 	if err != nil {
 		os.Remove(diskPath)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1163,6 +1206,17 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	sessionOK, _ := s.checkAuth(r)
+	if !sessionOK {
+		redacted := make([]*uploads.Upload, len(items))
+		for i, u := range items {
+			c := *u
+			c.ClientHost = ""
+			redacted[i] = &c
+		}
+		items = redacted
 	}
 
 	totalPages := (total + limit - 1) / limit
@@ -1684,6 +1738,237 @@ func (s *Server) handleUploadsFilesPending(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	json.NewEncoder(w).Encode(items)
+}
+
+func uploadAlreadyCompressed(u *uploads.Upload) bool {
+	lower := strings.ToLower(u.OriginalFilename)
+	if strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.gz") {
+		return true
+	}
+	ct := strings.ToLower(u.ContentType)
+	return strings.Contains(ct, "gzip") || strings.Contains(ct, "x-gzip")
+}
+
+func uploadDetailCanCompress(u *uploads.Upload) bool {
+	return u.IsFile() && !uploadAlreadyCompressed(u)
+}
+
+func writeSingleFileTgz(dstPath, srcPath, memberName string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	st, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("source is not a regular file")
+	}
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		_ = dst.Close()
+		if cleanup {
+			_ = os.Remove(dstPath)
+		}
+	}()
+	gw := gzip.NewWriter(dst)
+	tw := tar.NewWriter(gw)
+	hdr := &tar.Header{
+		Name:    memberName,
+		Mode:    0644,
+		Size:    st.Size(),
+		ModTime: st.ModTime(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		_ = tw.Close()
+		_ = gw.Close()
+		return err
+	}
+	if _, err := io.Copy(tw, src); err != nil {
+		_ = tw.Close()
+		_ = gw.Close()
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		_ = gw.Close()
+		return err
+	}
+	if err := gw.Close(); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func (s *Server) handleUploadDetail(w http.ResponseWriter, r *http.Request) {
+	sessionOK, _ := s.checkAuth(r)
+	if !sessionOK {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ticketID := strings.TrimSpace(r.URL.Query().Get("ticketID"))
+	if ticketID == "" {
+		http.Error(w, "ticketID required", http.StatusBadRequest)
+		return
+	}
+	u, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if u.Status != "approved" && u.Status != "pending_approval" {
+		http.NotFound(w, r)
+		return
+	}
+	displayName := u.OriginalFilename
+	if displayName == "" {
+		displayName = filepath.Base(u.ContentPath)
+	}
+	var viewPath, downloadPath *string
+	if u.Status == "approved" {
+		if u.IsFile() {
+			p := "/f/" + u.TicketID
+			downloadPath = &p
+		} else {
+			p := "/p/" + u.TicketID
+			viewPath = &p
+		}
+	}
+	var approvedAt *string
+	if u.ApprovedAt.Valid {
+		s := u.ApprovedAt.Time.UTC().Format(time.RFC3339)
+		approvedAt = &s
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ticket_id":         u.TicketID,
+		"public_ref":        u.PublicRef,
+		"upload_type":       u.UploadType,
+		"status":            u.Status,
+		"display_filename":  displayName,
+		"title":             u.Title,
+		"username":          u.Username,
+		"client_host":       u.ClientHost,
+		"approved_at":       approvedAt,
+		"size_bytes":        u.SizeBytes,
+		"md5_hex":           u.MD5Hex,
+		"sha256_hex":        u.SHA256Hex,
+		"is_file":           u.IsFile(),
+		"can_compress":      u.Status == "approved" && uploadDetailCanCompress(u),
+		"download_path":     downloadPath,
+		"view_path":         viewPath,
+		"download_count":    u.DownloadCount,
+		"original_filename": u.OriginalFilename,
+	})
+}
+
+func (s *Server) handleUploadFileCompress(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ticketID := strings.TrimSpace(r.URL.Query().Get("ticketID"))
+	if ticketID == "" {
+		http.Error(w, "ticketID required", http.StatusBadRequest)
+		return
+	}
+	u, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !u.IsFile() || u.Status != "approved" {
+		http.Error(w, "Not an approved file", http.StatusBadRequest)
+		return
+	}
+	if !uploadDetailCanCompress(u) {
+		http.Error(w, "File is already compressed", http.StatusBadRequest)
+		return
+	}
+	oldPath := u.ContentPath
+	filesDir := s.uploadsDB.FilesDiskDir()
+	if !s.pathWithinDir(oldPath, filesDir) {
+		http.Error(w, "Invalid file path", http.StatusInternalServerError)
+		return
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		http.Error(w, "File missing on disk", http.StatusNotFound)
+		return
+	}
+	baseName := strings.TrimSpace(u.OriginalFilename)
+	if baseName == "" {
+		baseName = filepath.Base(oldPath)
+	}
+	memberName := filepath.Base(baseName)
+	if memberName == "" || memberName == "." {
+		memberName = ticketID + filepath.Ext(oldPath)
+	}
+	newName := baseName + ".tgz"
+	newPath := filepath.Join(filesDir, ticketID+".tgz")
+	if err := writeSingleFileTgz(newPath, oldPath, memberName); err != nil {
+		log.Printf("compress %s: %v", ticketID, err)
+		http.Error(w, "Compress failed", http.StatusInternalServerError)
+		return
+	}
+	if err := os.Remove(oldPath); err != nil {
+		log.Printf("compress remove old %s: %v", ticketID, err)
+		_ = os.Remove(newPath)
+		http.Error(w, "Could not replace original file", http.StatusInternalServerError)
+		return
+	}
+	mdH, shH, err := uploads.HexMD5SHA256FromFile(newPath)
+	if err != nil {
+		http.Error(w, "Hash error", http.StatusInternalServerError)
+		return
+	}
+	st, err := os.Stat(newPath)
+	if err != nil {
+		http.Error(w, "Stat error", http.StatusInternalServerError)
+		return
+	}
+	if err := s.uploadsDB.ReplaceApprovedFileContent(ticketID, newPath, newName, "application/gzip", st.Size(), mdH, shH); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	u2, err := s.uploadsDB.GetUploadByTicketID(ticketID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(u2)
 }
 
 func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {

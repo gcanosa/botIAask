@@ -80,11 +80,12 @@ type DaemonConfig struct {
 
 // WebConfig holds settings for the web dashboard server.
 type WebConfig struct {
-	Enabled bool       `yaml:"enabled"`
-	Port    int        `yaml:"port"`
-	Host    string     `yaml:"host"`
-	BaseURL string     `yaml:"base_url"`
-	Auth    AuthConfig `yaml:"auth,omitempty"`
+	Enabled             bool       `yaml:"enabled"`
+	Port                int        `yaml:"port"`
+	Host                string     `yaml:"host"`
+	BaseURL             string     `yaml:"base_url"`
+	TrustForwardedFor   bool       `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
+	Auth                AuthConfig `yaml:"auth,omitempty"`
 }
 
 // AuthConfig holds authentication settings for the web dashboard.
