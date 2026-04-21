@@ -132,6 +132,35 @@ func (d *Database) GetBookmarks(limit, offset int, query string) ([]Bookmark, er
 	return bookmarks, nil
 }
 
+// FindBookmarksByURLContains returns bookmarks whose URL contains pattern (substring match, newest first).
+func (d *Database) FindBookmarksByURLContains(pattern string, limit int) ([]Bookmark, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	pat := bookmarkURLLikePattern(pattern)
+	rows, err := d.db.Query(`
+		SELECT id, url, nickname, hostname, timestamp FROM bookmarks
+		WHERE url LIKE ? ESCAPE '\'
+		ORDER BY timestamp DESC LIMIT ?`, pat, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Bookmark
+	for rows.Next() {
+		var b Bookmark
+		if err := rows.Scan(&b.ID, &b.URL, &b.Nickname, &b.Hostname, &b.Timestamp); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 func (d *Database) CountUserBookmarksSince(nickname string, since time.Time) (int, error) {
 	var count int
 	err := d.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE nickname = ? AND timestamp > ?", 
