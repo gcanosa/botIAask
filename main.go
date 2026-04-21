@@ -55,6 +55,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ignore <nick>   - Ignore a user\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !news on/off     - Toggle news in current channel (session only)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !news start/stop - Turn RSS IRC announcements on/off (admin; saves config)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !stats           - View bot statistics\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !op [nick]       - Give operator status to self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !deop [nick]     - Remove operator status from self or nick\n")
@@ -226,6 +227,7 @@ func main() {
 
 	// Initialize IRC Bot
 	bot := irc.NewBot(cfg, aiClient)
+	bot.SetConfigPath(configPath)
 
 	// Initialize RSS Database
 	rssDB, err := rss.NewDatabase("data/rss_seen.db")
