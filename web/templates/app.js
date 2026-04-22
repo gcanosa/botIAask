@@ -37,13 +37,45 @@ const rowIcons = {
     linkChain: _icon24('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>'),
 };
 
-/** RSS source key from API → mark before title (extend when adding feeds) */
-function newsSourceBadgeFor(source) {
-    const s = source != null ? String(source) : '';
+function newsSourceAbbrevFromKey(key) {
+    let out = '';
+    for (const c of String(key)) {
+        if (/[a-z0-9]/i.test(c)) {
+            out += c.toUpperCase();
+            if (out.length >= 3) break;
+        }
+    }
+    return out || '?';
+}
+
+function isSafeImageSrc(url) {
+    if (url == null || String(url).trim() === '') return false;
+    try {
+        const u = new URL(String(url).trim());
+        return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+/** RSS source key from API + optional icon URL from feed → mark before title */
+function newsSourceBadgeFor(source, sourceIcon) {
+    const s = source != null ? String(source).trim() : '';
     if (s === 'hacker-news') {
         return '<span class="news-source-badge news-source-badge--hn" title="Hacker News" aria-label="Source: Hacker News"><span class="news-hn-y" aria-hidden="true">Y</span></span>';
     }
-    return '';
+    if (!s) {
+        return '';
+    }
+    const abbr = newsSourceAbbrevFromKey(s);
+    const displaySource = s.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ') || s;
+    const titleAttr = financeEscapeHtml(displaySource);
+    if (isSafeImageSrc(sourceIcon)) {
+        const srcJson = JSON.stringify(String(sourceIcon).trim());
+        return `<span class="news-source-badge news-source-badge--img" title="${titleAttr}" aria-label="Source: ${titleAttr}"><img class="news-source-badge__img" src=${srcJson} alt="" width="20" height="20" loading="lazy" decoding="async" /></span>`;
+    }
+    const abbrH = financeEscapeHtml(abbr);
+    return `<span class="news-source-badge news-source-badge--txt" title="${titleAttr}" aria-label="Source: ${titleAttr}"><span class="news-source-badge__txt" aria-hidden="true">${abbrH}</span></span>`;
 }
 
 function normalizeTheme(t, fallback = 'light') {
@@ -160,7 +192,10 @@ function showPanel(panelId) {
         fetchApprovedFiles(1);
     }
     if (panelId === 'news') fetchNews(1);
-    if (panelId === 'admin') fetchUsers();
+    if (panelId === 'admin') {
+        fetchUsers();
+        fetchIRCAutojoin();
+    }
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
          fetchHistory(currentTimeframe);
@@ -196,6 +231,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.hash = 'uploads';
         showPanel('uploads');
     });
+    document.getElementById('irc-autojoin-persist')?.addEventListener('change', ircAutojoinPersistToggled);
+    ircAutojoinPersistToggled();
 
     document.getElementById('sidebar-backdrop')?.addEventListener('click', closeSidebar);
     window.addEventListener('resize', () => {
@@ -355,10 +392,12 @@ function updateAdminView(isAdmin) {
         if (pendingSec) pendingSec.classList.toggle('hidden', !lastStaffAdmin);
         if (pendingFilesSec) pendingFilesSec.classList.toggle('hidden', !lastStaffAdmin);
         if (uploadSettingsCard) uploadSettingsCard.classList.toggle('hidden', !lastStaffAdmin);
+        document.getElementById('irc-autojoin-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
         document.getElementById('bookmarks-admin-header')?.classList.remove('hidden');
+        if (window.location.hash === '#admin') fetchIRCAutojoin();
     } else {
         adminNav.classList.add('hidden');
         adminBadge.classList.add('hidden');
@@ -367,6 +406,7 @@ function updateAdminView(isAdmin) {
         if (pendingSec) pendingSec.classList.add('hidden');
         if (pendingFilesSec) pendingFilesSec.classList.add('hidden');
         if (uploadSettingsCard) uploadSettingsCard.classList.add('hidden');
+        document.getElementById('irc-autojoin-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -1887,7 +1927,7 @@ async function fetchNews(page) {
                 <td class="news-td news-td--title" style="padding: 1rem;">
                     <div class="news-item-head">
                         <div class="news-item-head__main">
-                            ${newsSourceBadgeFor(n.Source)}
+                            ${newsSourceBadgeFor(n.Source, n.SourceIcon)}
                             <div class="news-item-head__title">${n.Title}</div>
                         </div>
                         <div class="row-action-group">
@@ -1993,6 +2033,331 @@ async function rehashConfigFromDisk() {
     }
 }
 
+/** @type {{ name: string, has_password: boolean, announce_rss: boolean, auto_join: boolean }[]} */
+let lastIrcAutojoinChannels = [];
+/** @type {{ name: string, has_password: boolean }[]} */
+let lastIrcSessionChannels = [];
+/** @type {Map<string, { revealed: boolean, password: string }>} */
+const ircAutojoinKeyState = new Map();
+
+function ircAutojoinPersistToggled() {
+    const p = document.getElementById('irc-autojoin-persist');
+    const aj = document.getElementById('irc-autojoin-aj');
+    if (!aj) return;
+    aj.disabled = !!p && !p.checked;
+}
+
+function ircAutojoinSetStatus(msg, isError) {
+    const el = document.getElementById('irc-autojoin-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--error, #f87171)' : 'var(--text-muted)';
+}
+
+function ircAutojoinEsc(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+async function fetchIRCAutojoin() {
+    if (!lastIsAdmin) return;
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels', { credentials: 'same-origin' });
+        if (res.status === 401) return;
+        if (!res.ok) {
+            ircAutojoinSetStatus(await res.text() || res.statusText, true);
+            return;
+        }
+        const data = await res.json();
+        lastIrcAutojoinChannels = data.channels || [];
+        lastIrcSessionChannels = data.session_channels || [];
+        ircAutojoinRender();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+        console.error('fetchIRCAutojoin', e);
+    }
+}
+
+function ircAutojoinRender() {
+    const tbody = document.getElementById('irc-autojoin-list');
+    const stBody = document.getElementById('irc-autojoin-session-list');
+    if (!tbody) return;
+    const rows = lastIrcAutojoinChannels;
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 0.75rem; color: var(--text-muted);">No channels saved in config yet. Uncheck &quot;Save to config&quot; to join for this session only.</td></tr>';
+    } else {
+        tbody.innerHTML = rows.map((ch) => {
+            const name = ch.name;
+            const nameE = encodeURIComponent(name);
+            const st = ircAutojoinKeyState.get(name);
+            const revealed = st && st.revealed;
+            const aj = ch.auto_join !== false;
+            let keyCol = '—';
+            if (ch.has_password) {
+                if (revealed && st && st.password != null) {
+                    keyCol = `<code style="user-select: all;">${ircAutojoinEsc(st.password)}</code> <button type="button" class="btn btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" data-khide="${nameE}">Hide</button>`;
+                } else {
+                    keyCol = `<span>••••••</span> <button type="button" class="btn btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" data-kshow="${nameE}">Show</button>`;
+                }
+            }
+            return `<tr style="border-bottom: 1px solid var(--glass-border);">
+            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(name)}</td>
+            <td style="padding: 0.5rem 0.75rem;">${keyCol}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;">
+                <input type="checkbox" class="irc-autojoin-aj" data-aj="${nameE}" ${aj ? 'checked' : ''} title="If off, the bot parts and will not rejoin on startup or rehash until you turn it back on" />
+            </td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;">
+                <input type="checkbox" class="irc-autojoin-ann" data-chan="${nameE}" ${ch.announce_rss ? 'checked' : ''} title="Add/remove this channel in rss.channels" />
+            </td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right;">
+                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-ircrm="${nameE}">Remove</button>
+            </td>
+        </tr>`;
+        }).join('');
+
+        tbody.querySelectorAll('button[data-kshow]').forEach((btn) => {
+            const name = decodeURIComponent(btn.getAttribute('data-kshow') || '');
+            btn.addEventListener('click', () => ircAutojoinRevealKey(name));
+        });
+        tbody.querySelectorAll('button[data-khide]').forEach((btn) => {
+            const name = decodeURIComponent(btn.getAttribute('data-khide') || '');
+            btn.addEventListener('click', () => {
+                ircAutojoinKeyState.set(name, { revealed: false, password: '' });
+                ircAutojoinRender();
+            });
+        });
+        tbody.querySelectorAll('.irc-autojoin-ann').forEach((el) => {
+            el.addEventListener('change', ircAutojoinOnAnnounceChange);
+        });
+        tbody.querySelectorAll('.irc-autojoin-aj').forEach((el) => {
+            el.addEventListener('change', ircAutojoinOnAutojoinChange);
+        });
+        tbody.querySelectorAll('button[data-ircrm]').forEach((btn) => {
+            const name = decodeURIComponent(btn.getAttribute('data-ircrm') || '');
+            btn.addEventListener('click', () => ircAutojoinRemove(name));
+        });
+    }
+    if (stBody) {
+        const srows = lastIrcSessionChannels;
+        if (!srows.length) {
+            stBody.innerHTML = '<tr><td colspan="3" style="padding: 0.75rem; color: var(--text-muted);">No session-only joins. Uncheck &quot;Save to config&quot; and use Join / add to join without YAML.</td></tr>';
+        } else {
+            stBody.innerHTML = srows.map((ch) => {
+                const name = ch.name;
+                const nameE = encodeURIComponent(name);
+                const st = ircAutojoinKeyState.get('session:' + name);
+                const revealed = st && st.revealed;
+                let keyCol = '—';
+                if (ch.has_password) {
+                    if (revealed && st && st.password != null) {
+                        keyCol = `<code style="user-select: all;">${ircAutojoinEsc(st.password)}</code> <button type="button" class="btn btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" data-skhide="${nameE}">Hide</button>`;
+                    } else {
+                        keyCol = `<span>••••••</span> <button type="button" class="btn btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" data-skshow="${nameE}">Show</button>`;
+                    }
+                }
+                return `<tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(name)}</td>
+                <td style="padding: 0.5rem 0.75rem;">${keyCol}</td>
+                <td style="padding: 0.5rem 0.75rem; text-align: right;">
+                    <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-ircrmp="${nameE}">Part &amp; forget</button>
+                </td>
+            </tr>`;
+            }).join('');
+
+            stBody.querySelectorAll('button[data-skshow]').forEach((btn) => {
+                const name = decodeURIComponent(btn.getAttribute('data-skshow') || '');
+                btn.addEventListener('click', () => ircAutojoinRevealSessionKey(name));
+            });
+            stBody.querySelectorAll('button[data-skhide]').forEach((btn) => {
+                const name = decodeURIComponent(btn.getAttribute('data-skhide') || '');
+                btn.addEventListener('click', () => {
+                    ircAutojoinKeyState.delete('session:' + name);
+                    ircAutojoinRender();
+                });
+            });
+            stBody.querySelectorAll('button[data-ircrmp]').forEach((btn) => {
+                const name = decodeURIComponent(btn.getAttribute('data-ircrmp') || '');
+                btn.addEventListener('click', () => ircAutojoinRemoveSession(name));
+            });
+        }
+    }
+}
+
+async function ircAutojoinOnAutojoinChange(ev) {
+    const el = ev.target;
+    const name = decodeURIComponent(el.getAttribute('data-aj') || '');
+    const want = el.checked;
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels/autojoin', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, auto_join: want }),
+        });
+        if (!res.ok) {
+            el.checked = !want;
+            ircAutojoinSetStatus((await res.text()) || 'Update failed', true);
+            return;
+        }
+        const ch = lastIrcAutojoinChannels.find((c) => c.name === name);
+        if (ch) ch.auto_join = want;
+    } catch (e) {
+        el.checked = !want;
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinRevealKey(name) {
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels/reveal', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+            ircAutojoinSetStatus((await res.text()) || 'Reveal failed', true);
+            return;
+        }
+        const data = await res.json();
+        ircAutojoinKeyState.set(name, { revealed: true, password: data.password == null ? '' : String(data.password) });
+        ircAutojoinRender();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinRevealSessionKey(name) {
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels/reveal', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+            ircAutojoinSetStatus((await res.text()) || 'Reveal failed', true);
+            return;
+        }
+        const data = await res.json();
+        ircAutojoinKeyState.set('session:' + name, { revealed: true, password: data.password == null ? '' : String(data.password) });
+        ircAutojoinRender();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinOnAnnounceChange(ev) {
+    const el = ev.target;
+    const name = decodeURIComponent(el.getAttribute('data-chan') || '');
+    const want = el.checked;
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels/announce', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, announce: want }),
+        });
+        if (!res.ok) {
+            el.checked = !want;
+            ircAutojoinSetStatus((await res.text()) || 'Update failed', true);
+            return;
+        }
+        const ch = lastIrcAutojoinChannels.find((c) => c.name === name);
+        if (ch) ch.announce_rss = want;
+    } catch (e) {
+        el.checked = !want;
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinRemove(name) {
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels?' + new URLSearchParams({ name }), {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        if (!res.ok) {
+            ircAutojoinSetStatus((await res.text()) || 'Remove failed', true);
+            return;
+        }
+        ircAutojoinKeyState.delete(name);
+        await fetchIRCAutojoin();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinRemoveSession(name) {
+    ircAutojoinSetStatus('');
+    try {
+        const res = await fetch('/api/irc/channels/session?' + new URLSearchParams({ name }), {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        if (!res.ok) {
+            ircAutojoinSetStatus((await res.text()) || 'Part failed', true);
+            return;
+        }
+        ircAutojoinKeyState.delete('session:' + name);
+        await fetchIRCAutojoin();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
+async function ircAutojoinAdd() {
+    const nameEl = document.getElementById('irc-autojoin-name');
+    const keyEl = document.getElementById('irc-autojoin-key');
+    if (!nameEl) return;
+    const name = nameEl.value.trim();
+    const password = keyEl ? keyEl.value : '';
+    const persist = document.getElementById('irc-autojoin-persist') ? document.getElementById('irc-autojoin-persist').checked : true;
+    const autoJoin = document.getElementById('irc-autojoin-aj') ? document.getElementById('irc-autojoin-aj').checked : true;
+    ircAutojoinSetStatus('');
+    const body = { name, password: password || '' };
+    if (!persist) {
+        body.session_only = true;
+    } else {
+        body.auto_join = autoJoin;
+    }
+    try {
+        const res = await fetch('/api/irc/channels', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (res.status === 409) {
+            ircAutojoinSetStatus('Channel is already in the list (config or this session).', true);
+            return;
+        }
+        if (!res.ok) {
+            ircAutojoinSetStatus((await res.text()) || 'Add failed', true);
+            return;
+        }
+        nameEl.value = '';
+        if (keyEl) keyEl.value = '';
+        const pEl = document.getElementById('irc-autojoin-persist');
+        const aEl = document.getElementById('irc-autojoin-aj');
+        if (pEl) pEl.checked = true;
+        if (aEl) aEl.checked = true;
+        ircAutojoinPersistToggled();
+        await fetchIRCAutojoin();
+    } catch (e) {
+        ircAutojoinSetStatus(String(e), true);
+    }
+}
+
 async function fetchUsers() {
     const res = await fetch('/api/users');
     const users = await res.json();
@@ -2078,6 +2443,7 @@ window.onThemeSelectChange = onThemeSelectChange;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
+window.ircAutojoinAdd = ircAutojoinAdd;
 async function deletePaste(id) {
     if(!confirm('Are you sure you want to delete this paste?')) return;
     try {

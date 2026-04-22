@@ -3,8 +3,10 @@ package rss
 import (
 	"net/url"
 	"strings"
+	"unicode"
 
 	"github.com/mmcdole/gofeed"
+	"golang.org/x/net/publicsuffix"
 )
 
 // FeedSourceKey returns a stable key for UI (e.g. "hacker-news") from the subscription / feed URL only
@@ -41,27 +43,108 @@ func FeedSourceKeyFromFeed(requestURL string, f *gofeed.Feed) string {
 	if k := FeedSourceKey(requestURL); k != "" {
 		return k
 	}
-	if f == nil {
-		return ""
-	}
-	for _, u := range []string{f.FeedLink, f.Link} {
-		if strings.TrimSpace(u) == "" {
-			continue
+	if f != nil {
+		for _, u := range []string{f.FeedLink, f.Link} {
+			if strings.TrimSpace(u) == "" {
+				continue
+			}
+			if k := FeedSourceKey(u); k != "" {
+				return k
+			}
 		}
-		if k := FeedSourceKey(u); k != "" {
-			return k
+		for _, u := range f.Links {
+			if k := FeedSourceKey(u); k != "" {
+				return k
+			}
+		}
+		t := strings.ToLower(strings.TrimSpace(f.Title))
+		if t == "hacker news" || strings.HasPrefix(t, "hacker news:") {
+			return "hacker-news"
 		}
 	}
-	for _, u := range f.Links {
-		if k := FeedSourceKey(u); k != "" {
-			return k
-		}
+	if k := sourceKeyFromSubscriptionURL(requestURL); k != "" {
+		return k
 	}
-	t := strings.ToLower(strings.TrimSpace(f.Title))
-	if t == "hacker news" || strings.HasPrefix(t, "hacker news:") {
-		return "hacker-news"
+	if f != nil {
+		for _, u := range []string{f.FeedLink, f.Link} {
+			if k := sourceKeyFromSubscriptionURL(u); k != "" {
+				return k
+			}
+		}
 	}
 	return ""
+}
+
+// sourceKeyFromSubscriptionURL derives a stable key from the feed’s own URL
+// (e.g. https://feeds.arstechnica.com/... → "arstechnica") using the registrable domain.
+func sourceKeyFromSubscriptionURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return ""
+	}
+	// e.g. "feeds.arstechnica.com" → "arstechnica.com"
+	eTLD1, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil || eTLD1 == "" {
+		// e.g. "localhost" or other non-ICANN hosts
+		eTLD1 = host
+	}
+	i := strings.IndexByte(eTLD1, '.')
+	var label string
+	if i > 0 {
+		label = eTLD1[:i]
+	} else {
+		label = eTLD1
+	}
+	return normalizeSourceKey(label)
+}
+
+func normalizeSourceKey(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(unicode.ToLower(r))
+			lastHyphen = false
+		} else {
+			// treat separators as single hyphen, collapse
+			if b.Len() == 0 || lastHyphen {
+				continue
+			}
+			b.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	k := strings.Trim(b.String(), "-")
+	if k == "" {
+		return ""
+	}
+	return k
+}
+
+// RegistrableDomainForFeedURL returns the eTLD+1 hostname (e.g. "arstechnica.com") for favicon resolution.
+// Empty string if the URL has no host.
+func RegistrableDomainForFeedURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return ""
+	}
+	eTLD1, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil || eTLD1 == "" {
+		return host
+	}
+	return eTLD1
 }
 
 // RepairEmptySourceHackerNewsWhenSingleHNFeed sets source for legacy rows (empty source) when the only

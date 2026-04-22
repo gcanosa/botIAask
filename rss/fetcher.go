@@ -150,6 +150,7 @@ func (f *Fetcher) Fetch() {
 		}
 
 		src := FeedSourceKeyFromFeed(feedURL, feed)
+		srcIcon := SourceIconForFeedURL(feed, feedURL)
 		for _, item := range feed.Items {
 			id := item.GUID
 			if id == "" {
@@ -170,11 +171,12 @@ func (f *Fetcher) Fetch() {
 					pubDate = *item.PublishedParsed
 				}
 				entry := NewsEntry{
-					GUID:    id,
-					Title:   item.Title,
-					Link:    item.Link,
-					PubDate: pubDate,
-					Source:  src,
+					GUID:       id,
+					Title:      item.Title,
+					Link:       item.Link,
+					PubDate:    pubDate,
+					Source:     src,
+					SourceIcon: srcIcon,
 				}
 				newEntries = append(newEntries, entry)
 			}
@@ -230,6 +232,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			continue
 		}
 		src := FeedSourceKeyFromFeed(feedURL, feed)
+		srcIcon := SourceIconForFeedURL(feed, feedURL)
 
 		log.Printf("[RSS] Feed %s fetched: %d items total", feedURL, len(feed.Items))
 
@@ -258,12 +261,13 @@ func (f *Fetcher) Backfill(limit int) int {
 					pubDate = *item.PublishedParsed
 				}
 				entry := NewsEntry{
-					GUID:      id,
-					Title:     item.Title,
-					Link:      item.Link,
-					ShortLink: ShortenURL(item.Link),
-					PubDate:   pubDate,
-					Source:    src,
+					GUID:       id,
+					Title:      item.Title,
+					Link:       item.Link,
+					ShortLink:  ShortenURL(item.Link),
+					PubDate:    pubDate,
+					Source:     src,
+					SourceIcon: srcIcon,
 				}
 				if err := f.db.MarkSeen(entry); err != nil {
 					log.Printf("[RSS] Failed to save backfill entry: %v", err)
