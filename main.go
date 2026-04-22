@@ -18,6 +18,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/internal/ircusage"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
@@ -39,43 +40,21 @@ func main() {
 	updateNews := flag.Bool("updatenews", false, "Backfill RSS database (fetch last X items) and exit")
 	dropNews := flag.Bool("dropnews", false, "Clear all news from the local database and exit")
 	rehashCLI := flag.Bool("rehash", false, "Signal the running daemon (SIGHUP) to reload config/config.yaml")
+	showIRCUsage := flag.Bool("usage", false, "Show IRC command reference (user vs admin; use NO_COLOR=1 to disable color)")
 
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
 		fmt.Fprintf(out, "Usage of %s:\n", meta.Name)
 		flag.PrintDefaults()
-		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Commands (prefix configurable, default '!'):\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !ask <query>     - Ask the AI a question\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !news [limit]    - Fetch recent Hacker News\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !uptime          - Show bot uptime\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !spec            - Show system prompt spec\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !paste           - Upload a text paste/log\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !upload          - Request a link to upload a file (max size in web settings)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !download [N]    - List your approved file uploads with download URLs (newest first; optional last N)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !help            - Show this help message in IRC\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !admin off       - Log out of admin session\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel [key] - Join a channel, optional +k key (saved in config)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !part [#channel] - Leave a channel (updates config/config.yaml)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !ignore <nick>   - Ignore a user\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !news on/off     - Toggle news in current channel (session only)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !news start/stop - Turn RSS IRC announcements on/off (admin; saves config)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !stats           - View bot statistics\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !op [nick]       - Give operator status to self or nick\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !deop [nick]     - Remove operator status from self or nick\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !voice [nick]    - Give voice status to self or nick\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !devoice [nick]  - Remove voice status from self or nick\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !ticket approve/cancel <ID> - Manage pending pastes\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !rehash          - Reload config from disk (live; notifies admins)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Quit (default message from irc.quit_message or name+version+uptime)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "\nCLI:\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  -rehash          - Send SIGHUP to PID in daemon.pid (daemon mode only)\n")
+		fmt.Fprintln(out, "\nFor IRC command reference, run with -usage")
 	}
 	flag.Parse()
 	// Handle version and about flags
+	if *showIRCUsage {
+		ircusage.Fprint(os.Stdout, ircusage.UseColorForStdout())
+		return
+	}
 	if *version {
 		fmt.Printf("%s v%s\n", meta.Name, meta.Version)
 		return

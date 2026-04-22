@@ -6,7 +6,7 @@
 
 ### 🤖 AI & IRC Interaction
 - **AI-Powered Responses**: Ask questions directly to an AI model using `!ask`.
-- **Hacker News Integration**: Automatically fetch and broadcast top stories.
+- **RSS & news**: Configurable feeds; optional IRC announcements and per-channel toggles.
 - **Rate Limiting**: Intelligent command throttling to prevent spam.
 - **Log Rotation**: Automatic multi-day log management for all channels.
 
@@ -29,7 +29,7 @@
 ## 🛠 Quick Setup
 
 ### Prerequisites
-- [Go](https://golang.org/doc/install) 1.21 or higher.
+- [Go](https://golang.org/doc/install) 1.22 or higher (see `go.mod` for the exact toolchain the project targets).
 - [LM Studio](https://lmstudio.ai/) (for AI capabilities) or any OpenAI-compatible API.
 
 ### Installation
@@ -66,19 +66,24 @@
 
 ## 💻 Command Line Interface
 
-`botIAask` includes a powerful CLI to manage the bot's lifecycle and background processes.
+`botIAask` includes a CLI to manage the bot’s lifecycle, optional RSS maintenance, and quick introspection.
+
+- **`-h` / `-help`**: prints application flags only (name, version, and `flag` defaults). It does not list IRC commands.
+- **`-usage`**: prints a full **IRC** command reference, grouped into user commands and admin commands. On a color-capable TTY, user commands and admin commands use different colors; set the environment variable **`NO_COLOR`** (to any value) to force plain text.
 
 | Option | Description |
 | :--- | :--- |
 | `-dashboard` | Starts the bot in daemon mode and enables the web dashboard. |
-| `-daemon` | Runs the bot in background (daemon mode). |
-| `-debug` | Enables verbose debug output in the console. |
+| `-daemon` | Runs the bot in the background (daemon mode). |
+| `-debug` | Verbose console output from the process (default: `true`). |
 | `-mode <start\|stop\|restart>` | Controls the daemon process explicitly. |
 | `-news` | Enables the RSS fetcher in the background. |
 | `-updatenews [limit]` | Backfills the news database and exits. |
 | `-dropnews` | Clears all news data and exits. |
-| `-version` | Displays current version information. |
-| `-about` | Shows project details and developer info. |
+| `-rehash` | Sends `SIGHUP` to the PID in `daemon.pid` so a running daemon reloads `config/config.yaml`. |
+| `-usage` | Prints the IRC user/admin command list (see above). |
+| `-version` | Prints name and version. |
+| `-about` | Shows project details and author. |
 
 In **`config/config.yaml`**, under `rss`, **`announce_to_irc`** defaults to `true`. Set it to `false` to keep fetching and updating the local news database without posting to IRC (avoids flooding the channel after long downtime). You can also run **`-updatenews [limit]`** once to backfill the database before starting the bot.
 
@@ -87,31 +92,46 @@ In **`config/config.yaml`**, under `rss`, **`announce_to_irc`** defaults to `tru
 ## 💬 IRC Commands
 
 ### User Commands
+Command **prefix** (default `!`) and the AI trigger name (default `ask`) are set in `config/config.yaml` under `bot.command_prefix` and `bot.command_name`.
+
 | Command | Description |
 | :--- | :--- |
-| `!ask <query>` | Asks the AI a question and returns the response. |
-| `!news [limit]` | Fetches the latest stories from Hacker News. |
+| `!ask <query>` | Asks the AI; same behavior as the configured command name. |
+| `!bc <expr>` | Evaluates a math expression (e.g. `5+5`). |
+| `!news [limit]` | Fetches recent items from the configured RSS database in channels where news is enabled (limit 1–10). |
+| `!bookmark` | `ADD <URL> [nickname]` or `FIND <text>` to add or search bookmarks. |
+| `!uptime` | Application uptime and current IRC session uptime. |
+| `!spec` | Shows the system prompt spec string used for AI replies. |
 | `!paste` | Generates a secure, temporary link to upload a text paste. |
 | `!upload` | Generates a secure, temporary link to upload a file (max size in web **Uploads** settings). |
-| `!uptime` | Displays how long the bot has been running. |
-| `!spec` | Shows the current AI system prompt specification. |
-| `!help` | Displays help information in the channel. |
+| `!download [N]` | Lists your approved uploads with download URLs (newest first; optional last *N*). |
+| `!euro` | Euro / forex panel. |
+| `!peso` | Argentine peso view. |
+| `!crypto` | Crypto market view. |
+| `!reminder` | `add <note>`, `del <id>`, or `list` (per-user reminders). |
+| `!help` | Short in-channel summary of commands. |
 
 ### Admin Commands
-*Admins must match hostmask in config AND be in an active `!admin` session.*
+*Admins must match a **hostmask** in `config/config.yaml` **and** be in an active **`!admin`** session.* Mode commands (`!op`, `!deop`, `!voice`, `!devoice`) are used **in a channel** where the bot can set modes.
 
 | Command | Description |
 | :--- | :--- |
-| `!admin` | Logs into an administrative session. |
-| `!admin off` | Ends the administrative session. |
-| `!ticket approve <ID>` | Approves a pending paste for public viewing. |
-| `!ticket cancel <ID>` | Rejects and deletes a pending paste. |
-| `!join #channel` | Commands the bot to join a specific channel. |
-| `!part [#channel]` | Commands the bot to leave a channel. |
-| `!stats` | Displays internal bot statistics. |
-| `!news on/off` | Toggles automatic news broadcasts in the current channel (session only). |
-| `!news start` / `!news stop` | Turns global RSS-to-IRC announcements on or off, saves `rss.announce_to_irc` in config, and applies immediately (in-flight fetch stops posting when stopped). Requires admin hostmask and `!admin` session. |
-| `!quit [reason]` | Shuts down the bot safely. |
+| `!admin` | Starts an admin session. |
+| `!admin off` | Ends the admin session. |
+| `!join #channel [key]` | Joins a channel; optional channel key is stored in config. |
+| `!part [#channel]` | Parts a channel and updates `config/config.yaml` when applicable. |
+| `!ignore <nick>` | Ignores a nickname. |
+| `!say #channel <message>` | Sends a message to a channel. |
+| `!news on` / `!news off` | Enables or disables news for the **current** channel (session only). |
+| `!news start` / `!news stop` | Turns global RSS-to-IRC announcements on or off; persists `rss.announce_to_irc` in config. |
+| `!stats` | Bot statistics (e.g. AI request count, uptime). |
+| `!op [nick]` / `!deop [nick]` | Channel operator; in a channel, acts on the invoker or the given nick. |
+| `!voice [nick]` / `!devoice [nick]` | Channel voice. |
+| `!ticket pending` | Lists pending paste/file tickets. |
+| `!ticket approve <ID>` | Approves a ticket (paste or file). |
+| `!ticket cancel <ID>` | Cancels a ticket. |
+| `!rehash` | Reloads configuration from disk (notifies other admins). |
+| `!quit [reason]` | Disconnects; quit message from `irc.quit_message` or default banner. |
 
 ---
 
