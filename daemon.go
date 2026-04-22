@@ -153,7 +153,7 @@ func StartDaemon(cfg *config.Config) error {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	fmt.Printf("Bot process spawned (Control PID: %d). Check %s for daemon status.\n", cmd.Process.Pid, cfg.Daemon.PIDFile)
+	fmt.Printf("Daemon spawned (PID %d). Child stdio is detached; use logs, IRC, or the web dashboard. PID file: %s\n", cmd.Process.Pid, cfg.Daemon.PIDFile)
 	return nil
 }
 

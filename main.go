@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -55,7 +57,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nIRC Admin Commands (require hostmask auth AND '!admin' session):\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin           - Log in to admin session\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !admin off       - Log out of admin session\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel   - Join a channel (updates config/config.yaml)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !join #channel [key] - Join a channel, optional +k key (saved in config)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !part [#channel] - Leave a channel (updates config/config.yaml)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ignore <nick>   - Ignore a user\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !say #chan <msg> - Send a message to a channel\n")
@@ -68,7 +70,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  !devoice [nick]  - Remove voice status from self or nick\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !ticket approve/cancel <ID> - Manage pending pastes\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  !rehash          - Reload config from disk (live; notifies admins)\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Disconnect and shutdown bot\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  !quit [reason]   - Quit (default message from irc.quit_message or name+version+uptime)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "\nCLI:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  -rehash          - Send SIGHUP to PID in daemon.pid (daemon mode only)\n")
 	}
@@ -101,6 +103,13 @@ func main() {
 
 	// Path to the configuration file
 	configPath := "config/config.yaml"
+
+	if _, err := os.Stat(configPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			log.Fatalf("configuration file %q not found. Copy config/config.yaml.template to config/config.yaml, edit it for your environment, then run again.", configPath)
+		}
+		log.Fatalf("configuration file %q: %v", configPath, err)
+	}
 
 	// Load configuration
 	cfg, err := config.LoadConfig(configPath)
@@ -137,7 +146,14 @@ func main() {
 		}
 	}
 
-	if cfg.Bot.Debug {
+	isDaemonChild := os.Getenv("BOT_DAEMON_INTERNAL") == "1"
+	effectiveMode := *mode
+	if *daemon && effectiveMode == "" {
+		effectiveMode = "start"
+	}
+	daemonParentWillSpawn := !isDaemonChild && (effectiveMode == "start" || effectiveMode == "restart") && (*mode != "" || *daemon)
+
+	if cfg.Bot.Debug && !daemonParentWillSpawn {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
 		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
@@ -151,28 +167,13 @@ func main() {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	// Determine if this is an internal daemon process spawned by us
-	isDaemonChild := os.Getenv("BOT_DAEMON_INTERNAL") == "1"
-
 	// Handle mode flags (start, stop, restart) or the -daemon trigger
 	if (*mode != "" || *daemon) && !isDaemonChild {
-		effectiveMode := *mode
-		if *daemon && effectiveMode == "" {
-			effectiveMode = "start"
-		}
-
 		switch effectiveMode {
 		case "start":
-			fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
-			if *dashboard {
-				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
-				fmt.Printf("\n--------------------------------------------------\n")
-				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
-				fmt.Printf("--------------------------------------------------\n\n")
-			}
-			if cfg.RSS.Enabled {
-				fmt.Printf("📰 RSS-Fetcher: ENABLED (Source: https://news.ycombinator.com/rss, Interval: %d min)\n", cfg.RSS.IntervalMinutes)
-			}
+			useColor := stdoutSupportsColor()
+			printAppIdentity(os.Stdout, useColor)
+			printDaemonParentReport(os.Stdout, cfg, configPath, useColor)
 			err := StartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to start daemon: %v", err)
@@ -185,16 +186,9 @@ func main() {
 			}
 			return
 		case "restart":
-			fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
-			if *dashboard {
-				addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
-				fmt.Printf("\n--------------------------------------------------\n")
-				fmt.Printf("🚀 Web Dashboard Service: http://%s\n", addr)
-				fmt.Printf("--------------------------------------------------\n\n")
-			}
-			if cfg.RSS.Enabled {
-				fmt.Printf("📰 RSS-Fetcher: ENABLED (Source: https://news.ycombinator.com/rss, Interval: %d min)\n", cfg.RSS.IntervalMinutes)
-			}
+			useColor := stdoutSupportsColor()
+			printAppIdentity(os.Stdout, useColor)
+			printDaemonParentReport(os.Stdout, cfg, configPath, useColor)
 			err := RestartDaemon(cfg)
 			if err != nil {
 				log.Fatalf("Failed to restart daemon: %v", err)
@@ -361,7 +355,7 @@ func main() {
 }
 
 func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) error {
-	fmt.Printf("%s v%s\n%s\n\n", meta.Name, meta.Version, meta.Author)
+	// Forked daemon child has stdio detached; avoid fmt to stdout (no terminal). Debug goes to log if configured.
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
 	err := WritePIDFile(pidFile)
@@ -407,6 +401,8 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 		break
 	}
 
+	bot.RequestQuit("")
+
 	// Clean up PID file on exit
 	DeletePIDFile(pidFile)
 
@@ -449,6 +445,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 		log.Printf("Received signal: %v. Shutting down gracefully...", sig)
 		break
 	}
+
+	bot.RequestQuit("")
 
 	// Give some time for graceful shutdown
 	time.Sleep(1 * time.Second)
