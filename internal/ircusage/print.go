@@ -50,7 +50,7 @@ var adminLines = []line{
 	{cmd: "!say #chan <msg>", desc: "Send a message to a channel"},
 	{cmd: "!news on|off", desc: "Toggle news for the current channel (session only)"},
 	{cmd: "!news start|stop", desc: "Turn global RSS-to-IRC announcements on/off (saves config)"},
-	{cmd: "!stats", desc: "Bot statistics (e.g. AI request count, uptime)"},
+	{cmd: "!stats", desc: "Bot stats: IRC/data queues, RSS config vs news DB rows, host RAM/CPU, uptime"},
 	{cmd: "!op [nick]", desc: "Give channel operator to self or nick (in channel)"},
 	{cmd: "!deop [nick]", desc: "Remove channel operator (in channel)"},
 	{cmd: "!voice [nick]", desc: "Give voice to self or nick (in channel)"},
