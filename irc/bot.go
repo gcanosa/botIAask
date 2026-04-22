@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"botIAask/ai"
 	"botIAask/bookmarks"
@@ -608,15 +609,18 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		helpMsg := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
+			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+			b.sendPrivmsgMentionedLines(target, sender, public, admin)
 		} else if isAdmin {
-			helpMsg += fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
+			merged := public + fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
+			b.sendPrivmsgMentionedLines(target, sender, merged)
+		} else {
+			b.sendPrivmsgMentionedLines(target, sender, public)
 		}
-		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, helpMsg)))
 		return
 	}
 
@@ -633,6 +637,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("%s logged out of admin session.", sender))
 		} else {
 			if isAdmin {
+				if isLoggedInAdmin {
+					b.sendNotice(sender, "You are already logged in to an admin session.")
+					return
+				}
 				b.loginsMu.Lock()
 				b.loggedInAdmins[sender] = true
 				recipients := make([]string, 0, len(b.loggedInAdmins))
@@ -963,10 +971,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				displayLink = rss.ShortenURL(e.Link)
 			}
 
-			msg := fmt.Sprintf("\x0304,01[NEWS]\x03 %s - %s", e.PubDate.Format("15:04"), e.Title)
-			if displayLink != "" {
-				msg += fmt.Sprintf(" \x0312\x1f🔗\x1f\x03 %s", displayLink)
-			}
+			msg := rss.FormatIRCNewsLine(e, displayLink)
 			b.sendPrivmsg(target, msg)
 			time.Sleep(1 * time.Second) // Throttling
 		}
@@ -1421,6 +1426,128 @@ func (b *Bot) sendPrivmsg(target, message string) {
 	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
 }
 
+// ircTextBudget is the byte cap passed to ircutils.SanitizeText in sanitize()
+const ircTextBudget = 450
+
+// sendPrivmsgMentionedLines sends PRIVMSGs of the form "@sender: " + each chunk of
+// the given logical message parts, splitting long parts on word boundaries to stay
+// within ircTextBudget.
+func (b *Bot) sendPrivmsgMentionedLines(target, sender string, parts ...string) {
+	mention := fmt.Sprintf("@%s: ", sender)
+	prefix := len([]byte(mention))
+	if prefix > 200 {
+		prefix = 200
+	}
+	budget := ircTextBudget - prefix
+	if budget < 64 {
+		budget = 64
+	}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		for _, chunk := range splitUTF8ByByteBudget(p, budget) {
+			if chunk == "" {
+				continue
+			}
+			b.sendPrivmsg(target, b.sanitize(mention+chunk))
+		}
+	}
+}
+
+// splitUTF8ByByteBudget splits s into substrings, each of byte length at most max, without breaking runes.
+func splitUTF8ByByteBudget(s string, max int) []string {
+	if max < 1 {
+		return nil
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if len([]byte(s)) <= max {
+		return []string{s}
+	}
+	var res []string
+	words := strings.Fields(s)
+	var cur string
+	flush := func() {
+		t := strings.TrimSpace(cur)
+		if t != "" {
+			res = append(res, t)
+		}
+		cur = ""
+	}
+	for _, w := range words {
+		if cur == "" {
+			if len([]byte(w)) > max {
+				flush()
+				for _, p := range splitStringByRunesToByteBudget(w, max) {
+					res = append(res, p)
+				}
+				continue
+			}
+			cur = w
+			continue
+		}
+		trial := cur + " " + w
+		if len([]byte(trial)) <= max {
+			cur = trial
+		} else {
+			flush()
+			if len([]byte(w)) > max {
+				for _, p := range splitStringByRunesToByteBudget(w, max) {
+					res = append(res, p)
+				}
+			} else {
+				cur = w
+			}
+		}
+	}
+	flush()
+	return res
+}
+
+// splitStringByRunesToByteBudget splits a single token (no spaces) to fit the byte cap.
+func splitStringByRunesToByteBudget(s string, max int) []string {
+	if max < 1 {
+		return nil
+	}
+	if len([]byte(s)) <= max {
+		return []string{s}
+	}
+	var res []string
+	rest := s
+	for len([]byte(rest)) > max {
+		b := []byte(rest)
+		i := 0
+		for i < len(b) {
+			_, w := utf8.DecodeRune(b[i:])
+			if w == 0 {
+				break
+			}
+			if len(b[:i+w]) > max {
+				break
+			}
+			i += w
+		}
+		if i < 1 {
+			_, w := utf8.DecodeRune(b)
+			if w < 1 {
+				w = 1
+			}
+			i = w
+		}
+		res = append(res, string(b[:i]))
+		rest = string(b[i:])
+	}
+	rest = strings.TrimSpace(rest)
+	if rest != "" {
+		res = append(res, rest)
+	}
+	return res
+}
+
 // sendNotice wraps conn.Notice and logs outbound notices (e.g. join reminders).
 func (b *Bot) sendNotice(target, message string) {
 	b.conn.Notice(target, message)
@@ -1477,7 +1604,7 @@ func formatDuration(d time.Duration) string {
 func (b *Bot) sanitize(s string) string {
 	// Use 512 as the standard IRC message limit (including overhead).
 	// We use a slightly smaller limit for the text content itself to allow for prefixing.
-	return ircutils.SanitizeText(s, 450)
+	return ircutils.SanitizeText(s, ircTextBudget)
 }
 
 func (b *Bot) updateTrackerAdmins() {

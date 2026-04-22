@@ -198,11 +198,7 @@ func (f *Fetcher) Fetch() {
 		}
 
 		if f.cfg.RSS.AnnounceToIRCEnabled() {
-			// Short IRC format: "[NEWS] 15:04 - Title [🔗 Link]"
-			msg := fmt.Sprintf("\x0304,01[NEWS]\x03 %s - %s", entry.PubDate.Format("15:04"), entry.Title)
-			if entry.ShortLink != "" {
-				msg += fmt.Sprintf(" \x0312\x1f🔗\x1f\x03 %s", entry.ShortLink)
-			}
+			msg := FormatIRCNewsLine(entry, entry.ShortLink)
 			f.bot.Broadcast(f.cfg.RSS.Channels, msg)
 			time.Sleep(3 * time.Second)
 		}

@@ -519,6 +519,118 @@ html[data-theme="mono"] .news-source-badge--hn {
     justify-content: flex-end;
 }
 
+@media (min-width: 641px) {
+    .data-table--news .news-td--date {
+        white-space: nowrap;
+    }
+}
+
+.news-toolbar {
+    min-width: 0;
+}
+
+.news-toolbar .news-search-wrap {
+    min-width: 0;
+}
+
+.news-toolbar-actions {
+    min-width: 0;
+}
+
+.news-fetch-info {
+    line-height: 1.35;
+}
+
+/* News: stack rows as cards on narrow viewports */
+@media (max-width: 640px) {
+    .news-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .news-toolbar-actions {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .news-fetch-info {
+        flex: 1 1 12rem;
+        min-width: 0;
+    }
+
+    .data-table-wrap.news-table-wrap {
+        overflow-x: visible;
+    }
+
+    .data-table--news,
+    .data-table--news thead,
+    .data-table--news tbody,
+    .data-table--news tr,
+    .data-table--news th,
+    .data-table--news td {
+        display: block;
+        width: 100%;
+    }
+
+    .data-table--news thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        border: 0;
+    }
+
+    .data-table--news tbody tr.news-row:not(.news-row--empty) {
+        border: 1px solid var(--glass-border);
+        border-radius: 10px;
+        margin-bottom: 0.75rem;
+        overflow: hidden;
+        background: var(--bg-card, rgba(255, 255, 255, 0.04));
+    }
+
+    .data-table--news tbody tr.news-row:not(.news-row--empty) td {
+        border: none;
+    }
+
+    .data-table--news .news-td--title {
+        padding: 0.75rem 1rem 0.5rem 1rem !important;
+    }
+
+    .data-table--news .news-td--date,
+    .data-table--news .news-td--actions:not(.hidden) {
+        padding: 0.4rem 1rem 0.75rem 1rem !important;
+        text-align: left !important;
+    }
+
+    .data-table--news .news-td--date::before,
+    .data-table--news .news-td--actions:not(.hidden)::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-muted);
+        margin-bottom: 0.2rem;
+        font-weight: 600;
+    }
+}
+
+/* Shared list tables: tighter cells on small screens (horizontal scroll kept) */
+@media (max-width: 640px) {
+    .data-table-wrap {
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .data-table-wrap .data-table:not(.data-table--news) th,
+    .data-table-wrap .data-table:not(.data-table--news) td {
+        padding: 0.5rem 0.5rem;
+        font-size: 0.8rem;
+    }
+}
+
 /* Status Badges */
 .status-area {
     margin-top: auto;

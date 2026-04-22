@@ -1660,6 +1660,12 @@ async function fetchApprovedPastes(page) {
             </tr>
         `;
     }).join('');
+
+    const totalPages = Math.max(0, Number(data.total_pages) || 0);
+    const prevBtn = document.getElementById('pastes-prev-page');
+    const nextBtn = document.getElementById('pastes-next-page');
+    if (prevBtn) prevBtn.disabled = page <= 1;
+    if (nextBtn) nextBtn.disabled = totalPages === 0 || page >= totalPages;
 }
 
 function changePastePage(d) {
@@ -1872,13 +1878,13 @@ async function fetchNews(page) {
 
         const list = document.getElementById('news-list');
         if (!data.news || data.news.length === 0) {
-            list.innerHTML = '<tr><td colspan="3" style="padding: 2rem; text-align: center; color: var(--text-muted);">No news found.</td></tr>';
+            list.innerHTML = '<tr class="news-row news-row--empty"><td colspan="3" class="news-empty" style="padding: 2rem; text-align: center; color: var(--text-muted);">No news found.</td></tr>';
             return;
         }
 
         list.innerHTML = data.news.map(n => `
-            <tr style="border-bottom: 1px solid var(--glass-border);">
-                <td style="padding: 1rem;">
+            <tr class="news-row" style="border-bottom: 1px solid var(--glass-border);">
+                <td class="news-td news-td--title" style="padding: 1rem;">
                     <div class="news-item-head">
                         <div class="news-item-head__main">
                             ${newsSourceBadgeFor(n.Source)}
@@ -1890,15 +1896,15 @@ async function fetchNews(page) {
                         </div>
                     </div>
                 </td>
-                <td style="padding: 1rem; text-align: right; color: var(--text-muted); white-space: nowrap;">
+                <td class="news-td news-td--date" data-label="Date" style="padding: 1rem; text-align: right; color: var(--text-muted);">
                     ${new Date(n.PubDate).toLocaleDateString()} ${new Date(n.PubDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </td>
                 ${lastIsAdmin ? `
-                <td style="padding: 1rem; text-align: right;">
+                <td class="news-td news-td--actions" data-label="Actions" style="padding: 1rem; text-align: right;">
                     <div class="row-action-group" style="justify-content: flex-end;">
                         <button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete news item" onclick="deleteNews('${n.GUID}')">${rowIcons.trash}</button>
                     </div>
-                </td>` : '<td class="hidden"></td>'}
+                </td>` : '<td class="news-td news-td--actions hidden"></td>'}
             </tr>
         `).join('');
 
