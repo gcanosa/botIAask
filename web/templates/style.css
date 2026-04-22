@@ -1205,12 +1205,20 @@ input.btn-ghost:focus {
     display: grid;
     grid-template-columns: minmax(220px, 280px) 1fr;
     gap: 1.25rem;
-    align-items: start;
+    align-items: stretch;
 }
 
 @media (max-width: 900px) {
     .logs-workspace {
         grid-template-columns: 1fr;
+    }
+
+    .logs-viewer-placeholder,
+    .logs-viewer {
+        height: clamp(260px, min(48vh, calc(100vh - 17rem)), 600px);
+        max-height: min(600px, calc(100vh - 17rem));
+        height: clamp(260px, min(48dvh, calc(100dvh - 17rem)), 600px);
+        max-height: min(600px, calc(100dvh - 17rem));
     }
 }
 
@@ -1337,11 +1345,27 @@ input.btn-ghost:focus {
 
 .logs-main {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* Same outer height for placeholder and viewer so layout does not jump by log volume */
+.logs-viewer-placeholder,
+.logs-viewer {
+    box-sizing: border-box;
+    height: clamp(280px, min(56vh, calc(100vh - 13rem)), 720px);
+    max-height: min(720px, calc(100vh - 13rem));
+    height: clamp(280px, min(56dvh, calc(100dvh - 13rem)), 720px);
+    max-height: min(720px, calc(100dvh - 13rem));
 }
 
 .logs-viewer-placeholder {
     padding: 2.5rem;
     text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .logs-viewer {
@@ -1349,8 +1373,7 @@ input.btn-ghost:focus {
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    min-height: 520px;
-    max-height: calc(100vh - 8rem);
+    min-height: 0;
 }
 
 .logs-toolbar {
@@ -1515,8 +1538,10 @@ input.btn-ghost:focus {
 }
 
 .logs-scroll {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     padding: 1rem;
     font-size: 0.78rem;
     line-height: 1.45;
