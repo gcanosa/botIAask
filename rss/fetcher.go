@@ -149,6 +149,7 @@ func (f *Fetcher) Fetch() {
 			continue
 		}
 
+		src := FeedSourceKeyFromFeed(feedURL, feed)
 		for _, item := range feed.Items {
 			id := item.GUID
 			if id == "" {
@@ -173,6 +174,7 @@ func (f *Fetcher) Fetch() {
 					Title:   item.Title,
 					Link:    item.Link,
 					PubDate: pubDate,
+					Source:  src,
 				}
 				newEntries = append(newEntries, entry)
 			}
@@ -231,6 +233,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			log.Printf("[RSS] Error fetching feed %s for backfill: %v", feedURL, err)
 			continue
 		}
+		src := FeedSourceKeyFromFeed(feedURL, feed)
 
 		log.Printf("[RSS] Feed %s fetched: %d items total", feedURL, len(feed.Items))
 
@@ -264,6 +267,7 @@ func (f *Fetcher) Backfill(limit int) int {
 					Link:      item.Link,
 					ShortLink: ShortenURL(item.Link),
 					PubDate:   pubDate,
+					Source:    src,
 				}
 				if err := f.db.MarkSeen(entry); err != nil {
 					log.Printf("[RSS] Failed to save backfill entry: %v", err)

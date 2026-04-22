@@ -356,7 +356,7 @@
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TICKET</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">REF</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">KIND</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TITLE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">SIZE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">NICK</th>
@@ -384,12 +384,13 @@
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TICKET</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">REF</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">KIND</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TITLE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">SIZE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">NICK</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">HOST</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">PUBLISHED</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">EXPIRES (PUBLIC)</th>
                                     <th style="text-align: right; padding: 0.75rem 1rem;">ACTIONS</th>
                                 </tr>
                             </thead>
@@ -425,7 +426,6 @@
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TICKET</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">REF</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TITLE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">SIZE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">NICK</th>
@@ -453,12 +453,13 @@
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TICKET</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">REF</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">TITLE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">SIZE</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">NICK</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">HOST</th>
                                     <th style="text-align: left; padding: 0.75rem 1rem;">PUBLISHED</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">EXPIRES (PUBLIC)</th>
+                                    <th style="text-align: center; padding: 0.75rem 1rem;" title="Public files appear here without logging in">PUBLIC</th>
                                     <th style="text-align: right; padding: 0.75rem 1rem;">ACTIONS</th>
                                 </tr>
                             </thead>
@@ -622,7 +623,7 @@
         <div id="upload-detail-modal" class="card hidden animate-fade" style="width: 100%; max-width: 520px; padding: 2rem; max-height: 90vh; overflow-y: auto;">
             <h2 class="card-title" style="margin-bottom: 1rem;">Paste / file detail</h2>
             <div id="upload-detail-body" style="font-size: 0.85rem; line-height: 1.5;"></div>
-            <div id="upload-detail-actions" style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; justify-content: flex-end;"></div>
+            <div id="upload-detail-actions" class="row-action-group"></div>
             <button type="button" onclick="hideUploadDetail()" class="btn btn-ghost w-full" style="margin-top: 1rem;">Close</button>
         </div>
     </div>

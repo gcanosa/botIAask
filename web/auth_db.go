@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"botIAask/config"
@@ -175,6 +176,19 @@ func (a *AuthDatabase) ActiveSessionUsernames() ([]string, error) {
 		names = append(names, u)
 	}
 	return names, rows.Err()
+}
+
+// GetUserRole returns the web_users.role value for id (e.g. "admin"). Empty or unknown defaults to "admin".
+func (a *AuthDatabase) GetUserRole(userID int) (string, error) {
+	var role sql.NullString
+	err := a.db.QueryRow("SELECT role FROM web_users WHERE id = ?", userID).Scan(&role)
+	if err != nil {
+		return "", err
+	}
+	if !role.Valid || strings.TrimSpace(role.String) == "" {
+		return "admin", nil
+	}
+	return role.String, nil
 }
 
 func (a *AuthDatabase) GetUsers() ([]User, error) {

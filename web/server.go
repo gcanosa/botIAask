@@ -155,6 +155,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/uploads/files/pending", s.handleUploadsFilesPending)
 	mux.HandleFunc("/api/uploads/files/compress", s.handleUploadFileCompress)
 	mux.HandleFunc("/api/uploads/detail", s.handleUploadDetail)
+	mux.HandleFunc("/api/uploads/public", s.handleUploadsPublic)
 	mux.HandleFunc("/api/uploads/settings", s.handleUploadSettings)
 	mux.HandleFunc("/api/finance", s.handleFinance)
 	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
@@ -208,9 +209,9 @@ func mergeUniqueSortedStrings(a, b []string) []string {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	isAdmin, needsChange := s.checkAuth(r)
+	sessionOK, staffAdmin, needsChange := s.sessionStaffInfo(r)
 	pendingPastes, pendingUploads := 0, 0
-	if isAdmin && s.uploadsDB != nil {
+	if staffAdmin && s.uploadsDB != nil {
 		var err error
 		pendingPastes, err = s.uploadsDB.CountPendingPastes()
 		if err != nil {
@@ -237,14 +238,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"rss_enabled":           s.rssFetcher.IsEnabled(),
 		"stats_enabled":         s.statsTracker.IsEnabled(),
 		"start_time":            s.bot.GetStartTime().Format(time.RFC3339),
-		"is_admin":              isAdmin,
+		"is_admin":              sessionOK,
+		"staff_admin":           staffAdmin,
 		"needs_password_change": needsChange,
 		"irc_authenticated":     s.bot.IsAuthenticated(),
 		"pending_pastes":        pendingPastes,
 		"pending_uploads":       pendingUploads,
 	}
 
-	if isAdmin && s.statsTracker.IsEnabled() {
+	if staffAdmin && s.statsTracker.IsEnabled() {
 		ircNicks, chans := s.statsTracker.GetAdmins()
 		webNames, err := s.authDB.ActiveSessionUsernames()
 		if err != nil {
@@ -254,7 +256,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["channel_admins"] = chans
 	}
 
-	if isAdmin {
+	if sessionOK {
 		uiTheme := "dark"
 		if cookie, err := r.Cookie("admin_session"); err == nil {
 			if uid, _, err := s.authDB.ValidateSession(cookie.Value); err == nil {
@@ -819,6 +821,33 @@ func (s *Server) checkAuth(r *http.Request) (bool, bool) {
 	return err == nil, needsChange
 }
 
+func isPrivilegedAdminRole(role string) bool {
+	r := strings.ToLower(strings.TrimSpace(role))
+	return r == "" || r == "admin"
+}
+
+// sessionStaffInfo returns dashboard session validity, whether the user has staff (moderation) privileges, and password-change flag.
+func (s *Server) sessionStaffInfo(r *http.Request) (sessionOK, staffAdmin bool, needsPasswordChange bool) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return false, false, false
+	}
+	uid, needs, err := s.authDB.ValidateSession(cookie.Value)
+	if err != nil {
+		return false, false, false
+	}
+	role, err := s.authDB.GetUserRole(uid)
+	if err != nil {
+		return true, false, needs
+	}
+	return true, isPrivilegedAdminRole(role), needs
+}
+
+func (s *Server) staffAdminFromRequest(r *http.Request) bool {
+	_, staff, _ := s.sessionStaffInfo(r)
+	return staff
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -878,8 +907,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1273,12 +1301,9 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check expiration if days > 0
-	if upload.ExpiresInDays > 0 {
-		if upload.ApprovedAt.Valid && time.Since(upload.ApprovedAt.Time) > time.Duration(upload.ExpiresInDays)*24*time.Hour {
-			http.Error(w, "This paste has expired", http.StatusGone)
-			return
-		}
+	if upload.IsAccessExpired(time.Now()) && !s.staffAdminFromRequest(r) {
+		http.Error(w, "This paste has expired", http.StatusGone)
+		return
 	}
 
 	content, err := os.ReadFile(upload.ContentPath)
@@ -1303,6 +1328,13 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// approvedUploadListJSON adds public-expiry fields for dashboard paste/file tables.
+type approvedUploadListJSON struct {
+	*uploads.Upload
+	ExpiresAt *string `json:"expires_at,omitempty"`
+	IsExpired bool    `json:"is_expired"`
+}
+
 func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 	if s.uploadsDB == nil {
 		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
@@ -1320,7 +1352,8 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 	limit := 10
 	offset := (page - 1) * limit
 
-	items, total, err := s.uploadsDB.GetApprovedPastes(limit, offset)
+	staff := s.staffAdminFromRequest(r)
+	items, total, err := s.uploadsDB.GetApprovedPastes(limit, offset, time.Now(), !staff)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1337,10 +1370,21 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 		items = redacted
 	}
 
+	now := time.Now()
+	out := make([]approvedUploadListJSON, len(items))
+	for i, u := range items {
+		row := approvedUploadListJSON{Upload: u, IsExpired: u.IsAccessExpired(now)}
+		if exp, ok := u.AccessExpiresAt(); ok {
+			expStr := exp.UTC().Format(time.RFC3339)
+			row.ExpiresAt = &expStr
+		}
+		out[i] = row
+	}
+
 	totalPages := (total + limit - 1) / limit
 
 	response := map[string]interface{}{
-		"pastes":      items,
+		"pastes":      out,
 		"page":        page,
 		"total_pages": totalPages,
 		"total_count": total,
@@ -1352,8 +1396,7 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteDelete(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1378,8 +1421,7 @@ func (s *Server) handlePasteDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1401,8 +1443,7 @@ func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1436,8 +1477,7 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1763,11 +1803,13 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "This file is pending approval or was cancelled", http.StatusForbidden)
 		return
 	}
-	if upload.ExpiresInDays > 0 {
-		if upload.ApprovedAt.Valid && time.Since(upload.ApprovedAt.Time) > time.Duration(upload.ExpiresInDays)*24*time.Hour {
-			http.Error(w, "This file has expired", http.StatusGone)
-			return
-		}
+	if !upload.IsPublic && !s.staffAdminFromRequest(r) {
+		http.Error(w, "This file is not publicly accessible", http.StatusForbidden)
+		return
+	}
+	if upload.IsAccessExpired(time.Now()) && !s.staffAdminFromRequest(r) {
+		http.Error(w, "This file has expired", http.StatusGone)
+		return
 	}
 	f, err := os.Open(upload.ContentPath)
 	if err != nil {
@@ -1796,11 +1838,6 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUploadsFilesList(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
 	if s.uploadsDB == nil {
 		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
 		return
@@ -1818,16 +1855,32 @@ func (s *Server) handleUploadsFilesList(w http.ResponseWriter, r *http.Request) 
 	}
 	limit := 10
 	offset := (page - 1) * limit
-	items, total, err := s.uploadsDB.GetApprovedFiles(limit, offset)
+	publicOnly := !s.staffAdminFromRequest(r)
+	items, total, err := s.uploadsDB.GetApprovedFiles(limit, offset, publicOnly)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if publicOnly {
+		for _, u := range items {
+			u.ClientHost = ""
+		}
+	}
+	now := time.Now()
+	fileRows := make([]approvedUploadListJSON, len(items))
+	for i, u := range items {
+		row := approvedUploadListJSON{Upload: u, IsExpired: u.IsAccessExpired(now)}
+		if exp, ok := u.AccessExpiresAt(); ok {
+			expStr := exp.UTC().Format(time.RFC3339)
+			row.ExpiresAt = &expStr
+		}
+		fileRows[i] = row
 	}
 	totalPages := (total + limit - 1) / limit
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"files":       items,
+		"files":       fileRows,
 		"page":        page,
 		"total_pages": totalPages,
 		"total_count": total,
@@ -1835,8 +1888,7 @@ func (s *Server) handleUploadsFilesList(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUploadsFilesPending(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1925,11 +1977,6 @@ func writeSingleFileTgz(dstPath, srcPath, memberName string) error {
 }
 
 func (s *Server) handleUploadDetail(w http.ResponseWriter, r *http.Request) {
-	sessionOK, _ := s.checkAuth(r)
-	if !sessionOK {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
 	if s.uploadsDB == nil {
 		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
 		return
@@ -1956,18 +2003,33 @@ func (s *Server) handleUploadDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	staff := s.staffAdminFromRequest(r)
+	if u.Status == "pending_approval" && !staff {
+		http.NotFound(w, r)
+		return
+	}
+	if u.Status == "approved" && u.IsFile() && !u.IsPublic && !staff {
+		http.NotFound(w, r)
+		return
+	}
 	displayName := u.OriginalFilename
 	if displayName == "" {
 		displayName = filepath.Base(u.ContentPath)
 	}
+	now := time.Now()
+	expired := u.IsAccessExpired(now)
 	var viewPath, downloadPath *string
 	if u.Status == "approved" {
 		if u.IsFile() {
 			p := "/f/" + u.TicketID
-			downloadPath = &p
+			if staff || !expired {
+				downloadPath = &p
+			}
 		} else {
 			p := "/p/" + u.TicketID
-			viewPath = &p
+			if staff || !expired {
+				viewPath = &p
+			}
 		}
 	}
 	var approvedAt *string
@@ -1975,23 +2037,37 @@ func (s *Server) handleUploadDetail(w http.ResponseWriter, r *http.Request) {
 		s := u.ApprovedAt.Time.UTC().Format(time.RFC3339)
 		approvedAt = &s
 	}
+	var expiresAt *string
+	if exp, ok := u.AccessExpiresAt(); ok {
+		s := exp.UTC().Format(time.RFC3339)
+		expiresAt = &s
+	}
+	clientHost := u.ClientHost
+	if !staff {
+		clientHost = ""
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ticket_id":         u.TicketID,
 		"public_ref":        u.PublicRef,
+		"paste_kind":        u.PasteKind,
 		"upload_type":       u.UploadType,
 		"status":            u.Status,
 		"display_filename":  displayName,
 		"title":             u.Title,
 		"username":          u.Username,
-		"client_host":       u.ClientHost,
+		"client_host":       clientHost,
 		"approved_at":       approvedAt,
+		"expires_in_days":   u.ExpiresInDays,
+		"expires_at":        expiresAt,
+		"is_expired":        expired,
 		"size_bytes":        u.SizeBytes,
 		"md5_hex":           u.MD5Hex,
 		"sha256_hex":        u.SHA256Hex,
 		"is_file":           u.IsFile(),
-		"can_compress":      u.Status == "approved" && uploadDetailCanCompress(u),
+		"is_public":         u.IsPublic,
+		"can_compress":      staff && u.Status == "approved" && uploadDetailCanCompress(u),
 		"download_path":     downloadPath,
 		"view_path":         viewPath,
 		"download_count":    u.DownloadCount,
@@ -1999,9 +2075,46 @@ func (s *Server) handleUploadDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleUploadsPublic(w http.ResponseWriter, r *http.Request) {
+	if !s.staffAdminFromRequest(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.uploadsDB == nil {
+		http.Error(w, "Uploads database not initialized", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TicketID string `json:"ticket_id"`
+		Public   bool   `json:"is_public"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	ticketID := strings.TrimSpace(req.TicketID)
+	if ticketID == "" {
+		http.Error(w, "ticket_id required", http.StatusBadRequest)
+		return
+	}
+	if err := s.uploadsDB.SetFileIsPublic(ticketID, req.Public); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 func (s *Server) handleUploadFileCompress(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -2090,8 +2203,7 @@ func (s *Server) handleUploadFileCompress(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
-	if !isAdmin {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
