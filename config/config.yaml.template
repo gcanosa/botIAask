@@ -3,9 +3,15 @@ irc:
     port: 6697
     use_ssl: true
     nickname: Nickname
+    # Channels: plain strings, or a mapping for +k (optional channel key / "password"):
+    #   - name: '##locked'
+    #     password: 'channel-key-here'
     channels:
         - '#channel1'
         - '#channel2'
+    # QUIT message: omit (or use "") for default: "<app name> <version> Uptime: <uptime>".
+    # Or a custom string; use {name} {version} {uptime} {nickname} for dynamic parts.
+    # quit_message: '{name} v{version} | Up: {uptime}'
     services:
         enabled: true
         username: registered_nickname

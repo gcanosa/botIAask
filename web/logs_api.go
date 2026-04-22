@@ -139,8 +139,8 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 
 	joinedByKey := make(map[string]string)
 	for _, ch := range s.cfg.IRC.Channels {
-		k := logger.ChannelFileKey(ch, s.cfg.IRC.Server)
-		joinedByKey[k] = ch
+		k := logger.ChannelFileKey(ch.Name, s.cfg.IRC.Server)
+		joinedByKey[k] = ch.Name
 	}
 
 	allKeys := make(map[string]struct{})

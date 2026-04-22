@@ -181,6 +181,33 @@ func ircChannelTarget(s string) bool {
 	return len(s) > 0 && (s[0] == '#' || s[0] == '&')
 }
 
+// parseJoinChannelAndKey parses text after "!join ": first word is #channel, remainder (if any) is the channel key.
+func parseJoinChannelAndKey(rest string) (name, key string) {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", ""
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return "", ""
+	}
+	name = fields[0]
+	if !ircChannelTarget(name) {
+		return "", ""
+	}
+	if len(fields) > 1 {
+		key = strings.Join(fields[1:], " ")
+	}
+	return name, key
+}
+
+func ircJoinWithKey(conn *ircevent.Connection, ch config.IRChannel) error {
+	if ch.Password != "" {
+		return conn.Send("JOIN", ch.Name, ch.Password)
+	}
+	return conn.Join(ch.Name)
+}
+
 func channelsNotInFold(list []string, ch string) bool {
 	for _, x := range list {
 		if strings.EqualFold(x, ch) {
@@ -204,20 +231,24 @@ func (b *Bot) persistIRCChannelsToDisk() error {
 	return config.SaveConfig(configPathOrDefault(b), b.cfg)
 }
 
-func (b *Bot) addIRCChannelToConfig(ch string) error {
-	for _, existing := range b.cfg.IRC.Channels {
-		if strings.EqualFold(existing, ch) {
-			return nil
+func (b *Bot) addIRCChannelToConfig(entry config.IRChannel) error {
+	for i, existing := range b.cfg.IRC.Channels {
+		if strings.EqualFold(existing.Name, entry.Name) {
+			if existing.Password == entry.Password {
+				return nil
+			}
+			b.cfg.IRC.Channels[i] = entry
+			return b.persistIRCChannelsToDisk()
 		}
 	}
-	b.cfg.IRC.Channels = append(b.cfg.IRC.Channels, ch)
+	b.cfg.IRC.Channels = append(b.cfg.IRC.Channels, entry)
 	return b.persistIRCChannelsToDisk()
 }
 
 func (b *Bot) removeIRCChannelFromConfig(ch string) error {
 	out := b.cfg.IRC.Channels[:0]
 	for _, existing := range b.cfg.IRC.Channels {
-		if !strings.EqualFold(existing, ch) {
+		if !strings.EqualFold(existing.Name, ch) {
 			out = append(out, existing)
 		}
 	}
@@ -228,6 +259,44 @@ func (b *Bot) removeIRCChannelFromConfig(ch string) error {
 // GetUptime returns the human-readable uptime of the bot.
 func (b *Bot) GetUptime() string {
 	return formatDuration(time.Since(b.startTime))
+}
+
+// FormatQuitMessage builds the IRC QUIT trailing message. Non-empty override (e.g. from !quit text)
+// is returned as-is. Otherwise, if irc.quit_message is set, placeholders are expanded; if unset,
+// the default is "<app name> <version> Uptime: <uptime>".
+func (b *Bot) FormatQuitMessage(override string) string {
+	o := strings.TrimSpace(override)
+	if o != "" {
+		return o
+	}
+	tmpl := strings.TrimSpace(b.cfg.IRC.QuitMessage)
+	if tmpl == "" {
+		return fmt.Sprintf("%s %s Uptime: %s", meta.Name, meta.Version, b.GetUptime())
+	}
+	return b.expandQuitTemplate(tmpl)
+}
+
+func (b *Bot) expandQuitTemplate(tmpl string) string {
+	r := strings.NewReplacer(
+		"{name}", meta.Name,
+		"{version}", meta.Version,
+		"{uptime}", b.GetUptime(),
+		"{nickname}", b.cfg.IRC.Nickname,
+	)
+	return r.Replace(tmpl)
+}
+
+// RequestQuit sends QUIT to IRC with FormatQuitMessage(override) and ends the client loop. No-op if not connected.
+func (b *Bot) RequestQuit(override string) {
+	b.statsMu.Lock()
+	conn := b.conn
+	ok := b.connected
+	b.statsMu.Unlock()
+	if conn == nil || !ok {
+		return
+	}
+	conn.QuitMessage = b.FormatQuitMessage(override)
+	conn.Quit()
 }
 
 // GetStartTime returns the time the bot was initialized.
@@ -280,7 +349,7 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 // ApplyLiveConfig swaps in a new config from disk, rebuilds rate limiting, and syncs channel membership without reconnecting.
 func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 	b.membersMu.Lock()
-	oldChans := append([]string(nil), b.cfg.IRC.Channels...)
+	oldChans := config.IRChannelNames(b.cfg.IRC.Channels)
 	oldSrv := b.cfg.IRC.Server
 	oldPort := b.cfg.IRC.Port
 	oldNick := b.cfg.IRC.Nickname
@@ -311,12 +380,16 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 		return
 	}
 
-	newChans := append([]string(nil), newCfg.IRC.Channels...)
+	newChans := config.IRChannelNames(newCfg.IRC.Channels)
 	for _, ch := range channelListDifference(oldChans, newChans) {
 		conn.Part(ch)
 	}
-	for _, ch := range channelListDifference(newChans, oldChans) {
-		conn.Join(ch)
+	for _, chName := range channelListDifference(newChans, oldChans) {
+		if entry, ok := config.FindIRChannelByName(newCfg.IRC.Channels, chName); ok {
+			if err := ircJoinWithKey(conn, entry); err != nil {
+				log.Printf("rehash join %s: %v", chName, err)
+			}
+		}
 	}
 	log.Printf("Bot configuration reloaded (channels synced).")
 }
@@ -379,9 +452,15 @@ func (b *Bot) Start() error {
 		b.statsMu.Unlock()
 		for _, channel := range b.cfg.IRC.Channels {
 			if b.cfg.Bot.Debug {
-				log.Printf("[DEBUG] Joining channel: %s", channel)
+				if channel.Password != "" {
+					log.Printf("[DEBUG] Joining channel: %s (key set)", channel.Name)
+				} else {
+					log.Printf("[DEBUG] Joining channel: %s", channel.Name)
+				}
 			}
-			b.conn.Join(channel)
+			if err := ircJoinWithKey(b.conn, channel); err != nil {
+				log.Printf("join %s: %v", channel.Name, err)
+			}
 		}
 	})
 
@@ -518,7 +597,7 @@ func (b *Bot) Start() error {
 		}
 		// For quits, we log to all configured channels as we might not have a full state tracker
 		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventQuit, sender, message, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, channel.Name, logger.EventQuit, sender, message, "")
 		}
 
 		b.membersMu.Lock()
@@ -540,7 +619,7 @@ func (b *Bot) Start() error {
 		sender := e.Nick()
 		newNick := e.Params[0]
 		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(b.cfg.IRC.Server, channel, logger.EventNick, sender, newNick, "")
+			logger.LogChannelEvent(b.cfg.IRC.Server, channel.Name, logger.EventNick, sender, newNick, "")
 		}
 
 		b.membersMu.Lock()
@@ -612,7 +691,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
-			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan, %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
+			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 			b.sendPrivmsgMentionedLines(target, sender, public, admin)
 		} else if isAdmin {
@@ -666,17 +745,26 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	// Admin commands
 	if isAdmin && isLoggedInAdmin {
 		if strings.HasPrefix(message, b.prefix+"join ") {
-			channel := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
-			if channel != "" {
-				b.conn.Join(channel)
-				if err := b.addIRCChannelToConfig(channel); err != nil {
-					log.Printf("persist irc channels: %v", err)
-					b.sendPrivmsg(target, fmt.Sprintf("Joined %s but failed to save config: %v", channel, err))
-				}
-				if b.tracker != nil {
-					b.tracker.LogAdminCommand()
-				}
-				b.sendPrivmsg(target, fmt.Sprintf("Joining %s...", channel))
+			rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
+			chName, chKey := parseJoinChannelAndKey(rest)
+			if chName == "" {
+				return
+			}
+			entry := config.IRChannel{Name: chName, Password: chKey}
+			if err := ircJoinWithKey(b.conn, entry); err != nil {
+				log.Printf("!join: %v", err)
+			}
+			if err := b.addIRCChannelToConfig(entry); err != nil {
+				log.Printf("persist irc channels: %v", err)
+				b.sendPrivmsg(target, fmt.Sprintf("Joined %s but failed to save config: %v", chName, err))
+			}
+			if b.tracker != nil {
+				b.tracker.LogAdminCommand()
+			}
+			if chKey != "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Joining %s (channel key stored in config)...", chName))
+			} else {
+				b.sendPrivmsg(target, fmt.Sprintf("Joining %s...", chName))
 			}
 			return
 		}
@@ -746,14 +834,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 		if strings.HasPrefix(message, b.prefix+"quit") {
 			reason := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"quit"))
-			if reason == "" {
-				reason = "Shutting down"
-			}
 			if b.tracker != nil {
 				b.tracker.LogAdminCommand()
 			}
-			b.conn.QuitMessage = reason
-			b.conn.Quit()
+			b.RequestQuit(reason)
 			return
 		}
 
