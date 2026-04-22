@@ -251,6 +251,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize RSS database: %v", err)
 	}
+	if err := rssDB.RepairEmptySourceHackerNewsWhenSingleHNFeed(cfg.RSS.FeedURLs); err != nil {
+		log.Printf("RSS: repair source column: %v", err)
+	}
 	defer rssDB.Close()
 
 	// Set database in bot for !news command
@@ -292,6 +295,9 @@ func main() {
 		webServerMu.Unlock()
 		if ws != nil {
 			ws.SetConfig(newCfg)
+		}
+		if err := rssDB.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
+			log.Printf("RSS: repair source column after rehash: %v", err)
 		}
 		bot.NotifyLoggedInAdminsNotice(fmt.Sprintf("Config rehashed (%s) at %s", source, time.Now().Format(time.RFC3339)))
 		log.Printf("Config rehash complete (%s)", source)

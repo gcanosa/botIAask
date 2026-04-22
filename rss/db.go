@@ -3,6 +3,7 @@ package rss
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,6 +19,8 @@ type NewsEntry struct {
 	PubDate   time.Time
 	Link      string
 	ShortLink string
+	// Source is a stable key for UI (e.g. "hacker-news"); set from the RSS feed at insert, not from item links.
+	Source string
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
@@ -43,8 +46,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 	// Migration: Add columns if they don't exist
 	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN link TEXT")
 	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN short_link TEXT")
+	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN source TEXT")
 	// Fix NULL links from migration
 	_, _ = db.Exec("UPDATE seen_news SET link = '' WHERE link IS NULL")
+	_, _ = db.Exec("UPDATE seen_news SET source = '' WHERE source IS NULL")
 
 	return &Database{db: db}, nil
 }
@@ -77,13 +82,13 @@ func (d *Database) MarkSeen(entry NewsEntry) error {
 	if entry.GUID == "" {
 		return fmt.Errorf("cannot mark news as seen with empty GUID")
 	}
-	_, err := d.db.Exec("INSERT INTO seen_news (guid, title, link, short_link, pub_date) VALUES (?, ?, ?, ?, ?)",
-		entry.GUID, entry.Title, entry.Link, entry.ShortLink, entry.PubDate)
+	_, err := d.db.Exec("INSERT INTO seen_news (guid, title, link, short_link, pub_date, source) VALUES (?, ?, ?, ?, ?, ?)",
+		entry.GUID, entry.Title, entry.Link, entry.ShortLink, entry.PubDate, entry.Source)
 	return err
 }
 
 func (d *Database) GetLastNews(limit int) ([]NewsEntry, error) {
-	rows, err := d.db.Query("SELECT guid, title, COALESCE(link, ''), COALESCE(short_link, ''), pub_date FROM seen_news ORDER BY added_at DESC LIMIT ?", limit)
+	rows, err := d.db.Query("SELECT guid, title, COALESCE(link, ''), COALESCE(short_link, ''), pub_date, COALESCE(source, '') FROM seen_news ORDER BY added_at DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +97,10 @@ func (d *Database) GetLastNews(limit int) ([]NewsEntry, error) {
 	var entries []NewsEntry
 	for rows.Next() {
 		var e NewsEntry
-		if err := rows.Scan(&e.GUID, &e.Title, &e.Link, &e.ShortLink, &e.PubDate); err != nil {
+		if err := rows.Scan(&e.GUID, &e.Title, &e.Link, &e.ShortLink, &e.PubDate, &e.Source); err != nil {
 			return nil, err
 		}
+		e.Source = strings.TrimSpace(e.Source)
 		entries = append(entries, e)
 	}
 	return entries, nil
@@ -108,7 +114,7 @@ func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, e
 	}
 
 	rows, err := d.db.Query(`
-		SELECT guid, title, COALESCE(link, ''), COALESCE(short_link, ''), pub_date 
+		SELECT guid, title, COALESCE(link, ''), COALESCE(short_link, ''), pub_date, COALESCE(source, '')
 		FROM seen_news 
 		WHERE title LIKE ? 
 		ORDER BY added_at DESC 
@@ -122,9 +128,10 @@ func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, e
 	var entries []NewsEntry
 	for rows.Next() {
 		var e NewsEntry
-		if err := rows.Scan(&e.GUID, &e.Title, &e.Link, &e.ShortLink, &e.PubDate); err != nil {
+		if err := rows.Scan(&e.GUID, &e.Title, &e.Link, &e.ShortLink, &e.PubDate, &e.Source); err != nil {
 			return nil, 0, err
 		}
+		e.Source = strings.TrimSpace(e.Source)
 		entries = append(entries, e)
 	}
 	return entries, total, nil

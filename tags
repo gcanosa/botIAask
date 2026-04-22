@@ -4,17 +4,43 @@
 !_TAG_PROGRAM_NAME	Exuberant Ctags	//
 !_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
 !_TAG_PROGRAM_VERSION	5.8	//
+appendLogLine	web/templates/app.js	/^function appendLogLine(text) {$/;"	f
+applyTheme	web/templates/app.js	/^function applyTheme(theme) {$/;"	f
+bindLogsPanelListeners	web/templates/app.js	/^function bindLogsPanelListeners() {$/;"	f
 cancelSession	web/templates/file_upload.html	/^        function cancelSession() {$/;"	f
 cancelSession	web/templates/upload.html	/^        function cancelSession() {$/;"	f
-closeAllLogs	web/templates/app.js	/^function closeAllLogs() {$/;"	f
-closeLogTab	web/templates/app.js	/^function closeLogTab(channel) {$/;"	f
+closeLogsView	web/templates/app.js	/^function closeLogsView() {$/;"	f
+closeSidebar	web/templates/app.js	/^function closeSidebar() {$/;"	f
+closeSidebarIfMobile	web/templates/app.js	/^function closeSidebarIfMobile() {$/;"	f
+dateISOLocal	web/templates/app.js	/^function dateISOLocal(d) {$/;"	f
 generateLineNumbers	web/templates/paste.html	/^        function generateLineNumbers() {$/;"	f
+getLogChannelEntry	web/templates/app.js	/^function getLogChannelEntry(label) {$/;"	f
 init	web/templates/paste.html	/^        function init() {$/;"	f
-openLogs	web/templates/app.js	/^function openLogs(channel) {$/;"	f
+isMobileNavLayout	web/templates/app.js	/^function isMobileNavLayout() {$/;"	f
+let.calendarMonth	web/templates/app.js	/^    calendarMonth: null,$/;"	p
+let.channelLabel	web/templates/app.js	/^    channelLabel: null,$/;"	p
+let.eventSource	web/templates/app.js	/^    eventSource: null,$/;"	p
+let.joined	web/templates/app.js	/^    joined: false,$/;"	p
+let.selectedDate	web/templates/app.js	/^    selectedDate: null,$/;"	p
+let.stickToBottom	web/templates/app.js	/^    stickToBottom: true,$/;"	p
+normalizeTheme	web/templates/app.js	/^function normalizeTheme(t, fallback = 'light') {$/;"	f
+openSidebar	web/templates/app.js	/^function openSidebar() {$/;"	f
+parseISODate	web/templates/app.js	/^function parseISODate(s) {$/;"	f
+readGuestTheme	web/templates/app.js	/^function readGuestTheme() {$/;"	f
+reloadLogsForSelection	web/templates/app.js	/^function reloadLogsForSelection() {$/;"	f
+renderLogCalendar	web/templates/app.js	/^function renderLogCalendar() {$/;"	f
+renderLogChannelList	web/templates/app.js	/^function renderLogChannelList() {$/;"	f
+scrollLogToEnd	web/templates/app.js	/^function scrollLogToEnd() {$/;"	f
+selectLogChannel	web/templates/app.js	/^function selectLogChannel(label, joined) {$/;"	f
 showPanel	web/templates/app.js	/^function showPanel(panelId) {$/;"	f
-switchLogTab	web/templates/app.js	/^function switchLogTab(channel) {$/;"	f
+syncThemeSelectFromState	web/templates/app.js	/^function syncThemeSelectFromState(isAuthenticated, serverTheme) {$/;"	f
+teardownLogStream	web/templates/app.js	/^function teardownLogStream() {$/;"	f
 toggleHighlight	web/templates/paste.html	/^        function toggleHighlight() {$/;"	f
 toggleLines	web/templates/paste.html	/^        function toggleLines() {$/;"	f
+toggleSidebar	web/templates/app.js	/^function toggleSidebar() {$/;"	f
 updateAdminView	web/templates/app.js	/^function updateAdminView(isAdmin) {$/;"	f
 updateIRCAuthStatus	web/templates/app.js	/^function updateIRCAuthStatus(authenticated) {$/;"	f
+updateLogDateLabel	web/templates/app.js	/^function updateLogDateLabel() {$/;"	f
+updateLogToolbarBadges	web/templates/app.js	/^function updateLogToolbarBadges() {$/;"	f
+updateMobileSidebarAria	web/templates/app.js	/^function updateMobileSidebarAria() {$/;"	f
 updateNewsStatus	web/templates/app.js	/^function updateNewsStatus(enabled, isAdmin) {$/;"	f

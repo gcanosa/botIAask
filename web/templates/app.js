@@ -15,9 +15,36 @@ let cryptoChartRange = '1w';
 let forexChartRange = '1w';
 const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
+let lastStaffAdmin = false;
 
 const VALID_THEMES = ['dark', 'light', 'mono'];
 const UI_THEME_STORAGE_KEY = 'botIAask_ui_theme';
+
+// Stroke icons (24×24, width 2) — same as sidebar .nav-link svg; .row-action__icon → 20×20
+const _icon24 = (paths) => `<svg class="row-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const rowIcons = {
+    download: _icon24('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>'),
+    view: _icon24('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>'),
+    trash: _icon24('<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>'),
+    archive: _icon24('<polyline points="21 8 21 16 3 16 3 8"></polyline><line x1="1" y1="8" x2="23" y2="8"></line><path d="M10 3h4a2 2 0 0 1 2 2v1H8V5a2 2 0 0 1 2-2z"></path>'),
+    check: _icon24('<polyline points="20 6 9 17 4 12"></polyline>'),
+    x: _icon24('<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'),
+    linkOut: _icon24('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>'),
+    copy: _icon24('<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>'),
+    /** Article / feed page (distinct from short URL link) */
+    globe: _icon24('<circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>'),
+    /** Shortened / companion URL */
+    linkChain: _icon24('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>'),
+};
+
+/** RSS source key from API → mark before title (extend when adding feeds) */
+function newsSourceBadgeFor(source) {
+    const s = source != null ? String(source) : '';
+    if (s === 'hacker-news') {
+        return '<span class="news-source-badge news-source-badge--hn" title="Hacker News" aria-label="Source: Hacker News"><span class="news-hn-y" aria-hidden="true">Y</span></span>';
+    }
+    return '';
+}
 
 function normalizeTheme(t, fallback = 'light') {
     return VALID_THEMES.includes(t) ? t : fallback;
@@ -184,7 +211,22 @@ document.addEventListener('DOMContentLoaded', () => {
     updateMobileSidebarAria();
 
     fetchStatus();
-    setInterval(fetchStatus, 30000); // 30s status refresh
+    let statusIntervalId = null;
+    const applyStatusPolling = () => {
+        if (statusIntervalId) {
+            clearInterval(statusIntervalId);
+            statusIntervalId = null;
+        }
+        // Fast refresh while the tab is visible (IRC up/down, auth, pending counts).
+        // Throttle in background to avoid idle tabs hammering the server.
+        const ms = document.hidden ? 60000 : 5000;
+        statusIntervalId = setInterval(fetchStatus, ms);
+        if (!document.hidden) {
+            fetchStatus();
+        }
+    };
+    applyStatusPolling();
+    document.addEventListener('visibilitychange', applyStatusPolling);
     
     // Start background tasks
     fetchFinance();
@@ -192,11 +234,11 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Poll for pending/approved pastes and news every 5s if admin and on respective panel
     setInterval(() => {
-        if (lastIsAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
+        if (lastStaffAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
             fetchPendingPastes();
             fetchApprovedPastes(pastePage);
         }
-        if (lastIsAdmin && document.getElementById('panel-uploads').classList.contains('active')) {
+        if (lastStaffAdmin && document.getElementById('panel-uploads').classList.contains('active')) {
             fetchPendingFiles();
             fetchApprovedFiles(filePage);
         }
@@ -229,6 +271,7 @@ async function fetchStatus() {
         if (!res.ok) throw new Error('Status fetch failed');
         const data = await res.json();
         lastIsAdmin = data.is_admin;
+        lastStaffAdmin = data.staff_admin != null ? !!data.staff_admin : !!data.is_admin;
 
         const appVersionEl = document.getElementById('app-version');
         if (appVersionEl && data.version) {
@@ -256,7 +299,8 @@ async function fetchStatus() {
         if (pendBanner && pendText) {
             const pp = data.pending_pastes ?? 0;
             const pu = data.pending_uploads ?? 0;
-            if (data.is_admin && (pp > 0 || pu > 0)) {
+            const staff = data.staff_admin != null ? !!data.staff_admin : !!data.is_admin;
+            if (staff && (pp > 0 || pu > 0)) {
                 pendText.textContent = `Reminder: ${pp} pending paste(s) and ${pu} pending file upload(s) awaiting approval.`;
                 pendBanner.classList.remove('hidden');
                 if (pendActions) {
@@ -308,9 +352,9 @@ function updateAdminView(isAdmin) {
         adminBadge.classList.remove('hidden');
         loginBtn.classList.add('hidden');
         logoutBtn.classList.remove('hidden');
-        if (pendingSec) pendingSec.classList.remove('hidden');
-        if (pendingFilesSec) pendingFilesSec.classList.remove('hidden');
-        if (uploadSettingsCard) uploadSettingsCard.classList.remove('hidden');
+        if (pendingSec) pendingSec.classList.toggle('hidden', !lastStaffAdmin);
+        if (pendingFilesSec) pendingFilesSec.classList.toggle('hidden', !lastStaffAdmin);
+        if (uploadSettingsCard) uploadSettingsCard.classList.toggle('hidden', !lastStaffAdmin);
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
@@ -1338,15 +1382,17 @@ async function fetchBookmarks(page) {
                         <a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
                             ${b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url}
                         </a>
-                        <button type="button" onclick="copyBookmarkUrl(decodeURIComponent('${encodeURIComponent(b.url)}'))" title="Copy URL" class="btn btn-ghost" style="padding: 0.2rem 0.35rem; line-height: 0; flex-shrink: 0; opacity: 0.75;" aria-label="Copy URL">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <button type="button" onclick="copyBookmarkUrl(decodeURIComponent('${encodeURIComponent(b.url)}'))" title="Copy URL" class="row-action" aria-label="Copy URL">
+                            ${rowIcons.copy}
                         </button>
                     </div>
                 </td>
                 <td style="padding: 1rem; text-align: right; color: var(--text-muted);">${new Date(b.timestamp).toLocaleDateString()}</td>
                 ${lastIsAdmin ? `
                 <td style="padding: 1rem; text-align: right;">
-                    <button onclick="deleteBookmark(${b.id})" style="color: var(--error); background: none; border: none; cursor: pointer; font-size: 0.8rem;">Delete</button>
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        <button type="button" onclick="deleteBookmark(${b.id})" class="row-action row-action--danger" title="Delete" aria-label="Delete bookmark">${rowIcons.trash}</button>
+                    </div>
                 </td>` : '<td class="hidden"></td>'}
             </tr>
         `).join('');
@@ -1395,6 +1441,29 @@ function formatSubmittedAt(createdAt) {
     return new Date(createdAt).toLocaleString();
 }
 
+/** @returns {{ html: string, rowMuted: boolean }} */
+function publicExpiryCell(p) {
+    const days = Number(p.expires_in_days ?? p.ExpiresInDays ?? 0);
+    const iso = p.expires_at || p.ExpiresAt;
+    const expired = !!(p.is_expired ?? p.IsExpired);
+    if (!days) {
+        return { html: '<span style="color: var(--text-muted);">Never</span>', rowMuted: false };
+    }
+    if (!iso) {
+        return { html: '—', rowMuted: expired };
+    }
+    const dt = new Date(iso);
+    const label = Number.isNaN(dt.getTime()) ? String(iso) : dt.toLocaleString();
+    const safe = financeEscapeHtml(label);
+    if (expired) {
+        return {
+            html: `<span style="color: var(--error); font-weight: 600;">Expired</span><div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.2rem;">${safe}</div>`,
+            rowMuted: true,
+        };
+    }
+    return { html: `<span>${safe}</span>`, rowMuted: false };
+}
+
 function hideUploadDetail() {
     document.getElementById('upload-detail-modal')?.classList.add('hidden');
     document.getElementById('modal-overlay')?.classList.add('hidden');
@@ -1425,9 +1494,24 @@ async function openUploadDetail(ticketId) {
         const md5 = d.md5_hex ? financeEscapeHtml(String(d.md5_hex)) : '—';
         const sha = d.sha256_hex ? financeEscapeHtml(String(d.sha256_hex)) : '—';
         const when = d.approved_at ? new Date(d.approved_at).toLocaleString() : 'N/A';
+        const expDays = Number(d.expires_in_days) || 0;
+        let expiryBlock = '';
+        if (!expDays) {
+            expiryBlock = `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Expires (public)</span> <span style="color: var(--text-muted);">Never</span></div>`;
+        } else if (d.expires_at) {
+            const expWhen = new Date(d.expires_at).toLocaleString();
+            const safeExp = financeEscapeHtml(expWhen);
+            if (d.is_expired) {
+                const staffHint = lastStaffAdmin ? ' <span style="color: var(--text-muted); font-size: 0.75rem;">Staff can still open.</span>' : '';
+                expiryBlock = `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Expires (public)</span> <span style="color: var(--error); font-weight: 600;">Expired</span> <span class="mono" style="font-size: 0.8rem;">${safeExp}</span>${staffHint}</div>`;
+            } else {
+                expiryBlock = `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Expires (public)</span> <span class="mono" style="font-size: 0.85rem;">${safeExp}</span></div>`;
+            }
+        }
         const sz = formatFileSize(d.size_bytes);
         const fn = financeEscapeHtml(String(d.display_filename || '—'));
         const ref = financeEscapeHtml(String(d.public_ref || '—'));
+        const pasteKind = !d.is_file ? financeEscapeHtml(pasteKindLabel(d)) : '';
         const statusLine = d.status && d.status !== 'approved'
             ? `<div style="margin-bottom: 0.5rem; color: var(--accent);">Status: ${financeEscapeHtml(String(d.status))}</div>`
             : '';
@@ -1436,25 +1520,41 @@ async function openUploadDetail(ticketId) {
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Ticket</span> <span class="mono">${financeEscapeHtml(String(d.ticket_id))}</span></div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Ref</span> <span class="mono">${ref}</span></div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Title</span> ${financeEscapeHtml(String(d.title || '—'))}</div>
+            ${!d.is_file ? `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Kind</span> ${pasteKind}</div>` : ''}
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">File</span> <span class="mono">${fn}</span></div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Size</span> ${sz}</div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Nickname</span> ${financeEscapeHtml(String(d.username || '—'))}</div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Host / IP</span> <span class="mono">${host}</span></div>
             <div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Published</span> ${when}</div>
+            ${expiryBlock}
             ${d.is_file ? `<div style="margin-bottom: 0.35rem;"><span style="color: var(--text-muted);">Downloads</span> ${Number(d.download_count) || 0}</div>` : ''}
             <div style="margin-top: 0.75rem;"><span style="color: var(--text-muted);">MD5</span><br><span class="mono" style="font-size: 0.7rem; word-break: break-all;">${md5}</span></div>
-            <div style="margin-top: 0.5rem;"><span style="color: var(--text-muted);">SHA-256</span><br><span class="mono" style="font-size: 0.7rem; word-break: break-all;">${sha}</span></div>`;
+            <div style="margin-top: 0.5rem;"><span style="color: var(--text-muted);">SHA-256</span><br><span class="mono" style="font-size: 0.7rem; word-break: break-all;">${sha}</span></div>
+            ${d.is_file && d.status === 'approved' ? `
+            <div style="margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--glass-border);">
+                ${lastStaffAdmin ? `<label style="display: flex; align-items: flex-start; gap: 0.55rem; cursor: pointer; color: var(--text-main);">
+                    <input type="checkbox" id="upload-detail-public" style="margin-top: 0.2rem;" ${d.is_public ? 'checked' : ''} onchange="setUploadIsPublic('${ticketId}', this.checked)">
+                    <span style="font-size: 0.8rem; line-height: 1.35;">Public — anyone can download via <span class="mono">/f/…</span> and see this file on the dashboard without logging in. Off = staff-only.</span>
+                </label>` : `<label style="display: flex; align-items: flex-start; gap: 0.55rem; cursor: default; color: var(--text-muted);">
+                    <input type="checkbox" style="margin-top: 0.2rem;" ${d.is_public ? 'checked' : ''} disabled aria-readonly="true">
+                    <span style="font-size: 0.8rem; line-height: 1.35;">${d.is_public ? 'Public file — listed here and downloadable via <span class="mono">/f/…</span> without an account.' : 'Staff-only file.'}</span>
+                </label>`}
+            </div>` : ''}`;
         let btns = '';
         if (d.is_file && d.download_path) {
-            btns += `<a href="${financeEscapeHtml(d.download_path)}" target="_blank" rel="noopener" class="btn btn-primary" style="padding: 0.45rem 1rem;">Download</a>`;
-            if (lastIsAdmin && d.can_compress) {
-                btns += `<button type="button" class="btn btn-ghost" style="padding: 0.45rem 1rem;" onclick="compressUploadFile('${ticketId}')">Compress .tgz</button>`;
+            btns += `<a href="${financeEscapeHtml(d.download_path)}" target="_blank" rel="noopener" class="row-action row-action--primary" title="Download" aria-label="Download">${rowIcons.download}</a>`;
+            if (lastStaffAdmin && d.can_compress) {
+                btns += `<button type="button" class="row-action" title="Compress to .tgz" aria-label="Compress to .tgz" onclick="compressUploadFile('${ticketId}')">${rowIcons.archive}</button>`;
             }
+        } else if (d.is_file && d.is_expired && !lastStaffAdmin) {
+            btns += `<span class="row-action" style="opacity: 0.45; cursor: default;" title="This file has expired for public access">${rowIcons.download}</span>`;
         } else if (d.view_path) {
-            btns += `<a href="${financeEscapeHtml(d.view_path)}" target="_blank" rel="noopener" class="btn btn-primary" style="padding: 0.45rem 1rem;">View</a>`;
+            btns += `<a href="${financeEscapeHtml(d.view_path)}" target="_blank" rel="noopener" class="row-action row-action--primary" title="View" aria-label="View">${rowIcons.view}</a>`;
+        } else if (!d.is_file && d.is_expired && !lastStaffAdmin) {
+            btns += `<span class="row-action" style="opacity: 0.45; cursor: default;" title="This paste has expired for public access">${rowIcons.view}</span>`;
         }
-        if (lastIsAdmin) {
-            btns += `<button type="button" class="btn btn-ghost" style="padding: 0.45rem 1rem; color: var(--error);" onclick="deletePasteFromDetail('${ticketId}')">Delete</button>`;
+        if (lastStaffAdmin) {
+            btns += `<button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete" onclick="deletePasteFromDetail('${ticketId}')">${rowIcons.trash}</button>`;
         }
         actions.innerHTML = btns;
     } catch (e) {
@@ -1479,6 +1579,26 @@ async function compressUploadFile(ticketId) {
     }
 }
 
+async function setUploadIsPublic(ticketId, isPublic) {
+    try {
+        const res = await fetch('/api/uploads/public', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticket_id: ticketId, is_public: isPublic }),
+        });
+        if (!res.ok) {
+            alert((await res.text()) || 'Update failed');
+            await openUploadDetail(ticketId);
+            return;
+        }
+        await fetchApprovedFiles(filePage);
+    } catch (e) {
+        console.error(e);
+        alert('Update failed');
+        await openUploadDetail(ticketId);
+    }
+}
+
 async function deletePasteFromDetail(ticketId) {
     if (!confirm('Delete this item?')) return;
     try {
@@ -1496,6 +1616,12 @@ async function deletePasteFromDetail(ticketId) {
 }
 
 // PASTES
+function pasteKindLabel(p) {
+    const k = p.paste_kind != null && String(p.paste_kind).trim() !== '' ? p.paste_kind
+        : (p.PasteKind != null && String(p.PasteKind).trim() !== '' ? p.PasteKind : '');
+    return k || 'plain text';
+}
+
 let pastePage = 1;
 async function fetchApprovedPastes(page) {
     pastePage = page;
@@ -1506,24 +1632,30 @@ async function fetchApprovedPastes(page) {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
-        const ref = p.public_ref || p.PublicRef || '—';
+        const kind = financeEscapeHtml(pasteKindLabel(p));
         const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
         const pub = formatApprovedAtSqlNull(p.approved_at || p.ApprovedAt);
+        const exp = publicExpiryCell(p);
+        const rowBg = exp.rowMuted ? 'background: rgba(220, 60, 60, 0.07);' : '';
+        const rowFade = exp.rowMuted ? 'opacity: 0.88;' : '';
         return `
-            <tr style="border-bottom: 1px solid var(--glass-border);">
+            <tr style="border-bottom: 1px solid var(--glass-border); ${rowBg} ${rowFade}">
                 <td style="padding: 1rem;">
                     <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">${kind}</td>
                 <td style="padding: 1rem;">${financeEscapeHtml(String(title))}</td>
                 <td style="padding: 1rem;">${sz}</td>
                 <td style="padding: 1rem; color: var(--primary);">${financeEscapeHtml(String(user))}</td>
                 <td style="padding: 1rem;" class="mono">${host}</td>
                 <td style="padding: 1rem;">${pub}</td>
+                <td style="padding: 1rem;">${exp.html}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <a href="/p/${tid}" target="_blank" rel="noopener" class="text-primary">View</a>
-                    ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        <a href="/p/${tid}" target="_blank" rel="noopener" class="row-action row-action--primary" title="View paste" aria-label="View paste">${rowIcons.view}</a>
+                        ${lastStaffAdmin ? `<button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete" onclick="deletePaste('${tid}')">${rowIcons.trash}</button>` : ''}
+                    </div>
                 </td>
             </tr>
         `;
@@ -1542,7 +1674,7 @@ async function fetchPendingPastes() {
         const tid = p.ticket_id || p.TicketID;
         const title = p.title || p.Title;
         const user = p.username || p.Username;
-        const ref = p.public_ref || p.PublicRef || '—';
+        const kind = financeEscapeHtml(pasteKindLabel(p));
         const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
         const sub = formatSubmittedAt(p.created_at || p.CreatedAt);
@@ -1551,7 +1683,7 @@ async function fetchPendingPastes() {
                 <td style="padding: 1rem;">
                     <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
+                <td style="padding: 1rem;">${kind}</td>
                 <td style="padding: 1rem;">
                     <div>${financeEscapeHtml(String(title))}</div>
                     <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">Submitted: ${sub}</div>
@@ -1561,8 +1693,10 @@ async function fetchPendingPastes() {
                 <td style="padding: 1rem;" class="mono">${host}</td>
                 <td style="padding: 1rem;">${sub}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
-                    <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        <button type="button" class="row-action row-action--success" title="Approve" aria-label="Approve" onclick="approvePaste('${tid}')">${rowIcons.check}</button>
+                        <button type="button" class="row-action row-action--danger" title="Reject" aria-label="Reject" onclick="rejectPaste('${tid}')">${rowIcons.x}</button>
+                    </div>
                 </td>
             </tr>
         `;
@@ -1581,7 +1715,7 @@ function formatFileSize(bytes) {
 }
 
 async function fetchUploadSettings() {
-    if (!lastIsAdmin) return;
+    if (!lastStaffAdmin) return;
     try {
         const res = await fetch('/api/uploads/settings');
         if (!res.ok) return;
@@ -1639,15 +1773,22 @@ async function fetchApprovedFiles(page) {
         const fname = p.original_filename || p.OriginalFilename || '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
         const dl = p.download_count ?? p.DownloadCount ?? 0;
-        const ref = p.public_ref || p.PublicRef || '—';
         const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
         const pub = formatApprovedAtSqlNull(p.approved_at || p.ApprovedAt);
+        const pubTick = (p.is_public === true || p.IsPublic === true) ? '✓' : '—';
+        const exp = publicExpiryCell(p);
+        const expired = !!(p.is_expired ?? p.IsExpired);
+        const rowBg = exp.rowMuted ? 'background: rgba(220, 60, 60, 0.07);' : '';
+        const rowFade = exp.rowMuted ? 'opacity: 0.88;' : '';
+        const canDlPublic = lastStaffAdmin || !expired;
+        const dlCtrl = canDlPublic
+            ? `<a href="/f/${tid}" target="_blank" rel="noopener" class="row-action row-action--primary" title="Download" aria-label="Download">${rowIcons.download}</a>`
+            : `<span class="row-action" style="opacity: 0.4; cursor: default;" title="Expired — not available publicly">${rowIcons.download}</span>`;
         return `
-            <tr style="border-bottom: 1px solid var(--glass-border);">
+            <tr style="border-bottom: 1px solid var(--glass-border); ${rowBg} ${rowFade}">
                 <td style="padding: 1rem;">
                     <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
                 <td style="padding: 1rem;">
                     <div>${financeEscapeHtml(String(title))}</div>
                     <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${dl} download(s) · ${financeEscapeHtml(String(fname))}</div>
@@ -1656,9 +1797,13 @@ async function fetchApprovedFiles(page) {
                 <td style="padding: 1rem; color: var(--primary);">${financeEscapeHtml(String(user))}</td>
                 <td style="padding: 1rem;" class="mono">${host}</td>
                 <td style="padding: 1rem;">${pub}</td>
+                <td style="padding: 1rem;">${exp.html}</td>
+                <td style="padding: 1rem; text-align: center; color: var(--success);" title="Public = visible without login">${pubTick}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <a href="/f/${tid}" target="_blank" rel="noopener" class="text-primary">Download</a>
-                    ${lastIsAdmin ? `<button onclick="deletePaste('${tid}')" style="color: var(--error); background: none; border: none; cursor: pointer; margin-left: 1rem;">Delete</button>` : ''}
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        ${dlCtrl}
+                        ${lastStaffAdmin ? `<button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete" onclick="deletePaste('${tid}')">${rowIcons.trash}</button>` : ''}
+                    </div>
                 </td>
             </tr>
         `;
@@ -1682,7 +1827,6 @@ async function fetchPendingFiles() {
         const user = p.username || p.Username;
         const fname = p.original_filename || p.OriginalFilename || '—';
         const sz = formatFileSize(p.size_bytes ?? p.SizeBytes);
-        const ref = p.public_ref || p.PublicRef || '—';
         const host = (p.client_host || p.ClientHost) ? financeEscapeHtml(String(p.client_host || p.ClientHost)) : '—';
         const sub = formatSubmittedAt(p.created_at || p.CreatedAt);
         return `
@@ -1690,7 +1834,6 @@ async function fetchPendingFiles() {
                 <td style="padding: 1rem;">
                     <button type="button" onclick="openUploadDetail('${tid}')" class="btn btn-ghost" style="padding: 0; font-weight: 700; color: var(--accent); cursor: pointer;">${tid}</button>
                 </td>
-                <td style="padding: 1rem;" class="mono">${financeEscapeHtml(String(ref))}</td>
                 <td style="padding: 1rem;">
                     <div>${financeEscapeHtml(String(title))}</div>
                     <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">${financeEscapeHtml(String(fname))}</div>
@@ -1700,12 +1843,14 @@ async function fetchPendingFiles() {
                 <td style="padding: 1rem;" class="mono">${host}</td>
                 <td style="padding: 1rem;">${sub}</td>
                 <td style="padding: 1rem; text-align: right;">
-                    <button onclick="approvePaste('${tid}')" class="text-success">Approve</button>
-                    <button onclick="rejectPaste('${tid}')" class="text-error" style="margin-left: 1rem;">Reject</button>
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        <button type="button" class="row-action row-action--success" title="Approve" aria-label="Approve" onclick="approvePaste('${tid}')">${rowIcons.check}</button>
+                        <button type="button" class="row-action row-action--danger" title="Reject" aria-label="Reject" onclick="rejectPaste('${tid}')">${rowIcons.x}</button>
+                    </div>
                 </td>
             </tr>
         `;
-    }).join('') || '<tr><td colspan="8" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending file uploads</td></tr>';
+    }).join('') || '<tr><td colspan="7" style="padding: 1rem; text-align: center; color: var(--text-muted);">No pending file uploads</td></tr>';
 }
 
 // NEWS
@@ -1734,10 +1879,15 @@ async function fetchNews(page) {
         list.innerHTML = data.news.map(n => `
             <tr style="border-bottom: 1px solid var(--glass-border);">
                 <td style="padding: 1rem;">
-                    <div style="font-weight: 600; color: var(--text-main);">${n.Title}</div>
-                    <div style="font-size: 0.7rem; margin-top: 0.25rem;">
-                        <a href="${n.Link}" target="_blank" style="color: var(--primary); text-decoration: none;">View Source</a>
-                        ${n.ShortLink ? `<span style="color: var(--text-muted); margin: 0 0.5rem;">|</span><a href="${n.ShortLink}" target="_blank" style="color: var(--accent); text-decoration: none;">Short Link</a>` : ''}
+                    <div class="news-item-head">
+                        <div class="news-item-head__main">
+                            ${newsSourceBadgeFor(n.Source)}
+                            <div class="news-item-head__title">${n.Title}</div>
+                        </div>
+                        <div class="row-action-group">
+                            <a href="${n.Link}" target="_blank" rel="noopener" class="row-action row-action--primary" title="Open article" aria-label="Open article">${rowIcons.globe}</a>
+                            ${n.ShortLink ? `<a href="${n.ShortLink}" target="_blank" rel="noopener" class="row-action row-action--accent" title="Short link" aria-label="Short link">${rowIcons.linkChain}</a>` : ''}
+                        </div>
                     </div>
                 </td>
                 <td style="padding: 1rem; text-align: right; color: var(--text-muted); white-space: nowrap;">
@@ -1745,7 +1895,9 @@ async function fetchNews(page) {
                 </td>
                 ${lastIsAdmin ? `
                 <td style="padding: 1rem; text-align: right;">
-                    <button onclick="deleteNews('${n.GUID}')" style="color: var(--error); background: none; border: none; cursor: pointer; font-size: 0.8rem;">Delete</button>
+                    <div class="row-action-group" style="justify-content: flex-end;">
+                        <button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete news item" onclick="deleteNews('${n.GUID}')">${rowIcons.trash}</button>
+                    </div>
                 </td>` : '<td class="hidden"></td>'}
             </tr>
         `).join('');
@@ -1844,7 +1996,9 @@ async function fetchUsers() {
             <td style="padding: 1rem;" class="font-bold">${u.username}</td>
             <td style="padding: 1rem;"><span class="badge badge-admin">${u.role}</span></td>
             <td style="padding: 1rem; text-align: right;">
-                <button onclick="deleteUser(${u.id})" style="color: var(--error);">Delete</button>
+                <div class="row-action-group" style="justify-content: flex-end;">
+                    <button type="button" class="row-action row-action--danger" title="Delete user" aria-label="Delete user" onclick="deleteUser(${u.id})">${rowIcons.trash}</button>
+                </div>
             </td>
         </tr>
     `).join('');
@@ -2026,6 +2180,7 @@ window.rejectPaste = rejectPaste;
 window.openUploadDetail = openUploadDetail;
 window.hideUploadDetail = hideUploadDetail;
 window.compressUploadFile = compressUploadFile;
+window.setUploadIsPublic = setUploadIsPublic;
 window.deletePasteFromDetail = deletePasteFromDetail;
 window.changeFilePage = changeFilePage;
 window.saveUploadSettings = saveUploadSettings;
