@@ -41,7 +41,7 @@
    ```
 
 2. **Configure the bot:**
-   Edit `config/config.yaml` to set your IRC server, channel preferences, and AI endpoint.
+   Copy `config/config.yaml.template` to `config/config.yaml` and edit `config/config.yaml` to set your IRC server, channel preferences, AI endpoint, and all internal parameters.
    ```yaml
    irc:
      server: "irc.libera.chat"
@@ -53,9 +53,11 @@
 
 3. **Run the bot:**
    ```bash
+   # Remember to copy config.yaml.template file from config folder to a file named config.yaml and set up the parameters, otherwise bot will fail to load configuration.
+
    # Run in foreground for debugging
    go run main.go
-   
+
    # Or run with the web dashboard enabled in daemon mode
    go run main.go -dashboard
    ```
