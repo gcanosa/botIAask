@@ -12,6 +12,7 @@ cancelSession	web/templates/upload.html	/^        function cancelSession() {$/;"
 closeLogsView	web/templates/app.js	/^function closeLogsView() {$/;"	f
 closeSidebar	web/templates/app.js	/^function closeSidebar() {$/;"	f
 closeSidebarIfMobile	web/templates/app.js	/^function closeSidebarIfMobile() {$/;"	f
+const.download	web/templates/app.js	/^    download: _icon24('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"><\/path><polyline points="7 10 12 15 17 10"><\/polyline><line x1="12" y1="15" x2="12" y2="3"><\/line>'),$/;"	p
 dateISOLocal	web/templates/app.js	/^function dateISOLocal(d) {$/;"	f
 generateLineNumbers	web/templates/paste.html	/^        function generateLineNumbers() {$/;"	f
 getLogChannelEntry	web/templates/app.js	/^function getLogChannelEntry(label) {$/;"	f
@@ -23,6 +24,7 @@ let.eventSource	web/templates/app.js	/^    eventSource: null,$/;"	p
 let.joined	web/templates/app.js	/^    joined: false,$/;"	p
 let.selectedDate	web/templates/app.js	/^    selectedDate: null,$/;"	p
 let.stickToBottom	web/templates/app.js	/^    stickToBottom: true,$/;"	p
+newsSourceBadgeFor	web/templates/app.js	/^function newsSourceBadgeFor(source) {$/;"	f
 normalizeTheme	web/templates/app.js	/^function normalizeTheme(t, fallback = 'light') {$/;"	f
 openSidebar	web/templates/app.js	/^function openSidebar() {$/;"	f
 parseISODate	web/templates/app.js	/^function parseISODate(s) {$/;"	f
