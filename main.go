@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// Path to the configuration file
-	configPath := "config/config.yaml"
+	configPath := config.DefaultConfigPath
 
 	if _, err := os.Stat(configPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

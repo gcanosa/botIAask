@@ -137,6 +137,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
 	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
 	mux.HandleFunc("/api/rehash", s.handleRehash)
+	mux.HandleFunc("/api/irc/channels/reveal", s.handleIRCChannelReveal)
+	mux.HandleFunc("/api/irc/channels/announce", s.handleIRCChannelAnnounce)
+	mux.HandleFunc("/api/irc/channels/autojoin", s.handleIRCChannelAutojoin)
+	mux.HandleFunc("/api/irc/channels/session", s.handleIRCChannelSession)
+	mux.HandleFunc("/api/irc/channels", s.handleIRCChannels)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
@@ -572,6 +577,371 @@ func (s *Server) handleRehash(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
+// applyConfigFromFile reloads config from disk and applies it to IRC, RSS, and stats (no AI update, no IRC admin NOTICE). Mirrors main rehash except notifications.
+func (s *Server) applyConfigFromFile(path string) error {
+	newCfg, err := config.LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	s.SetConfig(newCfg)
+	if s.bot != nil {
+		s.bot.ApplyLiveConfig(newCfg)
+	}
+	if s.rssFetcher != nil {
+		s.rssFetcher.ApplyConfig(newCfg)
+	}
+	if s.statsTracker != nil {
+		s.statsTracker.ApplyConfig(newCfg)
+	}
+	if s.rssFetcher != nil {
+		if db := s.rssFetcher.GetDB(); db != nil {
+			if err := db.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
+				log.Printf("RSS: repair source column (web): %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func ircWebChannelNameOK(s string) bool {
+	s = strings.TrimSpace(s)
+	return len(s) > 0 && (s[0] == '#' || s[0] == '&')
+}
+
+type ircChannelRow struct {
+	Name         string `json:"name"`
+	HasPassword  bool   `json:"has_password"`
+	AnnounceRSS  bool   `json:"announce_rss"`
+	AutoJoin     bool   `json:"auto_join"`
+}
+
+type ircSessionRow struct {
+	Name        string `json:"name"`
+	HasPassword bool   `json:"has_password"`
+}
+
+func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	cfg := s.getConfig()
+	switch r.Method {
+	case http.MethodGet:
+		rows := make([]ircChannelRow, 0, len(cfg.IRC.Channels))
+		for _, ch := range cfg.IRC.Channels {
+			rows = append(rows, ircChannelRow{
+				Name:         ch.Name,
+				HasPassword:  ch.Password != "",
+				AnnounceRSS:  config.RSSChannelContainsFold(cfg.RSS.Channels, ch.Name),
+				AutoJoin:     ch.AutoJoinEnabled(),
+			})
+		}
+		sessRows := make([]ircSessionRow, 0)
+		if s.bot != nil {
+			sess := s.bot.ListSessionChannels()
+			for _, ch := range sess {
+				sessRows = append(sessRows, ircSessionRow{Name: ch.Name, HasPassword: ch.Password != ""})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"channels": rows, "session_channels": sessRows})
+		return
+
+	case http.MethodPost:
+		var req struct {
+			Name         string `json:"name"`
+			Password     string `json:"password"`
+			AutoJoin     *bool  `json:"auto_join"`
+			SessionOnly  bool   `json:"session_only"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(req.Name)
+		if !ircWebChannelNameOK(name) {
+			http.Error(w, "Invalid channel name (use #chan or &chan)", http.StatusBadRequest)
+			return
+		}
+		if req.SessionOnly {
+			if s.bot == nil {
+				http.Error(w, "Bot unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if err := s.bot.JoinChannelSession(config.IRChannel{Name: name, Password: req.Password}); err != nil {
+				if strings.Contains(err.Error(), "already") {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true, "session": true})
+			return
+		}
+		s.cfgMu.Lock()
+		for _, ex := range s.cfg.IRC.Channels {
+			if strings.EqualFold(ex.Name, name) {
+				s.cfgMu.Unlock()
+				http.Error(w, "Channel already in autoinjoin list", http.StatusConflict)
+				return
+			}
+		}
+		entry := config.IRChannel{Name: name, Password: req.Password, AutoJoin: req.AutoJoin}
+		s.cfg.IRC.Channels = append(s.cfg.IRC.Channels, entry)
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+
+	case http.MethodDelete:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if d, err := url.QueryUnescape(name); err == nil && d != "" {
+			name = strings.TrimSpace(d)
+		}
+		if !ircWebChannelNameOK(name) {
+			http.Error(w, "Invalid or missing name query", http.StatusBadRequest)
+			return
+		}
+		s.cfgMu.Lock()
+		canon, ok := config.FindIRChannelByName(s.cfg.IRC.Channels, name)
+		if !ok {
+			s.cfgMu.Unlock()
+			http.Error(w, "Channel not found", http.StatusNotFound)
+			return
+		}
+		var out []config.IRChannel
+		for _, ex := range s.cfg.IRC.Channels {
+			if strings.EqualFold(ex.Name, name) {
+				continue
+			}
+			out = append(out, ex)
+		}
+		s.cfg.IRC.Channels = out
+		s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, canon.Name, false, "")
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleIRCChannelReveal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !ircWebChannelNameOK(name) {
+		http.Error(w, "Invalid channel name", http.StatusBadRequest)
+		return
+	}
+	if ch, ok := config.FindIRChannelByName(s.getConfig().IRC.Channels, name); ok {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"password": ch.Password})
+		return
+	}
+	if s.bot != nil {
+		for _, ch := range s.bot.ListSessionChannels() {
+			if strings.EqualFold(ch.Name, name) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{"password": ch.Password})
+				return
+			}
+		}
+	}
+	http.Error(w, "Channel not found", http.StatusNotFound)
+}
+
+func (s *Server) handleIRCChannelAnnounce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name     string `json:"name"`
+		Announce *bool  `json:"announce"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Announce == nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !ircWebChannelNameOK(name) {
+		http.Error(w, "Invalid channel name", http.StatusBadRequest)
+		return
+	}
+	s.cfgMu.Lock()
+	entry, ok := config.FindIRChannelByName(s.cfg.IRC.Channels, name)
+	if !ok {
+		s.cfgMu.Unlock()
+		http.Error(w, "Channel not in autoinjoin list", http.StatusNotFound)
+		return
+	}
+	canon := entry.Name
+	s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, name, *req.Announce, canon)
+	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+		s.cfgMu.Unlock()
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfgMu.Unlock()
+	if s.rssFetcher != nil {
+		s.rssFetcher.ApplyConfig(s.getConfig())
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name     string `json:"name"`
+		AutoJoin *bool  `json:"auto_join"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoJoin == nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !ircWebChannelNameOK(name) {
+		http.Error(w, "Invalid channel name", http.StatusBadRequest)
+		return
+	}
+	s.cfgMu.Lock()
+	updated := false
+	for i, ex := range s.cfg.IRC.Channels {
+		if strings.EqualFold(ex.Name, name) {
+			s.cfg.IRC.Channels[i].AutoJoin = req.AutoJoin
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		s.cfgMu.Unlock()
+		http.Error(w, "Channel not found", http.StatusNotFound)
+		return
+	}
+	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+		s.cfgMu.Unlock()
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfgMu.Unlock()
+	if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+		http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.bot == nil {
+		http.Error(w, "Bot unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(req.Name)
+		if !ircWebChannelNameOK(name) {
+			http.Error(w, "Invalid channel name (use #chan or &chan)", http.StatusBadRequest)
+			return
+		}
+		if err := s.bot.JoinChannelSession(config.IRChannel{Name: name, Password: req.Password}); err != nil {
+			if strings.Contains(err.Error(), "already") {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+	case http.MethodDelete:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if d, err := url.QueryUnescape(name); err == nil && d != "" {
+			name = strings.TrimSpace(d)
+		}
+		if !ircWebChannelNameOK(name) {
+			http.Error(w, "Invalid or missing name query", http.StatusBadRequest)
+			return
+		}
+		if err := s.bot.PartChannelSession(name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.checkAuth(r)
 	if !isAdmin {
@@ -613,7 +983,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			v := *req.AnnounceToIRC
 			s.cfg.RSS.AnnounceToIRC = &v
 		}
-		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -2225,7 +2595,7 @@ func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.cfgMu.Lock()
 		s.cfg.Uploads.MaxFileMB = req.MaxFileMB
-		if err := config.SaveConfig("config/config.yaml", s.cfg); err != nil {
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
