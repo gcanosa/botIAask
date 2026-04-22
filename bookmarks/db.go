@@ -86,6 +86,13 @@ func (d *Database) AddBookmark(url, nickname, hostname string) (int64, error) {
 	return res.LastInsertId()
 }
 
+// CountReminders returns the total number of stored reminders.
+func (d *Database) CountReminders() (int, error) {
+	var n int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM reminders`).Scan(&n)
+	return n, err
+}
+
 func (d *Database) GetBookmarksCount(query string) (int, error) {
 	var count int
 	var err error

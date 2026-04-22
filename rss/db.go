@@ -137,6 +137,13 @@ func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, e
 	return entries, total, nil
 }
 
+// CountSeenNews returns how many GUID rows are stored in seen_news.
+func (d *Database) CountSeenNews() (int, error) {
+	var n int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM seen_news`).Scan(&n)
+	return n, err
+}
+
 func (d *Database) DeleteEntry(guid string) error {
 	_, err := d.db.Exec("DELETE FROM seen_news WHERE guid = ?", guid)
 	return err

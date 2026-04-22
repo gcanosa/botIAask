@@ -726,6 +726,32 @@ func (d *Database) CountPendingFiles() (int, error) {
 	return n, err
 }
 
+// CountPendingApproval returns uploads awaiting approval (pastes and files).
+func (d *Database) CountPendingApproval() (int, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM uploads WHERE status = 'pending_approval'`).Scan(&n)
+	return n, err
+}
+
+// CountApprovedPastes returns approved text paste rows in the database.
+func (d *Database) CountApprovedPastes() (int, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM uploads
+		WHERE status = 'approved' AND COALESCE(upload_type,'paste') = 'paste'`).Scan(&n)
+	return n, err
+}
+
+// CountApprovedFiles returns approved file upload rows in the database.
+func (d *Database) CountApprovedFiles() (int, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM uploads
+		WHERE status = 'approved' AND upload_type = 'file'`).Scan(&n)
+	return n, err
+}
+
 func (d *Database) DeletePaste(ticketID string) error {
 	var contentPath string
 	err := d.db.QueryRow("SELECT content_path FROM uploads WHERE ticket_id = ?", ticketID).Scan(&contentPath)

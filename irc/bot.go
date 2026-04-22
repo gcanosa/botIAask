@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/internal/sysinfo"
 	"botIAask/logger"
 	"botIAask/meta"
 	"botIAask/rss"
@@ -811,13 +813,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			return
 		}
 		if strings.HasPrefix(message, b.prefix+"stats") {
-			b.statsMu.Lock()
-			count := b.aiRequests
-			b.statsMu.Unlock()
 			if b.tracker != nil {
 				b.tracker.LogAdminCommand()
 			}
-			b.sendPrivmsg(target, fmt.Sprintf("Stats: AI Requests=%d, Uptime=%s", count, b.GetUptime()))
+			b.sendAdminStats(target, sender)
 			return
 		}
 		if strings.HasPrefix(message, b.prefix+"say ") {
@@ -1682,6 +1681,107 @@ func formatDuration(d time.Duration) string {
 	} else {
 		return fmt.Sprintf("%ds", seconds)
 	}
+}
+
+func statsOnOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
+func statsIntOrNA(v int) string {
+	if v < 0 {
+		return "n/a"
+	}
+	return strconv.Itoa(v)
+}
+
+// sendAdminStats sends a multi-line snapshot for !stats (logged-in admins only).
+func (b *Bot) sendAdminStats(target, sender string) {
+	b.statsMu.Lock()
+	aiN := b.aiRequests
+	b.statsMu.Unlock()
+
+	appU := formatDuration(time.Since(b.startTime))
+	sessU := formatDuration(time.Since(b.connectionTime))
+
+	nCh := len(b.cfg.IRC.Channels)
+	nGo := runtime.NumGoroutine()
+
+	b.ignoreMu.RLock()
+	nIgn := len(b.ignoreList)
+	b.ignoreMu.RUnlock()
+
+	b.loginsMu.RLock()
+	nAdm := len(b.loggedInAdmins)
+	b.loginsMu.RUnlock()
+
+	snap := "off"
+	if b.tracker != nil && b.tracker.IsEnabled() {
+		snap = "on"
+	}
+
+	line1 := fmt.Sprintf("Bot %s | IRC=%s | chans=%d | go=%d | ign=%d | AI=%d | up app=%s sess=%s | activity_snap=%s",
+		meta.Version, statsOnOff(b.IsConnected()), nCh, nGo, nIgn, aiN, appU, sessU, snap)
+
+	pending, bookm, rem, pastes, files := -1, -1, -1, -1, -1
+	if b.uploadsDB != nil {
+		if n, err := b.uploadsDB.CountPendingApproval(); err != nil {
+			log.Printf("stats: pending uploads: %v", err)
+		} else {
+			pending = n
+		}
+		if n, err := b.uploadsDB.CountApprovedPastes(); err != nil {
+			log.Printf("stats: paste count: %v", err)
+		} else {
+			pastes = n
+		}
+		if n, err := b.uploadsDB.CountApprovedFiles(); err != nil {
+			log.Printf("stats: file count: %v", err)
+		} else {
+			files = n
+		}
+	}
+	if b.bookmarksDB != nil {
+		if n, err := b.bookmarksDB.GetBookmarksCount(""); err != nil {
+			log.Printf("stats: bookmarks: %v", err)
+		} else {
+			bookm = n
+		}
+		if n, err := b.bookmarksDB.CountReminders(); err != nil {
+			log.Printf("stats: reminders: %v", err)
+		} else {
+			rem = n
+		}
+	}
+
+	line2 := fmt.Sprintf("Queue=%s | bkm=%s | rem=%s | paste=%s | file=%s | admins=%d",
+		statsIntOrNA(pending), statsIntOrNA(bookm), statsIntOrNA(rem), statsIntOrNA(pastes), statsIntOrNA(files), nAdm)
+
+	newsDB := "?"
+	if b.rssDB != nil {
+		if n, err := b.rssDB.CountSeenNews(); err != nil {
+			log.Printf("stats: news db: %v", err)
+		} else {
+			newsDB = strconv.Itoa(n)
+		}
+	}
+	line3 := fmt.Sprintf("RSS=%s, retain=%d, announce=%s, newsDB=%s rows",
+		statsOnOff(b.cfg.RSS.Enabled), b.cfg.RSS.RetentionCount, statsOnOff(b.cfg.RSS.AnnounceToIRCEnabled()), newsDB)
+
+	host := sysinfo.Collect(400 * time.Millisecond)
+	ramPart := "RAM=n/a"
+	if host.RAMAvailable != "" {
+		ramPart = fmt.Sprintf("RAM avail=%s (%.1f%% used)", host.RAMAvailable, host.RAMUsedPct)
+	}
+	cpuPart := "CPU=n/a"
+	if host.CPUValid {
+		cpuPart = fmt.Sprintf("CPU=%.1f%%", host.CPUPct)
+	}
+	line4 := fmt.Sprintf("%s/%s | %s | %s", runtime.GOOS, runtime.GOARCH, ramPart, cpuPart)
+
+	b.sendPrivmsgMentionedLines(target, sender, line1, line2, line3, line4)
 }
 
 // sanitize cleans a string for IRC compatibility using ircutils.
