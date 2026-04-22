@@ -14,6 +14,7 @@ func TestIRCSourceTagMIRC(t *testing.T) {
 		{"", ""},
 		{"   ", ""},
 		{"hacker-news", ircSourceHN},
+		{"arstechnica", ircSourceFallback + "[ARS]\x03"},
 		{"lobsters-mirror", ircSourceFallback + "[LOB]\x03"},
 		{"a", ircSourceFallback + "[A]\x03"},
 		{"---", ircSourceFallback + "[?]\x03"},
@@ -39,5 +40,9 @@ func TestFormatIRCNewsLine(t *testing.T) {
 	}
 	if got := FormatIRCNewsLine(NewsEntry{Title: "T", PubDate: at, Source: ""}, ""); got != ircNewsRedOnBlack+" 15:04 - T" {
 		t.Errorf("empty source: %q", got)
+	}
+	e.Source = "arstechnica"
+	if got := FormatIRCNewsLine(e, ""); got != ircNewsRedOnBlack+ircSourceFallback+"[ARS]\x03 15:04 - Hello" {
+		t.Errorf("arstechnica line: %q", got)
 	}
 }

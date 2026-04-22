@@ -3,9 +3,10 @@ irc:
     port: 6697
     use_ssl: true
     nickname: Nickname
-    # Channels: plain strings, or a mapping for +k (optional channel key / "password"):
+    # Channels: plain strings, or a mapping for +k. Optional: auto_join: false (default true) to store the row without auto-joining.
     #   - name: '##locked'
     #     password: 'channel-key-here'
+    #   - { name: '##nope', auto_join: false }
     channels:
         - '#channel1'
         - '#channel2'
@@ -52,6 +53,7 @@ rss:
     channels:
         - '##yerba'
     retention_count: 50
+    # Each feed URL is labeled in IRC and on the web from the site (e.g. arstechnica.com → [ARS]).
     feed_urls:
         - https://news.ycombinator.com/rss
     announce_to_irc: true

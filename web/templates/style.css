@@ -514,6 +514,47 @@ html[data-theme="mono"] .news-source-badge--hn {
     box-shadow: none;
 }
 
+.news-source-badge--img {
+    background: var(--bg-elevated, var(--bg-page));
+    box-shadow: 0 0 0 1px var(--glass-border, rgba(0, 0, 0, 0.12));
+    padding: 0;
+    overflow: hidden;
+}
+
+.news-source-badge__img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 3px;
+}
+
+.news-source-badge--txt {
+    background: var(--text-muted);
+    color: var(--bg-page, #fff);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+    font-size: 0.5rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+html[data-theme="dark"] .news-source-badge--img,
+html[data-theme="mono"] .news-source-badge--img {
+    box-shadow: 0 0 0 1px var(--glass-border, rgba(255, 255, 255, 0.12));
+}
+
+html[data-theme="mono"] .news-source-badge--img {
+    background: var(--bg-page);
+}
+
+html[data-theme="mono"] .news-source-badge--txt {
+    background: var(--text-muted);
+    color: var(--bg-page);
+    box-shadow: none;
+}
+
 .news-item-head .row-action-group {
     margin: 0;
     justify-content: flex-end;
