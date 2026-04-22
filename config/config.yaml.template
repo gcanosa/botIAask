@@ -1,0 +1,58 @@
+irc:
+    server: irc.libera.chat
+    port: 6697
+    use_ssl: true
+    nickname: Nickname
+    channels:
+        - '#channel1'
+        - '#channel2'
+    services:
+        enabled: true
+        username: registered_nickname
+        password: services_password
+ai:
+    lm_studio_url: http://localhost:1234/v1
+    model: meta-Llama-3.1-8B-instruct
+bot:
+    command_prefix: '!'
+    command_name: ask
+    debug: true
+    rate_limiting:
+        enabled: true
+        limit: 3
+        burst: 2
+        window: 60
+admin:
+    admins:
+        # Use hostmask format: ~nickname@user/host-ip
+        - ~nickname@user/host-ip
+web:
+    enabled: true
+    port: 3366
+    host: 0.0.0.0
+    base_url: http://sekurnet.duckdns.org:3366
+    auth:
+        enabled: false
+        username: admin
+        password: password
+daemon:
+    enabled: true
+    pid_file: bot.pid
+logger:
+    rotation_days: 7
+rss:
+    enabled: true
+    interval_minutes: 30
+    channels:
+        - '##yerba'
+    retention_count: 50
+    feed_urls:
+        - https://news.ycombinator.com/rss
+    announce_to_irc: true
+stats:
+    enabled: true
+    interval: 60
+    save_to_db: true
+    retention_days: 7
+uploads:
+    max_file_mb: 200
