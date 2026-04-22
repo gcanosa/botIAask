@@ -65,3 +65,76 @@ func TestPrintDaemonParentReport_plainNoColor(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintDaemonSpawnResult_plainNoColor(t *testing.T) {
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{PIDFile: "data/daemon.pid"},
+	}
+	var buf bytes.Buffer
+	printDaemonSpawnResult(&buf, cfg, 4242, false)
+	out := buf.String()
+	for _, sub := range []string{
+		"── Start ──",
+		"Child process",
+		"4242",
+		"spawned",
+		"stdio",
+		"detached",
+		"data/daemon.pid",
+		"written by child on boot",
+	} {
+		if !strings.Contains(out, sub) {
+			t.Fatalf("output missing %q:\n%s", sub, out)
+		}
+	}
+}
+
+func TestPrintStopResult_plainNoColor(t *testing.T) {
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{PIDFile: "data/daemon.pid"},
+	}
+	for _, tc := range []struct {
+		kind     StopResultKind
+		substrs  []string
+		notWants []string
+	}{
+		{
+			kind: StopExitedNormal,
+			substrs: []string{
+				"── Stop ──",
+				"SIGTERM",
+				"12345",
+				"exited",
+				"removed",
+				"stopped successfully",
+			},
+			notWants: []string{"SIGKILL"},
+		},
+		{
+			kind: StopForceKilled,
+			substrs: []string{
+				"── Stop ──",
+				"SIGKILL",
+				"12345",
+				"killed",
+				"removed",
+				"force-stopped",
+			},
+			notWants: []string{"SIGTERM"},
+		},
+	} {
+		var buf bytes.Buffer
+		printStopResult(&buf, cfg, 12345, tc.kind, false)
+		out := buf.String()
+		for _, sub := range tc.substrs {
+			if !strings.Contains(out, sub) {
+				t.Fatalf("kind %v: output missing %q:\n%s", tc.kind, sub, out)
+			}
+		}
+		for _, s := range tc.notWants {
+			if strings.Contains(out, s) {
+				t.Fatalf("kind %v: output should not contain %q:\n%s", tc.kind, s, out)
+			}
+		}
+	}
+}
