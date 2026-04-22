@@ -30,12 +30,15 @@ type UploadsConfig struct {
 
 // IRCConfig holds settings for the IRC connection.
 type IRCConfig struct {
-	Server   string         `yaml:"server"`
-	Port     int            `yaml:"port"`
-	UseSSL   bool           `yaml:"use_ssl"`
-	Nickname string         `yaml:"nickname"`
-	Channels []string       `yaml:"channels"`
-	Services ServicesConfig `yaml:"services"`
+	Server      string         `yaml:"server"`
+	Port        int            `yaml:"port"`
+	UseSSL      bool           `yaml:"use_ssl"`
+	Nickname    string         `yaml:"nickname"`
+	Channels    []IRChannel    `yaml:"channels"`
+	// QuitMessage: optional QUIT reason. Empty uses default: "<app name> <version> Uptime: <uptime>".
+	// If set, expand placeholders: {name}, {version}, {uptime}, {nickname}.
+	QuitMessage string         `yaml:"quit_message,omitempty"`
+	Services    ServicesConfig `yaml:"services"`
 }
 
 // ServicesConfig holds settings for IRC services authentication (SASL).
