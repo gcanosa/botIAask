@@ -8,6 +8,7 @@ require (
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/sashabaranov/go-openai v1.41.2
 	golang.org/x/crypto v0.48.0
+	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.49.1
 )
@@ -29,7 +30,7 @@ require (
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/libc v1.72.0 // indirect
