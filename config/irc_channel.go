@@ -8,9 +8,12 @@ import (
 )
 
 // IRChannel is one configured IRC channel, optionally with a channel key (+k "password").
+// AutoJoin: nil or true = join on connect / treat as "autoinjoin" for live apply. False = kept in
+// config (e.g. key reference, RSS) but the bot will not auto-join that channel.
 type IRChannel struct {
 	Name     string `yaml:"name" json:"name"`
 	Password string `yaml:"password,omitempty" json:"-"` // never expose in web/API JSON
+	AutoJoin *bool  `yaml:"auto_join,omitempty" json:"auto_join,omitempty"`
 }
 
 // IRChannelNames returns channel names in order (for list diff, logging, etc.).
@@ -18,6 +21,25 @@ func IRChannelNames(chs []IRChannel) []string {
 	out := make([]string, len(chs))
 	for i, c := range chs {
 		out[i] = c.Name
+	}
+	return out
+}
+
+// AutoJoinEnabled reports whether this entry should be auto-joined on connect (default: true if unset).
+func (c IRChannel) AutoJoinEnabled() bool {
+	if c.AutoJoin == nil {
+		return true
+	}
+	return *c.AutoJoin
+}
+
+// IRChannelNamesAutoJoin returns channel names that have auto-join enabled (for JOIN/PART diffs and startup).
+func IRChannelNamesAutoJoin(chs []IRChannel) []string {
+	var out []string
+	for _, c := range chs {
+		if c.AutoJoinEnabled() {
+			out = append(out, c.Name)
+		}
 	}
 	return out
 }
@@ -54,6 +76,7 @@ func (c *IRChannel) UnmarshalYAML(n *yaml.Node) error {
 			Name     string `yaml:"name"`
 			Channel  string `yaml:"channel"`
 			Password string `yaml:"password"`
+			AutoJoin *bool  `yaml:"auto_join"`
 		}
 		if err := n.Decode(&m); err != nil {
 			return err
@@ -64,6 +87,7 @@ func (c *IRChannel) UnmarshalYAML(n *yaml.Node) error {
 			c.Name = m.Channel
 		}
 		c.Password = m.Password
+		c.AutoJoin = m.AutoJoin
 		if c.Name == "" {
 			return fmt.Errorf("irc channel: mapping needs name or channel")
 		}
@@ -73,13 +97,19 @@ func (c *IRChannel) UnmarshalYAML(n *yaml.Node) error {
 	}
 }
 
-// MarshalYAML writes a plain string when there is no key; otherwise a small map.
+// MarshalYAML writes a plain string when there is no key and autoinjoin is on; otherwise a small map.
 func (c IRChannel) MarshalYAML() (interface{}, error) {
-	if c.Password == "" {
+	if c.Password == "" && c.AutoJoinEnabled() {
 		return c.Name, nil
 	}
-	return map[string]string{
-		"name":     c.Name,
-		"password": c.Password,
-	}, nil
+	m := map[string]interface{}{
+		"name": c.Name,
+	}
+	if c.Password != "" {
+		m["password"] = c.Password
+	}
+	if c.AutoJoin != nil && !*c.AutoJoin {
+		m["auto_join"] = false
+	}
+	return m, nil
 }

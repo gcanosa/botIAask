@@ -7,6 +7,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultConfigPath is the standard on-disk path to the main YAML file (relative to process cwd).
+const DefaultConfigPath = "config/config.yaml"
+
 // Config represents the application configuration structure.
 type Config struct {
 	IRC         IRCConfig       `yaml:"irc"`

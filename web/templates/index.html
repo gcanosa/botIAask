@@ -558,6 +558,55 @@
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Re-read <span class="mono">config/config.yaml</span> into the running process (IRC connection stays up). Logged-in IRC admins receive a NOTICE.</p>
                     <button type="button" onclick="rehashConfigFromDisk()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Rehash from disk</button>
                 </div>
+                <div id="irc-autojoin-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">IRC autoinjoin channels</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Saved entries live in <span class="mono">config/config.yaml</span> under <span class="mono">irc.channels</span>. <strong>Autoinjoin on connect</strong> controls whether the bot joins the channel on startup and after rehash (you can keep a +k entry without auto-joining). <strong>Session only</strong> joins IRC now and does not write YAML (rejoined in-process if the server reconnects, lost on bot restart). RSS <strong>announce</strong> per row still requires RSS + global <span class="mono">announce_to_irc</span> on the News card.</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Channel</label>
+                            <input type="text" id="irc-autojoin-name" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="#channel" autocomplete="off" aria-label="New channel name">
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Key (optional, +k)</label>
+                            <input type="password" id="irc-autojoin-key" class="btn btn-ghost" style="min-width: 8rem; text-align: left; cursor: text; margin: 0;" placeholder="(none)" autocomplete="off" aria-label="Channel key">
+                        </div>
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
+                            <input type="checkbox" id="irc-autojoin-persist" checked> Save to config
+                        </label>
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;" id="irc-autojoin-ajwrap">
+                            <input type="checkbox" id="irc-autojoin-aj" checked> Autoinjoin on connect
+                        </label>
+                        <button type="button" onclick="ircAutojoinAdd()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Join / add</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Channel</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Key</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;" title="If saved in config, join on bot startup and when turning this on">Autoinjoin</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;" title="Post RSS items to this channel">Announce RSS</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-autojoin-list"></tbody>
+                        </table>
+                    </div>
+                    <h4 class="card-title" style="margin: 1.25rem 0 0.5rem; font-size: 0.9rem; color: var(--text-muted);">This session (not in config)</h4>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Channel</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Key</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-autojoin-session-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-autojoin-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
                 <div class="card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">Authorized Users</h3>

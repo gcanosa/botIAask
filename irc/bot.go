@@ -87,6 +87,10 @@ type Bot struct {
 
 	rehashHook   func(source string) error
 	rehashHookMu sync.Mutex
+
+	// sessionJoins: runtime-only JOINs (not in config; lost on new process, rejoined on IRC reconnect in-process)
+	sessionJoins   []config.IRChannel
+	sessionJoinsMu sync.Mutex
 }
 
 // NewBot initializes a new Bot instance.
@@ -129,7 +133,7 @@ func (b *Bot) persistAnnounceToIRC(enabled bool) error {
 	b.cfg.RSS.AnnounceToIRC = &v
 	path := b.configPath
 	if path == "" {
-		path = "config/config.yaml"
+		path = config.DefaultConfigPath
 	}
 	return config.SaveConfig(path, b.cfg)
 }
@@ -176,7 +180,7 @@ func configPathOrDefault(b *Bot) string {
 	if b.configPath != "" {
 		return b.configPath
 	}
-	return "config/config.yaml"
+	return config.DefaultConfigPath
 }
 
 func ircChannelTarget(s string) bool {
@@ -233,10 +237,20 @@ func (b *Bot) persistIRCChannelsToDisk() error {
 	return config.SaveConfig(configPathOrDefault(b), b.cfg)
 }
 
+func boolPtrEqualIR(a, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
 func (b *Bot) addIRCChannelToConfig(entry config.IRChannel) error {
 	for i, existing := range b.cfg.IRC.Channels {
 		if strings.EqualFold(existing.Name, entry.Name) {
-			if existing.Password == entry.Password {
+			if existing.Password == entry.Password && boolPtrEqualIR(existing.AutoJoin, entry.AutoJoin) {
 				return nil
 			}
 			b.cfg.IRC.Channels[i] = entry
@@ -351,7 +365,7 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 // ApplyLiveConfig swaps in a new config from disk, rebuilds rate limiting, and syncs channel membership without reconnecting.
 func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 	b.membersMu.Lock()
-	oldChans := config.IRChannelNames(b.cfg.IRC.Channels)
+	oldAuto := config.IRChannelNamesAutoJoin(b.cfg.IRC.Channels)
 	oldSrv := b.cfg.IRC.Server
 	oldPort := b.cfg.IRC.Port
 	oldNick := b.cfg.IRC.Nickname
@@ -382,11 +396,11 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 		return
 	}
 
-	newChans := config.IRChannelNames(newCfg.IRC.Channels)
-	for _, ch := range channelListDifference(oldChans, newChans) {
+	newAuto := config.IRChannelNamesAutoJoin(newCfg.IRC.Channels)
+	for _, ch := range channelListDifference(oldAuto, newAuto) {
 		conn.Part(ch)
 	}
-	for _, chName := range channelListDifference(newChans, oldChans) {
+	for _, chName := range channelListDifference(newAuto, oldAuto) {
 		if entry, ok := config.FindIRChannelByName(newCfg.IRC.Channels, chName); ok {
 			if err := ircJoinWithKey(conn, entry); err != nil {
 				log.Printf("rehash join %s: %v", chName, err)
@@ -394,6 +408,95 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 		}
 	}
 	log.Printf("Bot configuration reloaded (channels synced).")
+}
+
+func (b *Bot) rejoinSessionChannels() {
+	b.sessionJoinsMu.Lock()
+	chs := append([]config.IRChannel(nil), b.sessionJoins...)
+	b.sessionJoinsMu.Unlock()
+	if len(chs) == 0 {
+		return
+	}
+	b.statsMu.Lock()
+	conn := b.conn
+	ok := b.connected
+	b.statsMu.Unlock()
+	if conn == nil || !ok {
+		return
+	}
+	for _, ch := range chs {
+		if err := ircJoinWithKey(conn, ch); err != nil {
+			log.Printf("session rejoin %s: %v", ch.Name, err)
+		}
+	}
+}
+
+// JoinChannelSession joins a channel for this process only (not in config). Rejoined on IRC reconnect in-process.
+func (b *Bot) JoinChannelSession(entry config.IRChannel) error {
+	name := strings.TrimSpace(entry.Name)
+	if !ircChannelTarget(name) {
+		return fmt.Errorf("invalid channel name")
+	}
+	if _, ok := config.FindIRChannelByName(b.cfg.IRC.Channels, name); ok {
+		return fmt.Errorf("channel already in config; edit autoinjoin or remove from list")
+	}
+	b.sessionJoinsMu.Lock()
+	for _, s := range b.sessionJoins {
+		if strings.EqualFold(s.Name, name) {
+			b.sessionJoinsMu.Unlock()
+			return fmt.Errorf("already in session-join list")
+		}
+	}
+	b.sessionJoinsMu.Unlock()
+	b.statsMu.Lock()
+	conn := b.conn
+	ok := b.connected
+	b.statsMu.Unlock()
+	if conn == nil || !ok {
+		return fmt.Errorf("not connected to IRC")
+	}
+	if err := ircJoinWithKey(conn, entry); err != nil {
+		return err
+	}
+	b.sessionJoinsMu.Lock()
+	b.sessionJoins = append(b.sessionJoins, entry)
+	b.sessionJoinsMu.Unlock()
+	return nil
+}
+
+// PartChannelSession parts a session-only join and forgets it.
+func (b *Bot) PartChannelSession(name string) error {
+	b.sessionJoinsMu.Lock()
+	var out []config.IRChannel
+	var partName string
+	for _, s := range b.sessionJoins {
+		if strings.EqualFold(s.Name, name) {
+			partName = s.Name
+			continue
+		}
+		out = append(out, s)
+	}
+	if partName == "" {
+		b.sessionJoinsMu.Unlock()
+		return fmt.Errorf("not a session-only join")
+	}
+	b.sessionJoins = out
+	b.sessionJoinsMu.Unlock()
+	b.statsMu.Lock()
+	conn := b.conn
+	ok := b.connected
+	b.statsMu.Unlock()
+	if conn != nil && ok {
+		conn.Part(partName)
+	}
+	return nil
+}
+
+// ListSessionChannels returns session-only join entries (for web admin).
+func (b *Bot) ListSessionChannels() []config.IRChannel {
+	b.sessionJoinsMu.Lock()
+	defer b.sessionJoinsMu.Unlock()
+	return append([]config.IRChannel(nil), b.sessionJoins...)
 }
 
 // Start connects to the IRC server and starts the bot event loop.
@@ -453,6 +556,12 @@ func (b *Bot) Start() error {
 		b.connected = true
 		b.statsMu.Unlock()
 		for _, channel := range b.cfg.IRC.Channels {
+			if !channel.AutoJoinEnabled() {
+				if b.cfg.Bot.Debug {
+					log.Printf("[DEBUG] Skipping auto-join (auto_join: false): %s", channel.Name)
+				}
+				continue
+			}
 			if b.cfg.Bot.Debug {
 				if channel.Password != "" {
 					log.Printf("[DEBUG] Joining channel: %s (key set)", channel.Name)
@@ -464,6 +573,7 @@ func (b *Bot) Start() error {
 				log.Printf("join %s: %v", channel.Name, err)
 			}
 		}
+		b.rejoinSessionChannels()
 	})
 
 	// Handle PRIVMSG (messages in channels or private)

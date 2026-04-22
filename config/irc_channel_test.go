@@ -44,6 +44,46 @@ func TestIRChannelYAMLRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIRChannelAutoJoinFalseYAML(t *testing.T) {
+	f := false
+	c := IRChannel{Name: "#chan", AutoJoin: &f}
+	v, err := c.MarshalYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", v)
+	}
+	if m["auto_join"] != false {
+		t.Fatalf("auto_join: %+v", m)
+	}
+}
+
+func TestIRChannelUnmarshalAutoJoin(t *testing.T) {
+	const in = `irc:
+  server: irc.example.com
+  port: 6697
+  use_ssl: true
+  nickname: Bot
+  channels:
+    - name: '#nope'
+      auto_join: false
+  services:
+    enabled: false
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(in), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(cfg.IRC.Channels); got != 1 {
+		t.Fatalf("channels: %d", got)
+	}
+	if cfg.IRC.Channels[0].AutoJoinEnabled() {
+		t.Fatal("expected auto_join false")
+	}
+}
+
 func TestLoadConfigTemplate(t *testing.T) {
 	path := filepath.Join("..", "config", "config.yaml.template")
 	cfg, err := LoadConfig(path)
