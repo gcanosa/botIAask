@@ -151,9 +151,8 @@ func main() {
 	if *daemon && effectiveMode == "" {
 		effectiveMode = "start"
 	}
-	daemonParentWillSpawn := !isDaemonChild && (effectiveMode == "start" || effectiveMode == "restart") && (*mode != "" || *daemon)
 
-	if cfg.Bot.Debug && !daemonParentWillSpawn {
+	if cfg.Bot.Debug && *mode == "" && !*daemon {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
 		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
@@ -174,13 +173,16 @@ func main() {
 			useColor := stdoutSupportsColor()
 			printAppIdentity(os.Stdout, useColor)
 			printDaemonParentReport(os.Stdout, cfg, configPath, useColor)
-			err := StartDaemon(cfg)
+			err := StartDaemon(os.Stdout, cfg, useColor)
 			if err != nil {
 				log.Fatalf("Failed to start daemon: %v", err)
 			}
 			return
 		case "stop":
-			err := StopDaemon(cfg)
+			useColor := stdoutSupportsColor()
+			printAppIdentity(os.Stdout, useColor)
+			printDaemonParentReport(os.Stdout, cfg, configPath, useColor)
+			err := StopDaemon(os.Stdout, cfg, useColor)
 			if err != nil {
 				log.Fatalf("Failed to stop daemon: %v", err)
 			}
@@ -189,7 +191,7 @@ func main() {
 			useColor := stdoutSupportsColor()
 			printAppIdentity(os.Stdout, useColor)
 			printDaemonParentReport(os.Stdout, cfg, configPath, useColor)
-			err := RestartDaemon(cfg)
+			err := RestartDaemon(os.Stdout, cfg, useColor)
 			if err != nil {
 				log.Fatalf("Failed to restart daemon: %v", err)
 			}

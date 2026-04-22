@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,7 +100,7 @@ func Daemonize(cfg *config.Config) error {
 }
 
 // StartDaemon handles starting the bot in daemon mode.
-func StartDaemon(cfg *config.Config) error {
+func StartDaemon(w io.Writer, cfg *config.Config, color bool) error {
 	if !cfg.Daemon.Enabled {
 		return fmt.Errorf("daemon mode is not enabled in configuration")
 	}
@@ -153,12 +154,12 @@ func StartDaemon(cfg *config.Config) error {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	fmt.Printf("Daemon spawned (PID %d). Child stdio is detached; use logs, IRC, or the web dashboard. PID file: %s\n", cmd.Process.Pid, cfg.Daemon.PIDFile)
+	printDaemonSpawnResult(w, cfg, cmd.Process.Pid, color)
 	return nil
 }
 
 // StopDaemon handles stopping the bot by sending SIGTERM to the PID.
-func StopDaemon(cfg *config.Config) error {
+func StopDaemon(w io.Writer, cfg *config.Config, color bool) error {
 	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
 	if err != nil {
 		// If we can't read PID file, try to find process by other means
@@ -190,22 +191,22 @@ func StopDaemon(cfg *config.Config) error {
 			err := process.Signal(syscall.Signal(0))
 			if err != nil {
 				DeletePIDFile(cfg.Daemon.PIDFile)
-				fmt.Println("Bot stopped")
+				printStopResult(w, cfg, pid, StopExitedNormal, color)
 				return nil
 			}
 		case <-timeout:
 			// Force kill if still running.
 			process.Signal(syscall.SIGKILL)
 			DeletePIDFile(cfg.Daemon.PIDFile)
-			fmt.Println("Bot force killed")
+			printStopResult(w, cfg, pid, StopForceKilled, color)
 			return nil
 		}
 	}
 }
 
 // RestartDaemon stops and starts the bot.
-func RestartDaemon(cfg *config.Config) error {
-	err := StopDaemon(cfg)
+func RestartDaemon(w io.Writer, cfg *config.Config, color bool) error {
+	err := StopDaemon(w, cfg, color)
 	if err != nil {
 		return fmt.Errorf("failed to stop bot: %w", err)
 	}
@@ -213,5 +214,5 @@ func RestartDaemon(cfg *config.Config) error {
 	// Brief pause between stop and start.
 	time.Sleep(1 * time.Second)
 
-	return StartDaemon(cfg)
+	return StartDaemon(w, cfg, color)
 }

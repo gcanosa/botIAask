@@ -112,6 +112,48 @@ func printDaemonParentReport(w io.Writer, cfg *config.Config, configPath string,
 	fmt.Fprintln(w)
 }
 
+// StopResultKind indicates how the daemon process ended during StopDaemon.
+type StopResultKind int
+
+const (
+	// StopExitedNormal means the process exited after SIGTERM.
+	StopExitedNormal StopResultKind = iota
+	// StopForceKilled means SIGKILL was sent after a timeout.
+	StopForceKilled
+)
+
+func printStopResult(w io.Writer, cfg *config.Config, pid int, kind StopResultKind, color bool) {
+	good := func(s string) string { return paint(color, ansiGreen, s) }
+	bad := func(s string) string { return paint(color, ansiRed, s) }
+	dim := func(s string) string { return paint(color, ansiDim, s) }
+	fmt.Fprintf(w, "\n%s\n", dim("── Stop ──"))
+	if kind == StopForceKilled {
+		printRow(w, "Signal", "SIGKILL (10s wait)", good("OK"))
+		printRow(w, "Target PID", fmt.Sprintf("%d", pid), good("killed"))
+	} else {
+		printRow(w, "Signal", "SIGTERM", good("OK"))
+		printRow(w, "Target PID", fmt.Sprintf("%d", pid), good("exited"))
+	}
+	printRow(w, "PID file", cfg.Daemon.PIDFile, good("removed"))
+	fmt.Fprintln(w)
+	if kind == StopForceKilled {
+		fmt.Fprintf(w, "  %s\n", bad("The bot did not exit within 10s; the process was force-stopped. Check logs if unexpected."))
+	} else {
+		fmt.Fprintf(w, "  %s\n", good("The bot has been stopped successfully."))
+	}
+	fmt.Fprintln(w)
+}
+
+func printDaemonSpawnResult(w io.Writer, cfg *config.Config, childPID int, color bool) {
+	good := func(s string) string { return paint(color, ansiGreen, s) }
+	dim := func(s string) string { return paint(color, ansiDim, s) }
+	fmt.Fprintf(w, "\n%s\n", dim("── Start ──"))
+	printRow(w, "Child process", fmt.Sprintf("PID %d", childPID), good("spawned"))
+	printRow(w, "stdio", "detached", dim("logs, IRC, or web dashboard"))
+	printRow(w, "PID file", cfg.Daemon.PIDFile, dim("written by child on boot"))
+	fmt.Fprintln(w)
+}
+
 func printRow(w io.Writer, service, detail, status string) {
 	switch {
 	case status != "" && detail != "":
