@@ -32,6 +32,14 @@ func NewDatabase(dbPath string) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec("PRAGMA busy_timeout = 8000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite busy_timeout: %w", err)
+	}
+	// WAL reduces lock contention when another process (e.g. a second bot) hits the DB briefly.
+	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS seen_news (
@@ -79,21 +87,30 @@ func (d *Database) backfillDedupColumns() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type row struct {
+		guid, link, src, title string
+	}
+	var pending []row
 	for rows.Next() {
-		var guid, link, src, title string
-		if err := rows.Scan(&guid, &link, &src, &title); err != nil {
+		var r row
+		if err := rows.Scan(&r.guid, &r.link, &r.src, &r.title); err != nil {
+			rows.Close()
 			return err
 		}
-		norm := NormalizeRSSLink(link)
-		dedup := DedupKeyFromParts(src, norm, guid, title)
-		_, err := d.db.Exec(`UPDATE seen_news SET link_normalized = ?, dedup_key = ? WHERE guid = ?`,
-			norm, dedup, guid)
-		if err != nil {
+		pending = append(pending, r)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range pending {
+		norm := NormalizeRSSLink(r.link)
+		dedup := DedupKeyFromParts(r.src, norm, r.guid, r.title)
+		if _, err := d.db.Exec(`UPDATE seen_news SET link_normalized = ?, dedup_key = ? WHERE guid = ?`,
+			norm, dedup, r.guid); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (d *Database) GetEntryStatus(guid string) (exists bool, hasLink bool, err error) {
