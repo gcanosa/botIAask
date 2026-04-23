@@ -800,7 +800,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list",
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read",
 			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
@@ -1269,7 +1269,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 		body := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"reminder"))
 		if body == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list", b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.prefix, b.prefix, b.prefix, b.prefix))
 			return
 		}
 		firstSpace := strings.IndexByte(body, ' ')
@@ -1328,8 +1328,25 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				note := truncateReminderNotice(r.Note, maxListNoteBytes)
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, note))
 			}
+		case "read":
+			fields := strings.Fields(rest)
+			if len(fields) < 1 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder read <id>", b.prefix))
+				return
+			}
+			pid := fields[0]
+			r, ok, err := b.bookmarksDB.GetReminder(sender, pid)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error reading reminder: %v", sender, err))
+				return
+			}
+			if !ok {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: No reminder with that id, or not yours.", sender))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, r.Note))
 		default:
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list", b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.prefix, b.prefix, b.prefix, b.prefix))
 		}
 		return
 	}

@@ -697,6 +697,47 @@ html[data-theme="mono"] .news-source-badge--txt {
 .badge-online { color: var(--primary); border-color: rgba(56, 189, 248, 0.2); }
 .badge-admin { color: var(--accent); border-color: rgba(192, 132, 252, 0.2); }
 
+/* Active admins: IRC vs web dashboard (colored themes = hue difference; mono = light vs dark gray) */
+.admin-src-label {
+    font-size: 0.55rem;
+    opacity: 0.85;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+html[data-theme="dark"] .badge-admin-irc {
+    color: var(--accent);
+    border-color: rgba(192, 132, 252, 0.35);
+    background: rgba(192, 132, 252, 0.06);
+}
+html[data-theme="dark"] .badge-admin-web {
+    color: var(--primary);
+    border-color: rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.08);
+}
+
+html[data-theme="light"] .badge-admin-irc {
+    color: var(--accent);
+    border-color: rgba(124, 58, 237, 0.35);
+    background: rgba(124, 58, 237, 0.08);
+}
+html[data-theme="light"] .badge-admin-web {
+    color: var(--primary);
+    border-color: rgba(2, 132, 199, 0.4);
+    background: rgba(2, 132, 199, 0.1);
+}
+
+html[data-theme="mono"] .badge-admin-irc {
+    color: #525252;
+    border-color: rgba(82, 82, 82, 0.5);
+    background: rgba(0, 0, 0, 0.25);
+}
+html[data-theme="mono"] .badge-admin-web {
+    color: #e5e5e5;
+    border-color: rgba(229, 229, 229, 0.35);
+    background: rgba(255, 255, 255, 0.06);
+}
+
 .dot {
     width: 8px;
     height: 8px;

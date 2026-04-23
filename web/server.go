@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -142,6 +141,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/irc/channels/autojoin", s.handleIRCChannelAutojoin)
 	mux.HandleFunc("/api/irc/channels/session", s.handleIRCChannelSession)
 	mux.HandleFunc("/api/irc/channels", s.handleIRCChannels)
+	mux.HandleFunc("/api/config/irc-admins", s.handleConfigIRCAdmins)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
@@ -193,26 +193,6 @@ func (s *Server) Start() error {
 	return server.ListenAndServe()
 }
 
-func mergeUniqueSortedStrings(a, b []string) []string {
-	seen := make(map[string]struct{}, len(a)+len(b))
-	for _, s := range a {
-		if s != "" {
-			seen[s] = struct{}{}
-		}
-	}
-	for _, s := range b {
-		if s != "" {
-			seen[s] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for s := range seen {
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
-}
-
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	sessionOK, staffAdmin, needsChange := s.sessionStaffInfo(r)
 	pendingPastes, pendingUploads := 0, 0
@@ -257,7 +237,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("active web admin sessions: %v", err)
 		}
-		status["admin_nicknames"] = mergeUniqueSortedStrings(ircNicks, webNames)
+		status["irc_admin_nicknames"] = ircNicks
+		status["web_admin_usernames"] = webNames
 		status["channel_admins"] = chans
 	}
 
@@ -618,6 +599,95 @@ type ircChannelRow struct {
 type ircSessionRow struct {
 	Name        string `json:"name"`
 	HasPassword bool   `json:"has_password"`
+}
+
+func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.getConfig()
+		list := append([]string(nil), cfg.Admin.Admins...)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string][]string{"hostmasks": list})
+
+	case http.MethodPost:
+		var req struct {
+			Hostmask string `json:"hostmask"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		h := strings.TrimSpace(req.Hostmask)
+		if h == "" {
+			http.Error(w, "hostmask required", http.StatusBadRequest)
+			return
+		}
+		s.cfgMu.Lock()
+		for _, ex := range s.cfg.Admin.Admins {
+			if ex == h {
+				s.cfgMu.Unlock()
+				http.Error(w, "already in list", http.StatusConflict)
+				return
+			}
+		}
+		s.cfg.Admin.Admins = append(s.cfg.Admin.Admins, h)
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfg.Admin.Admins = s.cfg.Admin.Admins[:len(s.cfg.Admin.Admins)-1]
+			s.cfgMu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+
+	case http.MethodDelete:
+		raw := strings.TrimSpace(r.URL.Query().Get("hostmask"))
+		if raw == "" {
+			http.Error(w, "hostmask required", http.StatusBadRequest)
+			return
+		}
+		if dec, err := url.QueryUnescape(raw); err == nil && dec != "" {
+			raw = strings.TrimSpace(dec)
+		}
+		s.cfgMu.Lock()
+		found := -1
+		for i, ex := range s.cfg.Admin.Admins {
+			if ex == raw {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			s.cfgMu.Unlock()
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		s.cfg.Admin.Admins = append(s.cfg.Admin.Admins[:found], s.cfg.Admin.Admins[found+1:]...)
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
@@ -1238,6 +1308,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
+	}
+	if err := s.authDB.TouchLastLogin(userID); err != nil {
+		log.Printf("last_login: %v", err)
 	}
 
 	token, err := s.authDB.CreateSession(userID)

@@ -15,10 +15,11 @@ import (
 )
 
 type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int        `json:"id"`
+	Username  string     `json:"username"`
+	Role      string     `json:"role"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
 }
 
 type AuthDatabase struct {
@@ -55,8 +56,15 @@ func NewAuthDatabase(dbPath string) (*AuthDatabase, error) {
 	// Migration: Add needs_password_change if it doesn't exist
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN needs_password_change INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN ui_theme TEXT DEFAULT 'dark'")
+	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN last_login_at DATETIME")
 
 	return &AuthDatabase{db: db}, nil
+}
+
+// TouchLastLogin sets last_login_at to now for the given user.
+func (a *AuthDatabase) TouchLastLogin(userID int) error {
+	_, err := a.db.Exec("UPDATE web_users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?", userID)
+	return err
 }
 
 func (a *AuthDatabase) CheckAndSeedInitialAdmin(cfg *config.Config) error {
@@ -192,7 +200,7 @@ func (a *AuthDatabase) GetUserRole(userID int) (string, error) {
 }
 
 func (a *AuthDatabase) GetUsers() ([]User, error) {
-	rows, err := a.db.Query("SELECT id, username, role, created_at FROM web_users")
+	rows, err := a.db.Query("SELECT id, username, role, created_at, last_login_at FROM web_users")
 	if err != nil {
 		return nil, err
 	}
@@ -201,12 +209,17 @@ func (a *AuthDatabase) GetUsers() ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt); err != nil {
+		var last sql.NullTime
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt, &last); err != nil {
 			return nil, err
+		}
+		if last.Valid {
+			t := last.Time
+			u.LastLogin = &t
 		}
 		users = append(users, u)
 	}
-	return users, nil
+	return users, rows.Err()
 }
 
 func (a *AuthDatabase) AddUser(username, password string) error {
