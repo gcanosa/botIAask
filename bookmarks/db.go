@@ -278,6 +278,29 @@ func (d *Database) DeleteReminder(ownerNick, publicID string) (bool, error) {
 	return n > 0, nil
 }
 
+// GetReminder returns the reminder for publicID if it exists and ownerNick matches (IRC case fold).
+func (d *Database) GetReminder(ownerNick, publicID string) (Reminder, bool, error) {
+	publicID = strings.TrimSpace(publicID)
+	var r Reminder
+	if publicID == "" {
+		return r, false, nil
+	}
+	err := d.db.QueryRow(
+		`SELECT public_id, owner_nick, note, created_at FROM reminders WHERE public_id = ?`,
+		publicID,
+	).Scan(&r.PublicID, &r.OwnerNick, &r.Note, &r.CreatedAt)
+	if err == sql.ErrNoRows {
+		return r, false, nil
+	}
+	if err != nil {
+		return r, false, err
+	}
+	if IRCCaseFoldNick(strings.TrimSpace(r.OwnerNick)) != IRCCaseFoldNick(strings.TrimSpace(ownerNick)) {
+		return r, false, nil
+	}
+	return r, true, nil
+}
+
 // ListReminders returns reminders for ownerNick, ordered by created_at ascending.
 func (d *Database) ListReminders(ownerNick string) ([]Reminder, error) {
 	uname := strings.TrimSpace(ownerNick)

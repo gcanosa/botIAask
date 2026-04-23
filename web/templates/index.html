@@ -558,6 +558,29 @@
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Re-read <span class="mono">config/config.yaml</span> into the running process (IRC connection stays up). Logged-in IRC admins receive a NOTICE.</p>
                     <button type="button" onclick="rehashConfigFromDisk()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Rehash from disk</button>
                 </div>
+                <div id="irc-config-admins-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">IRC admin hostmasks</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span> under <span class="mono">admin.admins</span>. Changes are written to disk and applied to the running bot (no full rehash NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div style="flex: 1; min-width: 12rem;">
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Hostmask fragment</label>
+                            <input type="text" id="irc-config-admin-hostmask" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="~nick@user/host" autocomplete="off" aria-label="IRC admin hostmask">
+                        </div>
+                        <button type="button" onclick="addIRCConfigAdmin()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Hostmask</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-config-admins-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-config-admins-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
                 <div id="irc-autojoin-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">IRC autoinjoin channels</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Saved entries live in <span class="mono">config/config.yaml</span> under <span class="mono">irc.channels</span>. <strong>Autoinjoin on connect</strong> controls whether the bot joins the channel on startup and after rehash (you can keep a +k entry without auto-joining). <strong>Session only</strong> joins IRC now and does not write YAML (rejoined in-process if the server reconnects, lost on bot restart). RSS <strong>announce</strong> per row still requires RSS + global <span class="mono">announce_to_irc</span> on the News card.</p>
@@ -614,6 +637,15 @@
                     </div>
                     <div class="data-table-wrap" style="overflow-x: auto;">
                          <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="mono data-table">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 1rem;">ID</th>
+                                    <th style="text-align: left; padding: 1rem;">Username</th>
+                                    <th style="text-align: left; padding: 1rem;">Role</th>
+                                    <th style="text-align: left; padding: 1rem;">Last login</th>
+                                    <th style="text-align: right; padding: 1rem;">Actions</th>
+                                </tr>
+                            </thead>
                             <tbody id="users-list"></tbody>
                         </table>
                     </div>

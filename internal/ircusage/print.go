@@ -36,7 +36,7 @@ var userLines = []line{
 	{cmd: "!euro", desc: "Euro / forex rate view"},
 	{cmd: "!peso", desc: "Argentine peso rate view"},
 	{cmd: "!crypto", desc: "Crypto market view"},
-	{cmd: "!reminder ...", desc: "add <note> | del <id> | list"},
+	{cmd: "!reminder ...", desc: "add <note> | del <id> | list | read <id>"},
 	{cmd: "!help", desc: "Short command list in the channel"},
 }
 

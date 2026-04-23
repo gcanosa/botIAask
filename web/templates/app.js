@@ -195,6 +195,7 @@ function showPanel(panelId) {
     if (panelId === 'admin') {
         fetchUsers();
         fetchIRCAutojoin();
+        fetchIRCConfigAdmins();
     }
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
@@ -365,8 +366,8 @@ async function fetchStatus() {
             showForcePassword();
         }
 
-        if (data.admin_nicknames) {
-            updateAdminsUI(data.admin_nicknames, data.channel_admins);
+        if (data.irc_admin_nicknames != null || data.web_admin_usernames != null) {
+            updateAdminsUI(data.irc_admin_nicknames || [], data.web_admin_usernames || []);
         }
     } catch (e) {
         console.error("Status check failed", e);
@@ -393,11 +394,15 @@ function updateAdminView(isAdmin) {
         if (pendingFilesSec) pendingFilesSec.classList.toggle('hidden', !lastStaffAdmin);
         if (uploadSettingsCard) uploadSettingsCard.classList.toggle('hidden', !lastStaffAdmin);
         document.getElementById('irc-autojoin-wrap')?.classList.remove('hidden');
+        document.getElementById('irc-config-admins-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
         document.getElementById('bookmarks-admin-header')?.classList.remove('hidden');
-        if (window.location.hash === '#admin') fetchIRCAutojoin();
+        if (window.location.hash === '#admin') {
+            fetchIRCAutojoin();
+            fetchIRCConfigAdmins();
+        }
     } else {
         adminNav.classList.add('hidden');
         adminBadge.classList.add('hidden');
@@ -407,6 +412,7 @@ function updateAdminView(isAdmin) {
         if (pendingFilesSec) pendingFilesSec.classList.add('hidden');
         if (uploadSettingsCard) uploadSettingsCard.classList.add('hidden');
         document.getElementById('irc-autojoin-wrap')?.classList.add('hidden');
+        document.getElementById('irc-config-admins-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -2361,11 +2367,21 @@ async function ircAutojoinAdd() {
 async function fetchUsers() {
     const res = await fetch('/api/users');
     const users = await res.json();
+    const fmtLogin = (u) => {
+        if (!u.last_login) return '—';
+        try {
+            const d = new Date(u.last_login);
+            return isNaN(d.getTime()) ? '—' : d.toLocaleString();
+        } catch (_) {
+            return '—';
+        }
+    };
     document.getElementById('users-list').innerHTML = users.map(u => `
         <tr style="border-bottom: 1px solid var(--glass-border);">
             <td style="padding: 1rem;">${u.id}</td>
             <td style="padding: 1rem;" class="font-bold">${u.username}</td>
             <td style="padding: 1rem;"><span class="badge badge-admin">${u.role}</span></td>
+            <td style="padding: 1rem; color: var(--text-muted); font-size: 0.8rem;">${fmtLogin(u)}</td>
             <td style="padding: 1rem; text-align: right;">
                 <div class="row-action-group" style="justify-content: flex-end;">
                     <button type="button" class="row-action row-action--danger" title="Delete user" aria-label="Delete user" onclick="deleteUser(${u.id})">${rowIcons.trash}</button>
@@ -2375,12 +2391,104 @@ async function fetchUsers() {
     `).join('');
 }
 
-function updateAdminsUI(nicks, chans) {
+function ircConfigAdminsSetStatus(msg, isErr) {
+    const el = document.getElementById('irc-config-admins-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? 'var(--error)' : 'var(--text-muted)';
+}
+
+async function fetchIRCConfigAdmins() {
+    const tbody = document.getElementById('irc-config-admins-list');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/api/config/irc-admins');
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const masks = data.hostmasks || [];
+        window._ircConfigAdminMasks = masks.slice();
+        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        tbody.innerHTML = masks.length ? masks.map((h, i) =>
+            `<tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 0.65rem 0.75rem;" class="mono">${esc(h)}</td>
+                <td style="padding: 0.65rem 0.75rem; text-align: right;">
+                    <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.65rem;" onclick="removeIRCConfigAdmin(${i})">Remove</button>
+                </td>
+            </tr>`).join('') : `<tr><td colspan="2" style="padding: 0.75rem; color: var(--text-muted);">No hostmasks in config.</td></tr>`;
+        ircConfigAdminsSetStatus('');
+    } catch (e) {
+        ircConfigAdminsSetStatus(String(e), true);
+    }
+}
+
+async function addIRCConfigAdmin() {
+    const input = document.getElementById('irc-config-admin-hostmask');
+    if (!input) return;
+    const hostmask = String(input.value || '').trim();
+    if (!hostmask) {
+        ircConfigAdminsSetStatus('Enter a hostmask.', true);
+        return;
+    }
+    try {
+        const res = await fetch('/api/config/irc-admins', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hostmask }),
+        });
+        if (res.status === 409) {
+            ircConfigAdminsSetStatus('That hostmask is already listed.', true);
+            return;
+        }
+        if (!res.ok) {
+            ircConfigAdminsSetStatus((await res.text()) || 'Add failed', true);
+            return;
+        }
+        input.value = '';
+        ircConfigAdminsSetStatus('Saved to config and applied.');
+        await fetchIRCConfigAdmins();
+    } catch (e) {
+        ircConfigAdminsSetStatus(String(e), true);
+    }
+}
+
+async function removeIRCConfigAdmin(index) {
+    const masks = window._ircConfigAdminMasks;
+    if (!masks || index < 0 || index >= masks.length) {
+        ircConfigAdminsSetStatus('List out of date; refresh.', true);
+        await fetchIRCConfigAdmins();
+        return;
+    }
+    const hostmask = masks[index];
+    const encodedHostmask = encodeURIComponent(hostmask);
+    try {
+        const res = await fetch('/api/config/irc-admins?hostmask=' + encodedHostmask, { method: 'DELETE' });
+        if (res.status === 404) {
+            ircConfigAdminsSetStatus('Hostmask not found (reload list).', true);
+            await fetchIRCConfigAdmins();
+            return;
+        }
+        if (!res.ok) {
+            ircConfigAdminsSetStatus((await res.text()) || 'Remove failed', true);
+            return;
+        }
+        ircConfigAdminsSetStatus('Removed and applied.');
+        await fetchIRCConfigAdmins();
+    } catch (e) {
+        ircConfigAdminsSetStatus(String(e), true);
+    }
+}
+
+function updateAdminsUI(ircNicks, webNames) {
     const globalList = document.getElementById('admins-list');
     if (!globalList) return;
-    globalList.innerHTML = nicks.map(nick => 
-        `<span class="badge badge-admin mono" style="font-size: 0.65rem;">${nick}</span>`
-    ).join('');
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const ircBadges = (ircNicks || []).map(nick =>
+        `<span class="badge badge-admin-irc mono" style="font-size: 0.65rem;" title="IRC admin session">${esc(nick)} <span class="admin-src-label">IRC</span></span>`
+    );
+    const webBadges = (webNames || []).map(name =>
+        `<span class="badge badge-admin-web mono" style="font-size: 0.65rem;" title="Web dashboard session">${esc(name)} <span class="admin-src-label">WEB</span></span>`
+    );
+    globalList.innerHTML = [...ircBadges, ...webBadges].join('');
 }
 
 function showForcePassword() {
@@ -2444,6 +2552,8 @@ window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
 window.ircAutojoinAdd = ircAutojoinAdd;
+window.addIRCConfigAdmin = addIRCConfigAdmin;
+window.removeIRCConfigAdmin = removeIRCConfigAdmin;
 async function deletePaste(id) {
     if(!confirm('Are you sure you want to delete this paste?')) return;
     try {

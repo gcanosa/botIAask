@@ -152,32 +152,16 @@ func (f *Fetcher) Fetch() {
 		src := FeedSourceKeyFromFeed(feedURL, feed)
 		srcIcon := SourceIconForFeedURL(feed, feedURL)
 		for _, item := range feed.Items {
-			id := item.GUID
-			if id == "" {
-				id = item.Link
-			}
-			if id == "" {
+			entry, ok := EntryFromFeedItem(item, src, srcIcon)
+			if !ok {
 				continue
 			}
-
-			seen, err := f.db.IsSeen(id)
+			dup, err := f.db.NewsItemDuplicate(entry.GUID, entry.DedupKey, entry.LinkNormalized)
 			if err != nil {
 				log.Printf("[RSS] DB Error: %v", err)
 				continue
 			}
-			if !seen {
-				pubDate := time.Now()
-				if item.PublishedParsed != nil {
-					pubDate = *item.PublishedParsed
-				}
-				entry := NewsEntry{
-					GUID:       id,
-					Title:      item.Title,
-					Link:       item.Link,
-					PubDate:    pubDate,
-					Source:     src,
-					SourceIcon: srcIcon,
-				}
+			if !dup {
 				newEntries = append(newEntries, entry)
 			}
 		}
@@ -211,7 +195,7 @@ func (f *Fetcher) Fetch() {
 	if retention <= 0 {
 		retention = 50 // Default fallback
 	}
-	if err := f.db.Cleanup(retention); err != nil {
+	if err := f.db.CleanupPerSource(retention); err != nil {
 		log.Printf("[RSS] Cleanup Error: %v", err)
 	}
 }
@@ -219,13 +203,9 @@ func (f *Fetcher) Fetch() {
 // Backfill populates the database with the latest X items without broadcasting them.
 func (f *Fetcher) Backfill(limit int) int {
 	fp := gofeed.NewParser()
-	count := 0
+	totalAdded := 0
 
 	for _, feedURL := range f.cfg.RSS.FeedURLs {
-		if count >= limit {
-			break
-		}
-
 		feed, err := fp.ParseURL(feedURL)
 		if err != nil {
 			log.Printf("[RSS] Error fetching feed %s for backfill: %v", feedURL, err)
@@ -236,48 +216,33 @@ func (f *Fetcher) Backfill(limit int) int {
 
 		log.Printf("[RSS] Feed %s fetched: %d items total", feedURL, len(feed.Items))
 
+		addedThisFeed := 0
 		for _, item := range feed.Items {
-			if count >= limit {
+			if addedThisFeed >= limit {
 				break
 			}
-
-			id := item.GUID
-			if id == "" {
-				id = item.Link
-			}
-			if id == "" {
+			entry, ok := EntryFromFeedItem(item, src, srcIcon)
+			if !ok {
 				continue
 			}
-
-			exists, _, err := f.db.GetEntryStatus(id)
+			dup, err := f.db.NewsItemDuplicate(entry.GUID, entry.DedupKey, entry.LinkNormalized)
 			if err != nil {
 				log.Printf("[RSS] DB Error during backfill: %v", err)
 				continue
 			}
-
-			if !exists {
-				pubDate := time.Now()
-				if item.PublishedParsed != nil {
-					pubDate = *item.PublishedParsed
-				}
-				entry := NewsEntry{
-					GUID:       id,
-					Title:      item.Title,
-					Link:       item.Link,
-					ShortLink:  ShortenURL(item.Link),
-					PubDate:    pubDate,
-					Source:     src,
-					SourceIcon: srcIcon,
-				}
-				if err := f.db.MarkSeen(entry); err != nil {
-					log.Printf("[RSS] Failed to save backfill entry: %v", err)
-					continue
-				}
-				count++
+			if dup {
+				continue
 			}
+			entry.ShortLink = ShortenURL(entry.Link)
+			if err := f.db.MarkSeen(entry); err != nil {
+				log.Printf("[RSS] Failed to save backfill entry: %v", err)
+				continue
+			}
+			addedThisFeed++
+			totalAdded++
 		}
 	}
-	return count
+	return totalAdded
 }
 
 func ShortenURL(longURL string) string {

@@ -31,7 +31,7 @@ bot:
         window: 60
 admin:
     admins:
-        # Use hostmask format: ~nickname@user/host-ip
+        # Use hostmask format: ~nickname@user/host-ip (editable from web Identity panel or here)
         - ~nickname@user/host-ip
 web:
     enabled: true
@@ -52,6 +52,7 @@ rss:
     interval_minutes: 30
     channels:
         - '##yerba'
+    # Max rows kept per feed source in the news DB (not a single global cap across all feeds).
     retention_count: 50
     # Each feed URL is labeled in IRC and on the web from the site (e.g. arstechnica.com → [ARS]).
     feed_urls:
