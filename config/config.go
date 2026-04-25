@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -90,6 +91,8 @@ type WebConfig struct {
 	Port                int        `yaml:"port"`
 	Host                string     `yaml:"host"`
 	BaseURL             string     `yaml:"base_url"`
+	// ServerLocation is a place name for the dashboard weather panel (Open-Meteo geocoding), e.g. "Barcelona, Spain".
+	ServerLocation    string     `yaml:"server_location,omitempty"`
 	TrustForwardedFor   bool       `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
 	Auth                AuthConfig `yaml:"auth,omitempty"`
 }
@@ -127,10 +130,19 @@ func (r RSSConfig) AnnounceToIRCEnabled() bool {
 
 // StatsConfig holds settings for real-time statistics collection.
 type StatsConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	Interval      int  `yaml:"interval"` // in seconds
-	SaveToDB      bool `yaml:"save_to_db"`
-	RetentionDays int  `yaml:"retention_days"`
+	Enabled       bool  `yaml:"enabled"`
+	Interval      int   `yaml:"interval"` // in seconds
+	SaveToDB      *bool `yaml:"save_to_db,omitempty"`
+	RetentionDays int   `yaml:"retention_days"`
+}
+
+// ShouldSaveToDB returns whether per-interval rows are written to stats SQLite.
+// Omitted "save_to_db" defaults to true when stats are enabled so the web dashboard can load history.
+func (s StatsConfig) ShouldSaveToDB() bool {
+	if s.SaveToDB != nil {
+		return *s.SaveToDB
+	}
+	return s.Enabled
 }
 
 // LoadConfig reads and parses the YAML configuration file.
@@ -149,6 +161,7 @@ func LoadConfig(path string) (*Config, error) {
 	applyStatsDefaults(&cfg)
 	applyUploadsDefaults(&cfg)
 	applyRSSDefaults(&cfg)
+	applyWebDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -169,6 +182,12 @@ func applyRSSDefaults(cfg *Config) {
 	if cfg.RSS.AnnounceToIRC == nil {
 		t := true
 		cfg.RSS.AnnounceToIRC = &t
+	}
+}
+
+func applyWebDefaults(cfg *Config) {
+	if strings.TrimSpace(cfg.Web.ServerLocation) == "" {
+		cfg.Web.ServerLocation = "Barcelona, Spain"
 	}
 }
 

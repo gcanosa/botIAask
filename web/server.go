@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"embed"
@@ -30,9 +31,11 @@ import (
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
+	"botIAask/progtodo"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
+	"botIAask/weather"
 )
 
 //go:embed templates/*
@@ -49,6 +52,7 @@ type Server struct {
 	authDB       *AuthDatabase
 	uploadsDB    *uploads.Database
 	cryptoDB     *crypto.Database
+	progtodoDB   *progtodo.Database
 	templates    *template.Template
 	forexCache   map[string]float64
 	forexUpdate  time.Time
@@ -62,8 +66,16 @@ type Server struct {
 	marketChartRawMu    sync.Mutex
 	marketChartRawCache map[string]marketChartRawCacheEntry
 
+	weatherMu     sync.Mutex
+	weatherCache  []byte
+	weatherAt     time.Time
+	weatherKey    string
+	weatherClient *http.Client
+
 	rehashFn func() error
 }
+
+const weatherCacheTTL = 10 * time.Minute
 
 type marketChartRawCacheEntry struct {
 	at  time.Time
@@ -90,10 +102,15 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	s.cfgMu.Lock()
 	s.cfg = cfg
 	s.cfgMu.Unlock()
+	s.weatherMu.Lock()
+	s.weatherCache = nil
+	s.weatherKey = ""
+	s.weatherAt = time.Time{}
+	s.weatherMu.Unlock()
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehashFn func() error) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, rehashFn func() error) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -117,8 +134,12 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		authDB:       authDB,
 		uploadsDB:    uploadsDB,
 		cryptoDB:     cryptoDB,
+		progtodoDB:   progtodoDB,
 		templates:    tmpl,
 		rehashFn:     rehashFn,
+		weatherClient: &http.Client{
+			Timeout: 22 * time.Second,
+		},
 	}
 }
 
@@ -165,6 +186,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/finance", s.handleFinance)
 	mux.HandleFunc("/api/finance/crypto-chart", s.handleCryptoChart)
 	mux.HandleFunc("/api/finance/forex-chart", s.handleForexChart)
+	mux.HandleFunc("/api/programmer-todos", s.handleProgrammerTodos)
+	mux.HandleFunc("/api/weather", s.handleWeather)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -210,6 +233,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	interval := s.getConfig().Stats.Interval
+	if interval <= 0 {
+		interval = 60
+	}
 	status := map[string]interface{}{
 		"version":               meta.Version,
 		"uptime":                s.bot.GetUptime(),
@@ -222,6 +249,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_requests":           s.bot.GetAIRequestCount(),
 		"rss_enabled":           s.rssFetcher.IsEnabled(),
 		"stats_enabled":         s.statsTracker.IsEnabled(),
+		"stats_interval_seconds": interval,
 		"start_time":            s.bot.GetStartTime().Format(time.RFC3339),
 		"is_admin":              sessionOK,
 		"staff_admin":           staffAdmin,
@@ -258,6 +286,62 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
+}
+
+// handleWeather returns JSON for the server-location weather panel (cached; Open-Meteo, no API key).
+func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	loc := strings.TrimSpace(s.getConfig().Web.ServerLocation)
+	if loc == "" {
+		loc = "Barcelona, Spain"
+	}
+
+	s.weatherMu.Lock()
+	if len(s.weatherCache) > 0 && s.weatherKey == loc && time.Since(s.weatherAt) < weatherCacheTTL {
+		b := append([]byte(nil), s.weatherCache...)
+		s.weatherMu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(b)
+		return
+	}
+	s.weatherMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	cl := s.weatherClient
+	if cl == nil {
+		cl = &http.Client{Timeout: 22 * time.Second}
+	}
+	snap, err := weather.FetchSnapshot(ctx, cl, loc)
+	if err != nil {
+		log.Printf("weather: %v", err)
+		out, _ := json.Marshal(map[string]any{
+			"ok":          false,
+			"message":     "weather service temporarily unavailable",
+			"attribution": "open-meteo.com",
+		})
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(out)
+		return
+	}
+	out, err := json.Marshal(snap)
+	if err != nil {
+		http.Error(w, "encode error", http.StatusInternalServerError)
+		return
+	}
+	// Only cache successful payloads so a bad spell of API errors is not stuck for 10m.
+	if snap != nil && snap.OK {
+		s.weatherMu.Lock()
+		s.weatherCache = append([]byte(nil), out...)
+		s.weatherKey = loc
+		s.weatherAt = time.Now()
+		s.weatherMu.Unlock()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(out)
 }
 
 func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {

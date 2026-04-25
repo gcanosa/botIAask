@@ -58,6 +58,12 @@
                     </a>
                 </div>
                 <div class="nav-item">
+                    <a href="#todos" class="nav-link" onclick="showPanel('todos')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                        TODOs
+                    </a>
+                </div>
+                <div class="nav-item">
                     <a href="#news" class="nav-link" onclick="showPanel('news')">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1m2 13a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"></path><path d="M15 8h2m-2 4h2m-2 4h2M11 8h-2m2 4h-2m2 4h-2"></path></svg>
                         News
@@ -155,6 +161,31 @@
                     </div>
                 </div>
 
+                <div id="server-weather-card" class="card weather-card" style="margin-bottom: 2rem;">
+                    <div class="weather-card__head">
+                        <div class="weather-card__titles">
+                            <h3 class="card-title" style="margin: 0 0 0.25rem 0;">Server location weather</h3>
+                            <p id="server-weather-place" class="weather-card__place mono">—</p>
+                        </div>
+                        <div class="weather-card__hero-stack">
+                            <div id="server-weather-hero-icon" class="weather-card__hero-icon" aria-hidden="true"></div>
+                            <div class="weather-card__hero-readout">
+                                <div id="server-weather-temp" class="weather-card__hero-temp">—</div>
+                                <p id="server-weather-label" class="weather-card__hero-label">—</p>
+                                <div id="server-weather-today-range" class="weather-card__today-range hidden" aria-label="Today high and low"></div>
+                                <div id="server-weather-hero-extras" class="weather-card__hero-extras" aria-label="Extra conditions"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <p id="server-weather-loading" class="weather-card__loading section-subtitle">Loading forecast…</p>
+                    <p id="server-weather-error" class="weather-card__error hidden" role="alert"></p>
+                    <div id="server-weather-body" class="weather-card__body hidden">
+                        <p id="server-weather-meta" class="weather-card__meta mono"></p>
+                        <div id="server-weather-daily" class="weather-daily" role="list"></div>
+                        <p class="weather-card__attr"><span class="mono" id="server-weather-fetched">—</span> · <a href="https://open-meteo.com/" rel="nofollow noreferrer noopener" target="_blank" class="weather-card__link">Open-Meteo</a></p>
+                    </div>
+                </div>
+
                 <div class="card" style="margin-bottom: 2rem;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">System Activity</h3>
@@ -168,6 +199,8 @@
                             <button type="button" onclick="changeTimeframe('1y')" data-time="1y" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1Y</button>
                         </div>
                     </div>
+                    <p id="activity-chart-error" class="hidden" style="color: #f87171; font-size: 0.8rem; margin: 0 0 0.5rem 0;" role="alert"></p>
+                    <p id="activity-chart-empty" class="hidden" style="color: var(--text-muted, #94a3b8); font-size: 0.8rem; margin: 0 0 0.5rem 0;"></p>
                     <div style="height: 300px;">
                         <canvas id="activityChart"></canvas>
                     </div>
@@ -339,6 +372,32 @@
                                 </tr>
                             </thead>
                             <tbody id="bookmarks-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Programmer TODOs (IRC !todo add / list / del) -->
+            <section id="panel-todos" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Programmer TODOs</h1>
+                    <p class="section-subtitle">Public backlog from IRC: <span class="mono">!todo add</span> is visible to everyone (including without signing in) so you can see review status and priority. <span class="mono">!todo private</span> (config admins only) is staff-only on the web. <span class="mono">!todo list</span> / <span class="mono">!todo del &lt;id&gt;</span> for your own entries. Dashboard staff can moderate; approve/reject are final; rejected rows use strikethrough.</p>
+                </div>
+                <p id="programmer-todos-error" class="hidden" style="color: var(--error); font-size: 0.85rem; margin-bottom: 1rem;" role="alert"></p>
+                <div class="card">
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="data-table">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">ID</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">SUMMARY</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;" class="progtodo-col-nick">NICK</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">ADDED</th>
+                                    <th style="text-align: left; padding: 0.75rem 1rem;">INFO</th>
+                                    <th id="programmer-todos-actions-th" style="text-align: right; padding: 0.75rem 1rem;" class="hidden">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="programmer-todos-list"></tbody>
                         </table>
                     </div>
                 </div>

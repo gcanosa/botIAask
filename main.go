@@ -22,6 +22,7 @@ import (
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
+	"botIAask/progtodo"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -102,8 +103,8 @@ func main() {
 		fmt.Println("SIGHUP sent; running bot will reload config and NOTICE logged-in IRC admins.")
 		return
 	}
-	if cfg.Stats.Enabled && !cfg.Stats.SaveToDB {
-		log.Printf("Warning: stats enabled but save_to_db is false; activity history will not persist across restarts")
+	if cfg.Stats.Enabled && !cfg.Stats.ShouldSaveToDB() {
+		log.Printf("Warning: stats enabled but save_to_db is false; activity history will not be stored in the stats database")
 	}
 
 	// CLI flag overrides.
@@ -289,6 +290,20 @@ func main() {
 		bot.SetBookmarksDatabase(bookmarksDB)
 	}
 
+	var progTodoDB *progtodo.Database
+	progPath, perr := resolveDataFilePath(configPath, "data/prog_todos.db")
+	if perr != nil {
+		log.Fatalf("progtodo database path: %v", perr)
+	}
+	log.Printf("Programmer TODO database: %s", progPath)
+	progTodoDB, err = progtodo.NewDatabase(progPath)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize programmer TODO database: %v", err)
+	} else {
+		defer progTodoDB.Close()
+		bot.SetProgtodoDatabase(progTodoDB)
+	}
+
 	// Initialize Uploads Database (path relative to project root — same file for IRC + web even if cwd differs)
 	uploadsDBPath, err := resolveUploadsDBPath(configPath, cfg.Uploads.DBPath)
 	if err != nil {
@@ -325,17 +340,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehashCoordinator, &webServerMu, &webServerRef)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehashCoordinator, &webServerMu, &webServerRef)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehashCoordinator, &webServerMu, &webServerRef)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehashCoordinator, &webServerMu, &webServerRef)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) error {
 	// Forked daemon child has stdio detached; avoid fmt to stdout (no terminal). Debug goes to log if configured.
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
@@ -346,7 +361,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehash, webMu, webRef)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -390,14 +405,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, rehash, webMu, webRef)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -433,11 +448,11 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
 	webRehash := func() error {
 		return rehash("web admin")
 	}
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, webRehash)
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, webRehash)
 	webMu.Lock()
 	*webRef = ws
 	webMu.Unlock()
@@ -462,6 +477,24 @@ func signalDaemonRehash(cfg *config.Config) error {
 		return err
 	}
 	return proc.Signal(syscall.SIGHUP)
+}
+
+// resolveDataFilePath resolves a path relative to the project root (parent of the config directory),
+// e.g. data/prog_todos.db, so the DB is independent of the process current working directory.
+func resolveDataFilePath(configPath, rel string) (string, error) {
+	rel = filepath.Clean(rel)
+	if rel == "" || rel == "." {
+		return "", fmt.Errorf("empty relative path")
+	}
+	if filepath.IsAbs(rel) {
+		return rel, nil
+	}
+	cfgAbs, err := filepath.Abs(configPath)
+	if err != nil {
+		return "", err
+	}
+	projectRoot := filepath.Dir(filepath.Dir(cfgAbs))
+	return filepath.Join(projectRoot, rel), nil
 }
 
 // resolveUploadsDBPath resolves a relative db path against the project root (parent of the config directory),

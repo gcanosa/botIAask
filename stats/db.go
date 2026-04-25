@@ -3,6 +3,7 @@ package stats
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -53,7 +54,51 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create stats table: %w", err)
 	}
 
+	if err := migrateStatsSchema(db); err != nil {
+		return nil, err
+	}
+
 	return &Database{db: db}, nil
+}
+
+// migrateStatsSchema adds columns introduced after older deployments (CREATE TABLE IF NOT EXISTS does not upgrade schema).
+func migrateStatsSchema(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(bot_stats)`)
+	if err != nil {
+		return fmt.Errorf("stats schema inspect: %w", err)
+	}
+	defer rows.Close()
+
+	have := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("stats schema scan: %w", err)
+		}
+		have[strings.ToLower(name)] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("stats schema rows: %w", err)
+	}
+
+	adds := []struct{ sql string }{
+		{`ALTER TABLE bot_stats ADD COLUMN admin_commands INTEGER NOT NULL DEFAULT 0`},
+		{`ALTER TABLE bot_stats ADD COLUMN logged_in_admins INTEGER NOT NULL DEFAULT 0`},
+		{`ALTER TABLE bot_stats ADD COLUMN failed_auths INTEGER NOT NULL DEFAULT 0`},
+	}
+	labels := []string{"admin_commands", "logged_in_admins", "failed_auths"}
+	for i, a := range adds {
+		if _, ok := have[labels[i]]; ok {
+			continue
+		}
+		if _, err := db.Exec(a.sql); err != nil {
+			return fmt.Errorf("stats migrate add %s: %w", labels[i], err)
+		}
+	}
+	return nil
 }
 
 func (d *Database) SaveEntry(e StatEntry) error {
