@@ -49,3 +49,19 @@ func TestFetchByTitle_emptyKey(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestFetchByTitle_401JSONInvalidKey(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"Response":"False","Error":"Invalid API key!"}`))
+	}))
+	defer ts.Close()
+
+	res, err := FetchByTitle(context.Background(), ts.Client(), "k", ts.URL+"/", "Rocky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || !strings.Contains(res.Error, "Invalid API key") {
+		t.Fatalf("%+v", res)
+	}
+}
