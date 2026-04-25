@@ -1,7 +1,7 @@
 # `docker compose` or `podman compose` from repo root.
 # Setup: mkdir -p state/config state/data && cp config/config.yaml.template state/config/config.yaml
 # and edit. Mounting the whole config dir avoids Docker creating a directory named config.yaml by mistake.
-# Hub image (after push): e.g. IMAGE=berkelioar/botiaask:0.3.2 and remove/override `build: .` to pull from Docker Hub.
+# Hub image (after push): e.g. IMAGE=berkelioar/botiaask:0.3.3 and remove/override `build: .` to pull from Docker Hub.
 
 services:
   botiaask:

@@ -7,9 +7,11 @@ require (
 	github.com/ergochat/irc-go v0.6.0
 	github.com/go-enry/go-enry/v2 v2.9.6
 	github.com/mmcdole/gofeed v1.3.0
+	github.com/prometheus-community/pro-bing v0.8.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/shirou/gopsutil/v4 v4.25.12
 	golang.org/x/crypto v0.48.0
+	golang.org/x/net v0.51.0
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.49.1
@@ -36,7 +38,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
