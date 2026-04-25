@@ -16,6 +16,11 @@ let forexChartRange = '1w';
 const cryptoChartColors = ['#38bdf8', '#c084fc', '#22c55e', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf', '#fb7185', '#94a3b8', '#e879f9'];
 let lastIsAdmin = false;
 let lastStaffAdmin = false;
+const PROGTODO_SORT_STORAGE_KEY = 'botIAask_progtodo_sort';
+let lastProgtodoItems = null;
+let lastProgtodoStaff = false;
+let weatherIntervalId = null;
+let lastWeatherRefreshMinutes = null;
 
 const VALID_THEMES = ['dark', 'light', 'mono'];
 const UI_THEME_STORAGE_KEY = 'botIAask_ui_theme';
@@ -359,6 +364,7 @@ function showPanel(panelId) {
         fetchUsers();
         fetchIRCAutojoin();
         fetchIRCConfigAdmins();
+        fetchWeatherSettings();
     }
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
@@ -413,6 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     updateMobileSidebarAria();
 
+    applyWeatherRefreshPolling(30);
     fetchStatus();
     let statusIntervalId = null;
     const applyStatusPolling = () => {
@@ -434,8 +441,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start background tasks
     fetchFinance();
     setInterval(fetchFinance, 60000); // 1m finance refresh
-    setInterval(fetchServerWeather, 600000); // 10m; server also caches
-    
+
     // Poll for pending/approved pastes and news every 5s if admin and on respective panel
     setInterval(() => {
         if (lastStaffAdmin && document.getElementById('panel-pastes').classList.contains('active')) {
@@ -470,6 +476,20 @@ document.addEventListener('DOMContentLoaded', () => {
             fetchForexChart(r);
         });
     });
+
+    const progtodoSort = document.getElementById('progtodo-sort');
+    if (progtodoSort) {
+        try {
+            const stored = sessionStorage.getItem(PROGTODO_SORT_STORAGE_KEY);
+            if (stored && [...progtodoSort.options].some((o) => o.value === stored)) {
+                progtodoSort.value = stored;
+            }
+        } catch (e) {
+            /* ignore */
+        }
+        progtodoSort.addEventListener('change', onProgtodoSortChange);
+    }
+    updateProgtodoAddButtonVisibility();
 });
 
 async function fetchStatus() {
@@ -479,9 +499,14 @@ async function fetchStatus() {
         const data = await res.json();
         lastIsAdmin = data.is_admin;
         lastStaffAdmin = data.staff_admin != null ? !!data.staff_admin : !!data.is_admin;
+        updateProgtodoAddButtonVisibility();
         if (data.stats_interval_seconds != null && Number.isFinite(data.stats_interval_seconds) && data.stats_interval_seconds > 0) {
             statsIntervalSec = Math.max(1, Math.floor(data.stats_interval_seconds));
         }
+
+        let wMin = data.weather_refresh_minutes;
+        if (!Number.isFinite(wMin) || wMin < 1) wMin = 30;
+        applyWeatherRefreshPolling(wMin);
 
         const appVersionEl = document.getElementById('app-version');
         if (appVersionEl && data.version) {
@@ -552,6 +577,19 @@ async function fetchStatus() {
     }
 }
 
+function applyWeatherRefreshPolling(minutes) {
+    let m = minutes;
+    if (!Number.isFinite(m) || m < 1) m = 30;
+    m = Math.max(1, Math.floor(m));
+    if (lastWeatherRefreshMinutes === m) return;
+    lastWeatherRefreshMinutes = m;
+    if (weatherIntervalId) {
+        clearInterval(weatherIntervalId);
+        weatherIntervalId = null;
+    }
+    weatherIntervalId = setInterval(fetchServerWeather, m * 60 * 1000);
+}
+
 function updateAdminView(isAdmin) {
     const adminNav = document.getElementById('admin-nav');
     const adminBadge = document.getElementById('admin-badge');
@@ -578,6 +616,7 @@ function updateAdminView(isAdmin) {
         if (window.location.hash === '#admin') {
             fetchIRCAutojoin();
             fetchIRCConfigAdmins();
+            fetchWeatherSettings();
         }
     } else {
         adminNav.classList.add('hidden');
@@ -1417,6 +1456,29 @@ let statsEnabledState = false;
 /** Snapshot period from server (stats.interval), for empty-chart messaging */
 let statsIntervalSec = 60;
 
+const ACTIVITY_CHART_RANGES = {
+    '1h':  { title: 'Last hour',     unit: 'Hours',  maxTicks: 8,  maxRot: 0,  minRot: 0  },
+    '6h':  { title: 'Last 6 hours',  unit: 'Hours',  maxTicks: 9,  maxRot: 0,  minRot: 0  },
+    '1d':  { title: 'Last 24 hours', unit: 'Hours',  maxTicks: 10, maxRot: 35, minRot: 0  },
+    '5d':  { title: 'Last 5 days',   unit: 'Days',   maxTicks: 10, maxRot: 40, minRot: 0  },
+    '1m':  { title: 'Last month',    unit: 'Days',   maxTicks: 8,  maxRot: 45, minRot: 0  },
+    '6m':  { title: 'Last 6 months', unit: 'Months', maxTicks: 8,  maxRot: 45, minRot: 0  },
+    '1y':  { title: 'Last year',     unit: 'Months', maxTicks: 12, maxRot: 45, minRot: 0  },
+};
+
+function syncTimeframeSelectorUI(tf) {
+    document.querySelectorAll('#timeframe-selector button').forEach((b) => {
+        const on = b.dataset.time === tf;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const sub = document.getElementById('activity-chart-subtitle');
+    if (sub) {
+        const r = ACTIVITY_CHART_RANGES[tf] || ACTIVITY_CHART_RANGES['1h'];
+        sub.textContent = `${r.title} (${r.unit})`;
+    }
+}
+
 function formatActivityChartLabel(d, tf) {
     const t = d instanceof Date ? d : new Date(d);
     if (Number.isNaN(t.getTime())) return '';
@@ -1450,16 +1512,7 @@ function applyActivityChartScales(tf) {
     const tick = (st.getPropertyValue('--chart-tick').trim() || '#94a3b8');
     const subt = (st.getPropertyValue('--text-muted').trim() || 'rgba(148, 163, 184, 0.85)');
 
-    const ranges = {
-        '1h':  { title: 'Last hour',       unit: 'Hours',  maxTicks: 8,  maxRot: 0,  minRot: 0  },
-        '6h':  { title: 'Last 6 hours',    unit: 'Hours',  maxTicks: 9,  maxRot: 0,  minRot: 0  },
-        '1d':  { title: 'Last 24 hours',   unit: 'Hours',  maxTicks: 10, maxRot: 35, minRot: 0  },
-        '5d':  { title: 'Last 5 days',     unit: 'Days',   maxTicks: 10, maxRot: 40, minRot: 0  },
-        '1m':  { title: 'Last month',      unit: 'Days',   maxTicks: 8,  maxRot: 45, minRot: 0  },
-        '6m':  { title: 'Last 6 months',   unit: 'Months', maxTicks: 8,  maxRot: 45, minRot: 0  },
-        '1y':  { title: 'Last year',       unit: 'Months', maxTicks: 12, maxRot: 45, minRot: 0  },
-    };
-    const r = ranges[tf] || ranges['1h'];
+    const r = ACTIVITY_CHART_RANGES[tf] || ACTIVITY_CHART_RANGES['1h'];
 
     activityChart.options.scales.x.ticks = {
         ...activityChart.options.scales.x.ticks,
@@ -1609,6 +1662,7 @@ function setActivityChartEmptyHint(tf, pointCount) {
 async function fetchHistory(tf) {
     if (!document.getElementById('activityChart')) return;
     currentTimeframe = tf;
+    syncTimeframeSelectorUI(tf);
     if (!activityChart) initChart();
     if (!activityChart) return;
 
@@ -1807,7 +1861,7 @@ function hideUploadDetail() {
 }
 
 async function openUploadDetail(ticketId) {
-    ['login-modal', 'adduser-modal', 'force-password-modal'].forEach((id) => {
+    ['login-modal', 'adduser-modal', 'force-password-modal', 'progtodo-add-modal'].forEach((id) => {
         document.getElementById(id)?.classList.add('hidden');
     });
     document.getElementById('modal-overlay')?.classList.remove('hidden');
@@ -2941,7 +2995,6 @@ window.deleteNews = deleteNews;
 window.debounceNewsSearch = debounceNewsSearch;
 window.changeNewsPage = changeNewsPage;
 window.changeTimeframe = (tf) => {
-    document.querySelectorAll('#timeframe-selector button').forEach(b => b.classList.toggle('active', b.dataset.time === tf));
     fetchHistory(tf);
 };
 window.changeBookmarkPage = changeBookmarkPage;
@@ -2974,6 +3027,213 @@ function formatTodoDate(iso) {
     }
 }
 
+function progtodoTimeMs(it) {
+    try {
+        const d = new Date(it.created_at);
+        return isNaN(d.getTime()) ? 0 : d.getTime();
+    } catch {
+        return 0;
+    }
+}
+
+function progtodoImportanceRank(imp) {
+    const s = String(imp || 'medium').toLowerCase();
+    if (s === 'high') return 0;
+    if (s === 'low') return 2;
+    return 1;
+}
+
+function progtodoCompare(a, b, mode) {
+    const ta = progtodoTimeMs(a);
+    const tb = progtodoTimeMs(b);
+    const ia = progtodoImportanceRank(a.importance);
+    const ib = progtodoImportanceRank(b.importance);
+    const ra = String(a.review_status || 'pending').toLowerCase();
+    const rb = String(b.review_status || 'pending').toLowerCase();
+    let c = 0;
+    if (mode === 'date_desc') c = tb - ta;
+    else if (mode === 'date_asc') c = ta - tb;
+    else if (mode === 'imp_desc') {
+        c = ia - ib;
+        if (c === 0) c = tb - ta;
+    } else if (mode === 'imp_asc') {
+        c = ib - ia;
+        if (c === 0) c = tb - ta;
+    } else if (mode === 'rev_pending') {
+        const o = { pending: 0, approved: 1, rejected: 2 };
+        c = (o[ra] ?? 9) - (o[rb] ?? 9);
+        if (c === 0) c = tb - ta;
+    } else if (mode === 'rev_approved') {
+        const o = { approved: 0, pending: 1, rejected: 2 };
+        c = (o[ra] ?? 9) - (o[rb] ?? 9);
+        if (c === 0) c = tb - ta;
+    } else if (mode === 'rev_rejected') {
+        const o = { rejected: 0, pending: 1, approved: 2 };
+        c = (o[ra] ?? 9) - (o[rb] ?? 9);
+        if (c === 0) c = tb - ta;
+    } else {
+        c = tb - ta;
+    }
+    return c;
+}
+
+function getProgtodoSortMode() {
+    const sel = document.getElementById('progtodo-sort');
+    if (sel && sel.value) return sel.value;
+    try {
+        return sessionStorage.getItem(PROGTODO_SORT_STORAGE_KEY) || 'date_desc';
+    } catch {
+        return 'date_desc';
+    }
+}
+
+function sortProgtodoItems(items, mode) {
+    const copy = items.slice();
+    copy.sort((a, b) => progtodoCompare(a, b, mode));
+    return copy;
+}
+
+function updateProgtodoToolbarCounts(items) {
+    const el = document.getElementById('programmer-todos-counts');
+    if (!el) return;
+    if (!items) {
+        el.textContent = 'Pending approval: — · Total: —';
+        return;
+    }
+    const pending = items.filter((it) => String(it.review_status || 'pending').toLowerCase() === 'pending').length;
+    el.textContent = `Pending approval: ${pending} · Total: ${items.length}`;
+}
+
+function updateProgtodoAddButtonVisibility() {
+    const btn = document.getElementById('progtodo-add-btn');
+    if (btn) btn.classList.toggle('hidden', !lastStaffAdmin);
+}
+
+function onProgtodoSortChange() {
+    const sel = document.getElementById('progtodo-sort');
+    if (sel) {
+        try {
+            sessionStorage.setItem(PROGTODO_SORT_STORAGE_KEY, sel.value);
+        } catch (e) {
+            /* ignore */
+        }
+    }
+    if (lastProgtodoItems) {
+        const sorted = sortProgtodoItems(lastProgtodoItems, getProgtodoSortMode());
+        renderProgrammerTodoRows(sorted, lastProgtodoStaff);
+    }
+}
+
+function renderProgrammerTodoRows(items, staff) {
+    const tbody = document.getElementById('programmer-todos-list');
+    if (!tbody) return;
+    if (items.length === 0) {
+        const c = staff ? 6 : 5;
+        tbody.innerHTML = `<tr><td colspan="${c}" style="padding:1rem;color:var(--text-muted);">No entries yet.</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = items.map((it) => {
+        const imp = String(it.importance || 'medium').toLowerCase();
+        const rev = String(it.review_status || 'pending').toLowerCase();
+        const isRejected = rev === 'rejected';
+        const isPending = rev === 'pending';
+        const strike = isRejected ? ' progtodo-row--disabled' : '';
+        const bodyClass = isRejected ? 'progtodo-strike' : '';
+        let info = `<span class="progtodo-badge progtodo-badge--imp progtodo-badge--imp-${imp}">${financeEscapeHtml(imp)}</span> <span class="progtodo-badge progtodo-badge--rev progtodo-badge--rev-${rev}">${financeEscapeHtml(rev)}</span>`;
+        if (staff && it.admin_only) info += ' <span class="progtodo-badge progtodo-badge--priv">staff-only</span>';
+        const id = String(it.id || '');
+        const safeId = id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        let actions = '';
+        if (staff) {
+            const reviewActions = isPending
+                ? `<button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','approved')">Approve</button>
+                    <button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','rejected')">Reject</button>`
+                : `<span class="mono" style="font-size:0.68rem;color:var(--text-muted);white-space:nowrap" title="Review is final">${rev === 'approved' ? 'Locked · approved' : 'Locked · rejected'}</span>`;
+            actions = `<td style="text-align:right;white-space:normal;max-width:14rem;">
+                <div style="display:flex;flex-wrap:wrap;gap:0.35rem;justify-content:flex-end;align-items:center;">
+                    <select class="btn btn-ghost" style="padding:0.2rem 0.35rem;font-size:0.7rem;max-width:5rem" data-progtodo-id="${financeEscapeHtml(id)}" onchange="onProgrammerTodoImportance(this)">
+                        <option value="low" ${imp === 'low' ? 'selected' : ''}>low</option>
+                        <option value="medium" ${imp === 'medium' ? 'selected' : ''}>med</option>
+                        <option value="high" ${imp === 'high' ? 'selected' : ''}>high</option>
+                    </select>
+                    ${reviewActions}
+                    <button type="button" class="btn btn-ghost row-action--danger" style="padding:0.2rem" title="Delete" onclick="deleteProgrammerTodo('${safeId}')">${rowIcons.trash}</button>
+                </div>
+            </td>`;
+        }
+        return `<tr class="${strike}">
+            <td class="mono">${financeEscapeHtml(id)}</td>
+            <td class="${bodyClass}">${financeEscapeHtml(it.body || '')}</td>
+            <td class="mono progtodo-col-nick">${financeEscapeHtml(it.author_nick || '')}</td>
+            <td class="mono" style="font-size:0.8rem;">${financeEscapeHtml(formatTodoDate(it.created_at))}</td>
+            <td>${info}</td>
+            ${actions}
+        </tr>`;
+    }).join('');
+}
+
+function showAddProgrammerTodo() {
+    if (!lastStaffAdmin) return;
+    ['login-modal', 'adduser-modal', 'force-password-modal', 'upload-detail-modal'].forEach((id) => {
+        document.getElementById(id)?.classList.add('hidden');
+    });
+    const errEl = document.getElementById('progtodo-add-error');
+    if (errEl) {
+        errEl.classList.add('hidden');
+        errEl.textContent = '';
+    }
+    document.getElementById('modal-overlay')?.classList.remove('hidden');
+    document.getElementById('progtodo-add-modal')?.classList.remove('hidden');
+}
+
+function hideAddProgrammerTodo() {
+    document.getElementById('progtodo-add-modal')?.classList.add('hidden');
+    document.getElementById('modal-overlay')?.classList.add('hidden');
+}
+
+async function submitAddProgrammerTodo() {
+    const errEl = document.getElementById('progtodo-add-error');
+    const bodyEl = document.getElementById('progtodo-add-body');
+    const text = (bodyEl && bodyEl.value ? String(bodyEl.value) : '').trim();
+    if (errEl) {
+        errEl.classList.add('hidden');
+        errEl.textContent = '';
+    }
+    if (!text) {
+        if (errEl) {
+            errEl.textContent = 'Summary is required.';
+            errEl.classList.remove('hidden');
+        }
+        return;
+    }
+    const adminOnly = !!document.getElementById('progtodo-add-admin-only')?.checked;
+    const importance = document.getElementById('progtodo-add-importance')?.value || 'medium';
+    try {
+        const res = await fetch('/api/programmer-todos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ body: text, admin_only: adminOnly, importance }),
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            throw new Error(t || 'Failed to add');
+        }
+        if (bodyEl) bodyEl.value = '';
+        const cb = document.getElementById('progtodo-add-admin-only');
+        if (cb) cb.checked = false;
+        const impsel = document.getElementById('progtodo-add-importance');
+        if (impsel) impsel.value = 'medium';
+        hideAddProgrammerTodo();
+        await fetchProgrammerTodos();
+    } catch (e) {
+        if (errEl) {
+            errEl.textContent = e && e.message ? String(e.message) : 'Failed to add';
+            errEl.classList.remove('hidden');
+        }
+    }
+}
+
 async function fetchProgrammerTodos() {
     const tbody = document.getElementById('programmer-todos-list');
     const errEl = document.getElementById('programmer-todos-error');
@@ -2988,56 +3248,22 @@ async function fetchProgrammerTodos() {
         const data = await res.json();
         const items = Array.isArray(data.items) ? data.items : [];
         const staff = data.staff === true;
+        lastProgtodoItems = items;
+        lastProgtodoStaff = staff;
         if (errEl) {
             errEl.classList.add('hidden');
             errEl.textContent = '';
         }
         const th = document.getElementById('programmer-todos-actions-th');
         if (th) th.classList.toggle('hidden', !staff);
-        if (items.length === 0) {
-            const c = staff ? 6 : 5;
-            tbody.innerHTML = `<tr><td colspan="${c}" style="padding:1rem;color:var(--text-muted);">No entries yet.</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = items.map((it) => {
-            const imp = String(it.importance || 'medium').toLowerCase();
-            const rev = String(it.review_status || 'pending').toLowerCase();
-            const isRejected = rev === 'rejected';
-            const isPending = rev === 'pending';
-            const strike = isRejected ? ' progtodo-row--disabled' : '';
-            const bodyClass = isRejected ? 'progtodo-strike' : '';
-            let info = `<span class="progtodo-badge progtodo-badge--imp progtodo-badge--imp-${imp}">${financeEscapeHtml(imp)}</span> <span class="progtodo-badge progtodo-badge--rev progtodo-badge--rev-${rev}">${financeEscapeHtml(rev)}</span>`;
-            if (staff && it.admin_only) info += ' <span class="progtodo-badge progtodo-badge--priv">staff-only</span>';
-            const id = String(it.id || '');
-            const safeId = id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-            let actions = '';
-            if (staff) {
-                const reviewActions = isPending
-                    ? `<button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','approved')">Approve</button>
-                        <button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','rejected')">Reject</button>`
-                    : `<span class="mono" style="font-size:0.68rem;color:var(--text-muted);white-space:nowrap" title="Review is final">${rev === 'approved' ? 'Locked · approved' : 'Locked · rejected'}</span>`;
-                actions = `<td style="text-align:right;white-space:normal;max-width:14rem;">
-                    <div style="display:flex;flex-wrap:wrap;gap:0.35rem;justify-content:flex-end;align-items:center;">
-                        <select class="btn btn-ghost" style="padding:0.2rem 0.35rem;font-size:0.7rem;max-width:5rem" data-progtodo-id="${financeEscapeHtml(id)}" onchange="onProgrammerTodoImportance(this)">
-                            <option value="low" ${imp === 'low' ? 'selected' : ''}>low</option>
-                            <option value="medium" ${imp === 'medium' ? 'selected' : ''}>med</option>
-                            <option value="high" ${imp === 'high' ? 'selected' : ''}>high</option>
-                        </select>
-                        ${reviewActions}
-                        <button type="button" class="btn btn-ghost row-action--danger" style="padding:0.2rem" title="Delete" onclick="deleteProgrammerTodo('${safeId}')">${rowIcons.trash}</button>
-                    </div>
-                </td>`;
-            }
-            return `<tr class="${strike}">
-                <td class="mono">${financeEscapeHtml(id)}</td>
-                <td class="${bodyClass}">${financeEscapeHtml(it.body || '')}</td>
-                <td class="mono progtodo-col-nick">${financeEscapeHtml(it.author_nick || '')}</td>
-                <td class="mono" style="font-size:0.8rem;">${financeEscapeHtml(formatTodoDate(it.created_at))}</td>
-                <td>${info}</td>
-                ${actions}
-            </tr>`;
-        }).join('');
+        updateProgtodoToolbarCounts(items);
+        updateProgtodoAddButtonVisibility();
+        const mode = getProgtodoSortMode();
+        const sorted = sortProgtodoItems(items, mode);
+        renderProgrammerTodoRows(sorted, staff);
     } catch (e) {
+        lastProgtodoItems = null;
+        updateProgtodoToolbarCounts(null);
         if (errEl) {
             const detail = e && e.message ? String(e.message) : 'Could not load.';
             errEl.textContent = `Could not load programmer TODOs. ${detail}`;
@@ -3100,6 +3326,67 @@ window.fetchProgrammerTodos = fetchProgrammerTodos;
 window.onProgrammerTodoImportance = onProgrammerTodoImportance;
 window.onProgrammerTodoReview = onProgrammerTodoReview;
 window.deleteProgrammerTodo = deleteProgrammerTodo;
+window.showAddProgrammerTodo = showAddProgrammerTodo;
+window.hideAddProgrammerTodo = hideAddProgrammerTodo;
+window.submitAddProgrammerTodo = submitAddProgrammerTodo;
+
+async function fetchWeatherSettings() {
+    if (!lastIsAdmin) return;
+    try {
+        const res = await fetch('/api/weather/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const el = document.getElementById('weather-refresh-minutes');
+        if (el && data.weather_refresh_minutes != null) {
+            el.value = data.weather_refresh_minutes;
+        }
+    } catch (e) {
+        console.error('weather settings', e);
+    }
+}
+
+async function saveWeatherSettings() {
+    const status = document.getElementById('weather-settings-status');
+    if (status) {
+        status.textContent = 'Saving...';
+        status.style.color = 'var(--text-muted)';
+    }
+    const el = document.getElementById('weather-refresh-minutes');
+    const v = el ? parseInt(String(el.value), 10) : NaN;
+    if (!Number.isFinite(v) || v < 1 || v > 10080) {
+        if (status) {
+            status.textContent = 'Use 1–10080 minutes.';
+            status.style.color = 'var(--error)';
+        }
+        return;
+    }
+    try {
+        const res = await fetch('/api/weather/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weather_refresh_minutes: v })
+        });
+        if (res.ok) {
+            if (status) {
+                status.textContent = 'Saved.';
+                status.style.color = 'var(--success)';
+                setTimeout(() => { status.textContent = ''; }, 3000);
+            }
+            await fetchStatus();
+        } else {
+            const t = await res.text();
+            if (status) {
+                status.textContent = t || 'Save failed';
+                status.style.color = 'var(--error)';
+            }
+        }
+    } catch (e) {
+        if (status) {
+            status.textContent = 'Error: ' + e.message;
+            status.style.color = 'var(--error)';
+        }
+    }
+}
 
 // RSS SETTINGS
 async function toggleRSSSettings() {
@@ -3201,3 +3488,4 @@ async function saveRSSSettings() {
 
 window.toggleRSSSettings = toggleRSSSettings;
 window.saveRSSSettings = saveRSSSettings;
+window.saveWeatherSettings = saveWeatherSettings;

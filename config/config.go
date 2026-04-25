@@ -111,8 +111,10 @@ type WebConfig struct {
 	Host                string     `yaml:"host"`
 	BaseURL             string     `yaml:"base_url"`
 	// ServerLocation is a place name for the dashboard weather panel (Open-Meteo geocoding), e.g. "Barcelona, Spain".
-	ServerLocation    string     `yaml:"server_location,omitempty"`
-	TrustForwardedFor   bool       `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
+	ServerLocation string `yaml:"server_location,omitempty"`
+	// WeatherRefreshMinutes is how often the Command Center refetches /api/weather and server-side cache TTL. Default 30.
+	WeatherRefreshMinutes int  `yaml:"weather_refresh_minutes,omitempty"`
+	TrustForwardedFor     bool `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
 	Auth                AuthConfig `yaml:"auth,omitempty"`
 }
 
@@ -208,6 +210,9 @@ func applyRSSDefaults(cfg *Config) {
 func applyWebDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Web.ServerLocation) == "" {
 		cfg.Web.ServerLocation = "Barcelona, Spain"
+	}
+	if cfg.Web.WeatherRefreshMinutes <= 0 {
+		cfg.Web.WeatherRefreshMinutes = 30
 	}
 }
 

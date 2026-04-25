@@ -99,7 +99,8 @@ func newID() (string, error) {
 }
 
 // Add creates a new entry; returns the public id (8 hex chars, same style as upload ticket ids).
-func (d *Database) Add(body, authorNick string, adminOnly bool) (string, error) {
+// importance: empty or unknown defaults to "medium"; must be low, medium, or high.
+func (d *Database) Add(body, authorNick string, adminOnly bool, importance string) (string, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return "", fmt.Errorf("empty body")
@@ -107,6 +108,13 @@ func (d *Database) Add(body, authorNick string, adminOnly bool) (string, error) 
 	authorNick = strings.TrimSpace(authorNick)
 	if authorNick == "" {
 		return "", fmt.Errorf("empty author")
+	}
+	imp := strings.ToLower(strings.TrimSpace(importance))
+	if imp == "" {
+		imp = "medium"
+	}
+	if imp != "low" && imp != "medium" && imp != "high" {
+		return "", fmt.Errorf("invalid importance")
 	}
 	id, err := newID()
 	if err != nil {
@@ -118,8 +126,8 @@ func (d *Database) Add(body, authorNick string, adminOnly bool) (string, error) 
 	}
 	_, err = d.db.Exec(`
 		INSERT INTO programmer_todos (id, body, author_nick, admin_only, importance, review_status, disabled)
-		VALUES (?, ?, ?, ?, 'medium', 'pending', 0)`,
-		id, body, authorNick, ao)
+		VALUES (?, ?, ?, ?, ?, 'pending', 0)`,
+		id, body, authorNick, ao, imp)
 	if err != nil {
 		return "", err
 	}

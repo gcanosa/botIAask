@@ -318,6 +318,23 @@ body {
     align-items: center;
 }
 
+#timeframe-selector .btn-ghost {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-radius: 8px;
+    opacity: 0.85;
+}
+
+#timeframe-selector .btn-ghost.active {
+    opacity: 1;
+    color: var(--primary);
+    border-color: var(--range-active-border);
+    background: var(--range-active-bg);
+}
+
 .nav-link.active {
     background: var(--primary-glow);
     color: var(--primary);
@@ -741,6 +758,15 @@ html[data-theme="mono"] .news-source-badge--txt {
     .data-table-wrap .data-table:not(.data-table--news) td {
         padding: 0.5rem 0.5rem;
         font-size: 0.8rem;
+    }
+
+    .data-table-wrap .data-table.data-table--progtodo th,
+    .data-table-wrap .data-table.data-table--progtodo td {
+        padding: 0.55rem 0.7rem;
+    }
+    .data-table-wrap .data-table.data-table--progtodo td + td,
+    .data-table-wrap .data-table.data-table--progtodo th + th {
+        padding-left: 0.85rem;
     }
 }
 
@@ -1708,6 +1734,18 @@ input.btn-ghost:focus {
 }
 
 /* Programmer TODOs (panel-todos) */
+.data-table-wrap .data-table--progtodo th.progtodo-th,
+.data-table-wrap .data-table--progtodo td {
+    padding: 0.75rem 1.25rem;
+}
+.data-table-wrap .data-table--progtodo td + td,
+.data-table-wrap .data-table--progtodo th + th {
+    padding-left: 1.5rem;
+}
+.progtodo-toolbar .progtodo-counts {
+    font-variant-numeric: tabular-nums;
+}
+
 .progtodo-strike,
 .progtodo-row--disabled .progtodo-strike {
     text-decoration: line-through;

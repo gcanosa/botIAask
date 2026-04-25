@@ -1425,7 +1425,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				return
 			}
 			// Public backlog: visible to all web users (non–dashboard-staff see non–staff-only rows).
-			id, err := b.progtodoDB.Add(body, sender, false)
+			id, err := b.progtodoDB.Add(body, sender, false, "")
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
 				return
@@ -1441,7 +1441,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo private <text>  (dashboard staff only; alias: %stodo staff <text>)", b.prefix, b.prefix))
 				return
 			}
-			id, err := b.progtodoDB.Add(body, sender, true)
+			id, err := b.progtodoDB.Add(body, sender, true, "")
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
 				return
