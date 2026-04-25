@@ -809,8 +809,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -1033,6 +1033,12 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		sessionUptimeStr := formatDuration(sessionUptime)
 
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Bot uptime: App=%s, Session=%s", appUptimeStr, sessionUptimeStr)))
+		return
+	}
+
+	// Handle !time command (world clock, one city per IANA time zone)
+	if strings.TrimSpace(message) == b.prefix+"time" {
+		b.handleTimeCommand(target)
 		return
 	}
 
