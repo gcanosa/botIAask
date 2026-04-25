@@ -809,8 +809,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -1069,6 +1069,17 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	// Handle !crypto command
 	if strings.HasPrefix(message, b.prefix+"crypto") {
 		b.handleCryptoCommand(target)
+		return
+	}
+
+	// Handle !flight <IATA> [YYYY-MM-DD] (AirLabs v9; api_key; optional date reserved for future use)
+	if strings.HasPrefix(message, b.prefix+"flight") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"flight"))
+		if rest == "" {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100", b.prefix, b.prefix))
+			return
+		}
+		b.handleFlightCommand(target, sender, rest)
 		return
 	}
 
