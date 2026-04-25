@@ -35,6 +35,15 @@ func TestFeedSourceKeyFromFeed_CoversArs(t *testing.T) {
 	}
 }
 
+func TestFeedLabelFallback(t *testing.T) {
+	if got := FeedLabelFallback("https://news.ycombinator.com/rss"); got != "Hacker News" {
+		t.Errorf("HN fallback: got %q", got)
+	}
+	if got := FeedLabelFallback("https://feeds.arstechnica.com/arstechnica/index"); got != "Ars Technica" {
+		t.Errorf("Ars fallback: got %q", got)
+	}
+}
+
 func TestFeedSourceKeyFromFeed_StillHackerNews(t *testing.T) {
 	if got, want := FeedSourceKeyFromFeed("https://news.ycombinator.com/rss", &gofeed.Feed{}), "hacker-news"; got != want {
 		t.Errorf("HN: got %q want %q", got, want)

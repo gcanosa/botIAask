@@ -2,15 +2,16 @@ package rss
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"botIAask/config"
 	"github.com/mmcdole/gofeed"
-	"io"
-	"net/http"
-	"net/url"
 )
 
 type BotInterface interface {
@@ -18,15 +19,33 @@ type BotInterface interface {
 	IsConnected() bool
 }
 
+// FeedStatus is the last fetch result for a configured feed URL (used by the admin API).
+type FeedStatus struct {
+	URL   string     `json:"url"`
+	OK    bool       `json:"ok"`
+	Error string     `json:"error,omitempty"`
+	Label string     `json:"label"`
+	At    *time.Time `json:"at,omitempty"`
+}
+
+type lastFeedFetch struct {
+	OK    bool
+	Err   string
+	Label string
+	At    time.Time
+}
+
 type Fetcher struct {
-	cfg       *config.Config
-	bot       BotInterface
-	db        *Database
-	mu        sync.Mutex
-	enabled   bool
-	stopChan  chan struct{}
-	lastFetch time.Time
-	lfMu      sync.RWMutex
+	cfg        *config.Config
+	bot        BotInterface
+	db         *Database
+	mu         sync.Mutex
+	enabled    bool
+	stopChan   chan struct{}
+	lastFetch  time.Time
+	lfMu       sync.RWMutex
+	feedLast   map[string]lastFeedFetch
+	feedLastMu sync.RWMutex
 }
 
 func NewFetcher(cfg *config.Config, bot BotInterface, db *Database) *Fetcher {
@@ -36,6 +55,7 @@ func NewFetcher(cfg *config.Config, bot BotInterface, db *Database) *Fetcher {
 		db:       db,
 		enabled:  cfg.RSS.Enabled,
 		stopChan: make(chan struct{}),
+		feedLast: make(map[string]lastFeedFetch),
 	}
 }
 
@@ -130,6 +150,40 @@ func (f *Fetcher) GetDB() *Database {
 	return f.db
 }
 
+// FeedStatuses returns one row per configured feed URL, in order, for the admin UI.
+func (f *Fetcher) FeedStatuses() []FeedStatus {
+	urls := f.cfg.RSS.FeedURLs
+	f.feedLastMu.RLock()
+	defer f.feedLastMu.RUnlock()
+	out := make([]FeedStatus, 0, len(urls))
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		if st, ok := f.feedLast[u]; ok {
+			t := st.At
+			out = append(out, FeedStatus{URL: u, OK: st.OK, Error: st.Err, Label: st.Label, At: &t})
+			continue
+		}
+		out = append(out, FeedStatus{
+			URL:   u,
+			OK:    false,
+			Error: "not yet fetched",
+			Label: FeedLabelFallback(u),
+		})
+	}
+	return out
+}
+
+func feedDisplayLabel(feedURL string, feed *gofeed.Feed) string {
+	if feed != nil {
+		if t := strings.TrimSpace(feed.Title); t != "" {
+			return t
+		}
+	}
+	return FeedLabelFallback(feedURL)
+}
+
 func (f *Fetcher) Fetch() {
 	if !f.bot.IsConnected() {
 		return
@@ -141,13 +195,21 @@ func (f *Fetcher) Fetch() {
 
 	fp := gofeed.NewParser()
 	var newEntries []NewsEntry
+	perFeed := make(map[string]lastFeedFetch, len(f.cfg.RSS.FeedURLs))
 
 	for _, feedURL := range f.cfg.RSS.FeedURLs {
-		feed, err := fp.ParseURL(feedURL)
-		if err != nil {
-			log.Printf("[RSS] Error fetching feed %s: %v", feedURL, err)
+		if feedURL == "" {
 			continue
 		}
+		feed, err := fp.ParseURL(feedURL)
+		at := time.Now()
+		if err != nil {
+			log.Printf("[RSS] Error fetching feed %s: %v", feedURL, err)
+			perFeed[feedURL] = lastFeedFetch{OK: false, Err: err.Error(), Label: FeedLabelFallback(feedURL), At: at}
+			continue
+		}
+
+		perFeed[feedURL] = lastFeedFetch{OK: true, Label: feedDisplayLabel(feedURL, feed), At: at}
 
 		src := FeedSourceKeyFromFeed(feedURL, feed)
 		srcIcon := SourceIconForFeedURL(feed, feedURL)
@@ -166,6 +228,10 @@ func (f *Fetcher) Fetch() {
 			}
 		}
 	}
+
+	f.feedLastMu.Lock()
+	f.feedLast = perFeed
+	f.feedLastMu.Unlock()
 
 	// Send new entries to IRC with anti-spam delay
 	// Sort by PubDate to send oldest first among the new ones

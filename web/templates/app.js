@@ -1970,6 +1970,8 @@ async function forceFetchNews() {
             btn.disabled = false;
             btn.textContent = 'Fetch Now';
             fetchNews(1);
+            const rssCard = document.getElementById('rss-admin-settings');
+            if (rssCard && !rssCard.classList.contains('hidden')) fetchRSSSettings();
         }, 2000);
     } catch (e) {
         btn.disabled = false;
@@ -2684,6 +2686,38 @@ async function toggleRSSSettings() {
     }
 }
 
+function rssStatusAttrEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;');
+}
+
+function rssStatusBodyEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;');
+}
+
+function renderRssFeedStatusList(rows) {
+    const ul = document.getElementById('rss-feed-status-list');
+    if (!ul) return;
+    if (!Array.isArray(rows) || rows.length === 0) {
+        ul.innerHTML = '<li class="rss-feed-status-empty" style="color: var(--text-muted);">No feeds configured.</li>';
+        return;
+    }
+    ul.innerHTML = rows.map((row) => {
+        const ok = !!row.ok;
+        const title = ok ? 'success' : (row.error || 'error');
+        const ledClass = ok ? 'rss-feed-led--ok' : 'rss-feed-led--err';
+        const name = row.label || row.url || '';
+        return `<li>
+            <span class="rss-feed-led ${ledClass}" title="${rssStatusAttrEsc(title)}" role="img" aria-label="${rssStatusAttrEsc(title)}"></span>
+            <span class="rss-feed-status-name">${rssStatusBodyEsc(name)}</span>
+        </li>`;
+    }).join('');
+}
+
 async function fetchRSSSettings() {
     try {
         const res = await fetch('/api/rss/settings');
@@ -2694,6 +2728,7 @@ async function fetchRSSSettings() {
         document.getElementById('rss-urls').value = (data.feed_urls || []).join('\n');
         const announce = document.getElementById('rss-announce-irc');
         if (announce) announce.checked = !!data.announce_to_irc;
+        renderRssFeedStatusList(data.feed_status);
     } catch (e) { console.error("Failed to fetch RSS settings", e); }
 }
 
@@ -2725,6 +2760,7 @@ async function saveRSSSettings() {
             status.style.color = 'var(--success)';
             setTimeout(() => { status.textContent = ''; }, 3000);
             fetchNews(1); // Refresh list in case retention reduced
+            fetchRSSSettings();
         } else {
             status.textContent = '✕ Save failed';
             status.style.color = 'var(--error)';

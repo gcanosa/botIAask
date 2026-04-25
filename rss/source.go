@@ -102,6 +102,27 @@ func sourceKeyFromSubscriptionURL(raw string) string {
 	return normalizeSourceKey(label)
 }
 
+// FeedLabelFallback is a display name for a feed when the feed document could not be parsed.
+func FeedLabelFallback(feedURL string) string {
+	if k := FeedSourceKey(feedURL); k == "hacker-news" {
+		return "Hacker News"
+	}
+	d := RegistrableDomainForFeedURL(feedURL)
+	if d == "arstechnica.com" {
+		return "Ars Technica"
+	}
+	if d != "" {
+		part := d
+		if i := strings.IndexByte(part, '.'); i > 0 {
+			part = part[:i]
+		}
+		if len(part) > 0 {
+			return strings.ToUpper(part[:1]) + part[1:]
+		}
+	}
+	return feedURL
+}
+
 func normalizeSourceKey(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
 	if s == "" {
