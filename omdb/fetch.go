@@ -53,6 +53,10 @@ func FetchByTitle(ctx context.Context, client *http.Client, apiKey, baseURL, tit
 	if err != nil {
 		return nil, fmt.Errorf("omdb: base url: %w", err)
 	}
+	host := strings.ToLower(strings.TrimSpace(u.Host))
+	if u.Scheme == "http" && (host == "www.omdbapi.com" || host == "omdbapi.com") {
+		u.Scheme = "https"
+	}
 	q := u.Query()
 	q.Set("apikey", key)
 	q.Set("t", t)
@@ -64,6 +68,8 @@ func FetchByTitle(ctx context.Context, client *http.Client, apiKey, baseURL, tit
 		return nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	// OMDb sits behind Cloudflare; stale cached 401/invalid-key responses are a known pain point.
+	req.Header.Set("Cache-Control", "no-cache")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -74,20 +80,42 @@ func FetchByTitle(ctx context.Context, client *http.Client, apiKey, baseURL, tit
 	if err != nil {
 		return nil, err
 	}
+
+	var p apiPayload
+	jsonErr := json.Unmarshal(body, &p)
+
+	// OMDb often returns HTTP 401 with JSON {Response:"False", Error:"Invalid API key!"} — surface Error instead of "http 401".
+	if jsonErr == nil && strings.EqualFold(strings.TrimSpace(p.Response), "False") {
+		msg := strings.TrimSpace(p.Error)
+		if msg == "" {
+			if resp.StatusCode != http.StatusOK {
+				msg = fmt.Sprintf("request failed (http %d)", resp.StatusCode)
+			} else {
+				msg = "not found"
+			}
+		}
+		if resp.StatusCode == http.StatusUnauthorized && strings.Contains(strings.ToLower(msg), "invalid api key") {
+			msg += " — activate the key from your OMDb email, or check omdb.api_key / OMDB_API_KEY"
+		}
+		return &Result{OK: false, Error: msg}, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
+		if jsonErr == nil && strings.TrimSpace(p.Error) != "" {
+			return nil, fmt.Errorf("omdb: %s (http %d)", strings.TrimSpace(p.Error), resp.StatusCode)
+		}
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 120 {
+			snippet = snippet[:120] + "…"
+		}
+		if snippet != "" {
+			return nil, fmt.Errorf("omdb: http %d: %s", resp.StatusCode, snippet)
+		}
 		return nil, fmt.Errorf("omdb: http %d", resp.StatusCode)
 	}
 
-	var p apiPayload
-	if err := json.Unmarshal(body, &p); err != nil {
-		return nil, fmt.Errorf("omdb: json: %w", err)
-	}
-	if strings.EqualFold(p.Response, "False") {
-		msg := strings.TrimSpace(p.Error)
-		if msg == "" {
-			msg = "not found"
-		}
-		return &Result{OK: false, Error: msg}, nil
+	if jsonErr != nil {
+		return nil, fmt.Errorf("omdb: json: %w", jsonErr)
 	}
 
 	return &Result{
