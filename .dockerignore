@@ -1,0 +1,26 @@
+# Git and IDE
+.git
+.github
+.cursor
+.idea
+.vscode
+
+# Data and local state (mount at runtime)
+data/
+logs/
+pastes/
+upload_files/
+# Note: do not ignore uploads/ — that is the Go package; user files go to upload_files/ and pastes/
+scratch/
+
+# Secrets: real config; image ships only template in-repo builds
+config/config.yaml
+
+# Env
+.env
+.env.*
+
+# Tooling
+.claude/
+*.md
+tags
