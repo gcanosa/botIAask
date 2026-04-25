@@ -190,15 +190,16 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">System Activity</h3>
                         <div id="timeframe-selector" class="timeframe-selector" role="group" aria-label="Activity chart range">
-                            <button type="button" onclick="changeTimeframe('1h')" data-time="1h" class="btn btn-ghost active" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1H</button>
-                            <button type="button" onclick="changeTimeframe('6h')" data-time="6h" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">6H</button>
-                            <button type="button" onclick="changeTimeframe('1d')" data-time="1d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1D</button>
-                            <button type="button" onclick="changeTimeframe('5d')" data-time="5d" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">5D</button>
-                            <button type="button" onclick="changeTimeframe('1m')" data-time="1m" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1M</button>
-                            <button type="button" onclick="changeTimeframe('6m')" data-time="6m" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">6M</button>
-                            <button type="button" onclick="changeTimeframe('1y')" data-time="1y" class="btn btn-ghost" style="padding: 0.25rem 0.75rem; font-size: 0.7rem;">1Y</button>
+                            <button type="button" onclick="changeTimeframe('1h')" data-time="1h" class="btn btn-ghost active" aria-pressed="true">1H</button>
+                            <button type="button" onclick="changeTimeframe('6h')" data-time="6h" class="btn btn-ghost" aria-pressed="false">6H</button>
+                            <button type="button" onclick="changeTimeframe('1d')" data-time="1d" class="btn btn-ghost" aria-pressed="false">1D</button>
+                            <button type="button" onclick="changeTimeframe('5d')" data-time="5d" class="btn btn-ghost" aria-pressed="false">5D</button>
+                            <button type="button" onclick="changeTimeframe('1m')" data-time="1m" class="btn btn-ghost" aria-pressed="false">1M</button>
+                            <button type="button" onclick="changeTimeframe('6m')" data-time="6m" class="btn btn-ghost" aria-pressed="false">6M</button>
+                            <button type="button" onclick="changeTimeframe('1y')" data-time="1y" class="btn btn-ghost" aria-pressed="false">1Y</button>
                         </div>
                     </div>
+                    <p id="activity-chart-subtitle" class="crypto-chart-subtitle" aria-live="polite"></p>
                     <p id="activity-chart-error" class="hidden" style="color: #f87171; font-size: 0.8rem; margin: 0 0 0.5rem 0;" role="alert"></p>
                     <p id="activity-chart-empty" class="hidden" style="color: var(--text-muted, #94a3b8); font-size: 0.8rem; margin: 0 0 0.5rem 0;"></p>
                     <div style="height: 300px;">
@@ -385,16 +386,33 @@
                 </div>
                 <p id="programmer-todos-error" class="hidden" style="color: var(--error); font-size: 0.85rem; margin-bottom: 1rem;" role="alert"></p>
                 <div class="card">
+                    <div class="progtodo-toolbar" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--glass-border);">
+                        <p id="programmer-todos-counts" class="progtodo-counts" style="margin: 0; font-size: 0.875rem; color: var(--text-muted);">Pending approval: — · Total: —</p>
+                        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
+                            <label class="progtodo-sort-label" style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--text-muted);">Sort
+                                <select id="progtodo-sort" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem; cursor: pointer; max-width: 14rem;">
+                                    <option value="date_desc">Added (newest)</option>
+                                    <option value="date_asc">Added (oldest)</option>
+                                    <option value="imp_desc">Urgency (high → low)</option>
+                                    <option value="imp_asc">Urgency (low → high)</option>
+                                    <option value="rev_pending">Review (pending first)</option>
+                                    <option value="rev_approved">Review (approved first)</option>
+                                    <option value="rev_rejected">Review (rejected first)</option>
+                                </select>
+                            </label>
+                            <button type="button" id="progtodo-add-btn" class="btn btn-primary hidden" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="showAddProgrammerTodo()">Add TODO</button>
+                        </div>
+                    </div>
                     <div class="data-table-wrap" style="overflow-x: auto;">
-                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="data-table">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;" class="data-table data-table--progtodo">
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">ID</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">SUMMARY</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;" class="progtodo-col-nick">NICK</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">ADDED</th>
-                                    <th style="text-align: left; padding: 0.75rem 1rem;">INFO</th>
-                                    <th id="programmer-todos-actions-th" style="text-align: right; padding: 0.75rem 1rem;" class="hidden">ACTIONS</th>
+                                    <th class="progtodo-th" style="text-align: left;">ID</th>
+                                    <th class="progtodo-th" style="text-align: left;">SUMMARY</th>
+                                    <th class="progtodo-th progtodo-col-nick" style="text-align: left;">NICK</th>
+                                    <th class="progtodo-th" style="text-align: left;">ADDED</th>
+                                    <th class="progtodo-th" style="text-align: left;">INFO</th>
+                                    <th id="programmer-todos-actions-th" class="progtodo-th hidden" style="text-align: right;">ACTIONS</th>
                                 </tr>
                             </thead>
                             <tbody id="programmer-todos-list"></tbody>
@@ -621,6 +639,18 @@
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Re-read <span class="mono">config/config.yaml</span> into the running process (IRC connection stays up). Logged-in IRC admins receive a NOTICE.</p>
                     <button type="button" onclick="rehashConfigFromDisk()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Rehash from disk</button>
                 </div>
+                <div class="card" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">Command Center weather</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">How often the dashboard refetches the server location forecast (and how long the server caches <span class="mono">/api/weather</span>). Stored in <span class="mono">config/config.yaml</span> as <span class="mono">web.weather_refresh_minutes</span> (1–10080 minutes).</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Refresh interval (minutes)</label>
+                            <input type="number" id="weather-refresh-minutes" class="btn btn-ghost" style="min-width: 8rem; text-align: left; cursor: text; margin: 0;" min="1" max="10080" step="1" aria-label="Weather refresh interval in minutes">
+                        </div>
+                        <button type="button" onclick="saveWeatherSettings()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Save</button>
+                    </div>
+                    <p id="weather-settings-status" class="mono" style="font-size: 0.7rem; margin: 0; color: var(--text-muted);"></p>
+                </div>
                 <div id="irc-config-admins-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">IRC admin hostmasks</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span> under <span class="mono">admin.admins</span>. Changes are written to disk and applied to the running bot (no full rehash NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
@@ -754,6 +784,33 @@
             <div id="add-error" style="color: var(--error); font-size: 0.75rem; margin-bottom: 1rem;" class="hidden"></div>
             <button onclick="addUser()" class="btn btn-primary w-full" style="justify-content: center; margin-bottom: 0.5rem;">Create User</button>
             <button onclick="hideAddUser()" class="btn btn-ghost w-full" style="justify-content: center;">Cancel</button>
+        </div>
+
+        <!-- Add Programmer TODO (staff) -->
+        <div id="progtodo-add-modal" class="card hidden animate-fade" style="width: 100%; max-width: 440px; padding: 2.5rem;">
+            <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Add TODO</h2>
+            <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;">Creates a backlog entry attributed to your dashboard account.</p>
+            <div style="margin-bottom: 1rem;">
+                <label class="card-title">Summary</label>
+                <textarea id="progtodo-add-body" class="btn btn-ghost" style="width: 100%; min-height: 5rem; text-align: left; cursor: text; margin-top: 0.5rem; resize: vertical;" rows="4"></textarea>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label class="card-title">Urgency</label>
+                <select id="progtodo-add-importance" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: pointer; margin-top: 0.5rem;">
+                    <option value="low">low</option>
+                    <option value="medium" selected>medium</option>
+                    <option value="high">high</option>
+                </select>
+            </div>
+            <div style="margin-bottom: 1.25rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem; color: var(--text-muted);">
+                    <input type="checkbox" id="progtodo-add-admin-only">
+                    Staff-only (not shown on the public list)
+                </label>
+            </div>
+            <div id="progtodo-add-error" style="color: var(--error); font-size: 0.75rem; margin-bottom: 1rem;" class="hidden" role="alert"></div>
+            <button type="button" onclick="submitAddProgrammerTodo()" class="btn btn-primary w-full" style="justify-content: center; margin-bottom: 0.5rem;">Add entry</button>
+            <button type="button" onclick="hideAddProgrammerTodo()" class="btn btn-ghost w-full" style="justify-content: center;">Cancel</button>
         </div>
 
         <!-- Force Password Change Modal -->

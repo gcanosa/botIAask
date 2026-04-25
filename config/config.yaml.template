@@ -40,6 +40,8 @@ web:
     base_url: http://sekurnet.duckdns.org:3366
     # Dashboard "server location" weather (Open-Meteo geocoding + forecast)
     server_location: 'Barcelona, Spain'
+    # How often the web panel fetches /api/weather and server cache window (minutes)
+    weather_refresh_minutes: 30
     auth:
         enabled: false
         username: admin
@@ -56,7 +58,7 @@ rss:
         - '##yerba'
     # Max rows kept per feed source in the news DB (not a single global cap across all feeds).
     retention_count: 50
-    # Each feed URL is labeled in IRC and on the web from the site (e.g. arstechnica.com → [ARS]).
+    # Each feed URL is labeled in IRC and on the web from the site (e.g. arstechnica.com → [ARSTECHNICA]).
     feed_urls:
         - https://news.ycombinator.com/rss
     announce_to_irc: true

@@ -15,6 +15,7 @@ scratch/
 
 # Secrets: real config; image ships only template in-repo builds
 config/config.yaml
+scripts/
 
 # Env
 .env

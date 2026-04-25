@@ -186,6 +186,19 @@ func (a *AuthDatabase) ActiveSessionUsernames() ([]string, error) {
 	return names, rows.Err()
 }
 
+// GetUsernameByID returns the username for a web user id, or an error if not found.
+func (a *AuthDatabase) GetUsernameByID(userID int) (string, error) {
+	var name string
+	err := a.db.QueryRow("SELECT username FROM web_users WHERE id = ?", userID).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("user not found")
+		}
+		return "", err
+	}
+	return name, nil
+}
+
 // GetUserRole returns the web_users.role value for id (e.g. "admin"). Empty or unknown defaults to "admin".
 func (a *AuthDatabase) GetUserRole(userID int) (string, error) {
 	var role sql.NullString

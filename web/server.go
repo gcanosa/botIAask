@@ -75,8 +75,6 @@ type Server struct {
 	rehashFn func() error
 }
 
-const weatherCacheTTL = 10 * time.Minute
-
 type marketChartRawCacheEntry struct {
 	at  time.Time
 	pts [][2]float64
@@ -97,16 +95,29 @@ func (s *Server) getConfig() *config.Config {
 	return s.cfg
 }
 
-// SetConfig replaces the in-memory config after a live reload (shared pointer with IRC/RSS).
-func (s *Server) SetConfig(cfg *config.Config) {
-	s.cfgMu.Lock()
-	s.cfg = cfg
-	s.cfgMu.Unlock()
+// weatherCacheTTL returns how long successful /api/weather JSON stays cached; driven by config (minutes, min 1).
+func (s *Server) weatherCacheTTL() time.Duration {
+	m := s.getConfig().Web.WeatherRefreshMinutes
+	if m < 1 {
+		m = 1
+	}
+	return time.Duration(m) * time.Minute
+}
+
+func (s *Server) clearWeatherCache() {
 	s.weatherMu.Lock()
 	s.weatherCache = nil
 	s.weatherKey = ""
 	s.weatherAt = time.Time{}
 	s.weatherMu.Unlock()
+}
+
+// SetConfig replaces the in-memory config after a live reload (shared pointer with IRC/RSS).
+func (s *Server) SetConfig(cfg *config.Config) {
+	s.cfgMu.Lock()
+	s.cfg = cfg
+	s.cfgMu.Unlock()
+	s.clearWeatherCache()
 }
 
 // NewServer creates a new web server instance
@@ -188,6 +199,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/finance/forex-chart", s.handleForexChart)
 	mux.HandleFunc("/api/programmer-todos", s.handleProgrammerTodos)
 	mux.HandleFunc("/api/weather", s.handleWeather)
+	mux.HandleFunc("/api/weather/settings", s.handleWeatherSettings)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -237,26 +249,31 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if interval <= 0 {
 		interval = 60
 	}
+	weatherMin := s.getConfig().Web.WeatherRefreshMinutes
+	if weatherMin < 1 {
+		weatherMin = 1
+	}
 	status := map[string]interface{}{
-		"version":               meta.Version,
-		"uptime":                s.bot.GetUptime(),
-		"connected":             s.bot.IsConnected(),
-		"server":                s.getConfig().IRC.Server,
-		"nickname":              s.getConfig().IRC.Nickname,
-		"channels":              s.getConfig().IRC.Channels,
-		"ai_model":              s.getConfig().AI.Model,
-		"ai_status":             "Online",
-		"ai_requests":           s.bot.GetAIRequestCount(),
-		"rss_enabled":           s.rssFetcher.IsEnabled(),
-		"stats_enabled":         s.statsTracker.IsEnabled(),
-		"stats_interval_seconds": interval,
-		"start_time":            s.bot.GetStartTime().Format(time.RFC3339),
-		"is_admin":              sessionOK,
-		"staff_admin":           staffAdmin,
-		"needs_password_change": needsChange,
-		"irc_authenticated":     s.bot.IsAuthenticated(),
-		"pending_pastes":        pendingPastes,
-		"pending_uploads":       pendingUploads,
+		"version":                  meta.Version,
+		"uptime":                  s.bot.GetUptime(),
+		"connected":               s.bot.IsConnected(),
+		"server":                  s.getConfig().IRC.Server,
+		"nickname":                s.getConfig().IRC.Nickname,
+		"channels":                s.getConfig().IRC.Channels,
+		"ai_model":                s.getConfig().AI.Model,
+		"ai_status":               "Online",
+		"ai_requests":             s.bot.GetAIRequestCount(),
+		"rss_enabled":             s.rssFetcher.IsEnabled(),
+		"stats_enabled":           s.statsTracker.IsEnabled(),
+		"stats_interval_seconds":  interval,
+		"weather_refresh_minutes": weatherMin,
+		"start_time":              s.bot.GetStartTime().Format(time.RFC3339),
+		"is_admin":                sessionOK,
+		"staff_admin":             staffAdmin,
+		"needs_password_change":   needsChange,
+		"irc_authenticated":       s.bot.IsAuthenticated(),
+		"pending_pastes":          pendingPastes,
+		"pending_uploads":         pendingUploads,
 	}
 
 	if staffAdmin && s.statsTracker.IsEnabled() {
@@ -300,7 +317,7 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.weatherMu.Lock()
-	if len(s.weatherCache) > 0 && s.weatherKey == loc && time.Since(s.weatherAt) < weatherCacheTTL {
+	if len(s.weatherCache) > 0 && s.weatherKey == loc && time.Since(s.weatherAt) < s.weatherCacheTTL() {
 		b := append([]byte(nil), s.weatherCache...)
 		s.weatherMu.Unlock()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -342,6 +359,58 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(out)
+}
+
+const (
+	weatherSettingsMin = 1
+	weatherSettingsMax = 10080
+)
+
+func (s *Server) handleWeatherSettings(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		m := s.getConfig().Web.WeatherRefreshMinutes
+		if m < 1 {
+			m = 1
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int{"weather_refresh_minutes": m})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			WeatherRefreshMinutes int `json:"weather_refresh_minutes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		if req.WeatherRefreshMinutes < weatherSettingsMin || req.WeatherRefreshMinutes > weatherSettingsMax {
+			http.Error(w, fmt.Sprintf("weather_refresh_minutes must be between %d and %d", weatherSettingsMin, weatherSettingsMax), http.StatusBadRequest)
+			return
+		}
+
+		s.cfgMu.Lock()
+		s.cfg.Web.WeatherRefreshMinutes = req.WeatherRefreshMinutes
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		s.clearWeatherCache()
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"botIAask/progtodo"
@@ -85,6 +86,49 @@ func (s *Server) handleProgrammerTodos(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+
+	case http.MethodPost:
+		if !s.staffAdminFromRequest(r) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		cookie, err := r.Cookie("admin_session")
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		uid, _, err := s.authDB.ValidateSession(cookie.Value)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		author, err := s.authDB.GetUsernameByID(uid)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusInternalServerError)
+			return
+		}
+		var body struct {
+			Body        string `json:"body"`
+			AdminOnly   bool   `json:"admin_only"`
+			Importance  string `json:"importance"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		text := strings.TrimSpace(body.Body)
+		if text == "" {
+			http.Error(w, "body required", http.StatusBadRequest)
+			return
+		}
+		imp := strings.TrimSpace(body.Importance)
+		id, err := s.progtodoDB.Add(text, author, body.AdminOnly, imp)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "id": id})
 
 	case http.MethodDelete:
 		if !s.staffAdminFromRequest(r) {
