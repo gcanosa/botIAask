@@ -27,6 +27,7 @@ var userLines = []line{
 	{cmd: "!ask <query>", desc: "Ask the AI (name configurable; default ask)"},
 	{cmd: "!bc <expr>", desc: "Evaluate a math expression, e.g. 5+5"},
 	{cmd: "!weather <place>", desc: "Current + 5-day forecast (e.g. Barcelona, Spain)"},
+	{cmd: "!flight <IATA> [date]", desc: "Flight status (AirLabs: sched, delay, O/D, progress; key in config; paid = high quota)"},
 	{cmd: "!news [limit]", desc: "Fetch recent RSS items (in channels with news enabled; limit 1–10)"},
 	{cmd: "!bookmark ...", desc: "ADD <URL> [nickname] | FIND <text>"},
 	{cmd: "!uptime", desc: "Show bot and session uptime"},

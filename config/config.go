@@ -24,6 +24,25 @@ type Config struct {
 	RSS         RSSConfig       `yaml:"rss,omitempty"`
 	Stats       StatsConfig     `yaml:"stats,omitempty"`
 	Uploads     UploadsConfig   `yaml:"uploads,omitempty"`
+	Flight      FlightConfig     `yaml:"flight,omitempty"`
+}
+
+// FlightConfig holds AirLabs Data API (v9) settings for !flight.
+// Get a key at https://airlabs.co — free plan has monthly caps; paid tiers allow large daily volume.
+// Set api_key in YAML or AIRLABS_API_KEY. Base is usually https://airlabs.co/api/v9
+type FlightConfig struct {
+	APIKey  string `yaml:"api_key,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+}
+
+const envAirLabsKey = "AIRLABS_API_KEY"
+
+// AirLabsAPIKeyOrEnv returns the API key from config or AIRLABS_API_KEY.
+func (f FlightConfig) AirLabsAPIKeyOrEnv() string {
+	if strings.TrimSpace(f.APIKey) != "" {
+		return strings.TrimSpace(f.APIKey)
+	}
+	return strings.TrimSpace(os.Getenv(envAirLabsKey))
 }
 
 // UploadsConfig holds limits for user file uploads (!upload flow).
@@ -162,6 +181,7 @@ func LoadConfig(path string) (*Config, error) {
 	applyUploadsDefaults(&cfg)
 	applyRSSDefaults(&cfg)
 	applyWebDefaults(&cfg)
+	applyFlightDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -188,6 +208,14 @@ func applyRSSDefaults(cfg *Config) {
 func applyWebDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Web.ServerLocation) == "" {
 		cfg.Web.ServerLocation = "Barcelona, Spain"
+	}
+}
+
+const defaultAirLabsBase = "https://airlabs.co/api/v9"
+
+func applyFlightDefaults(cfg *Config) {
+	if strings.TrimSpace(cfg.Flight.BaseURL) == "" {
+		cfg.Flight.BaseURL = defaultAirLabsBase
 	}
 }
 
