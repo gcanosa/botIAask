@@ -31,6 +31,7 @@ var userLines = []line{
 	{cmd: "!news [limit]", desc: "Fetch recent RSS items (in channels with news enabled; limit 1–10)"},
 	{cmd: "!bookmark ...", desc: "ADD <URL> [nickname] | FIND <text>"},
 	{cmd: "!uptime", desc: "Show bot and session uptime"},
+	{cmd: "!time", desc: "Current time in major cities (one per time zone, incl. Buenos Aires & Barcelona)"},
 	{cmd: "!spec", desc: "Show system prompt spec"},
 	{cmd: "!paste", desc: "Get a link to upload a text paste"},
 	{cmd: "!upload", desc: "Get a link to upload a file (max size in web settings)"},
