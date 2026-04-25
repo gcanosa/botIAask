@@ -350,11 +350,21 @@ func (b *Bot) IsAuthenticated() bool {
 	return b.authenticated
 }
 
-// Broadcast sends a message to multiple channels.
+// Broadcast sends a message to multiple channels. Long text is split to fit IRC line limits
+// (raw PRIVMSGs longer than the server limit are often dropped, which affected long Apple Newsroom lines).
 func (b *Bot) Broadcast(channels []string, message string) {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return
+	}
 	for _, ch := range channels {
-		b.sendPrivmsg(ch, message)
-		// Small delay to avoid flooding when broadcasting to many channels
+		for _, chunk := range splitUTF8ByByteBudget(msg, ircTextBudget) {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			b.sendPrivmsg(ch, b.sanitize(chunk))
+			time.Sleep(200 * time.Millisecond)
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
