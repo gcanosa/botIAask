@@ -68,3 +68,9 @@ scratch/
 tags
 config/config.yaml
 .cursor/
+
+# Local scripts (not published)
+scripts/
+
+# Compose local state (optional; contains data + config)
+state/

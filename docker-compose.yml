@@ -1,0 +1,22 @@
+# `docker compose` or `podman compose` from repo root.
+# Setup: mkdir -p state/config state/data && cp config/config.yaml.template state/config/config.yaml
+# and edit. Mounting the whole config dir avoids Docker creating a directory named config.yaml by mistake.
+# Hub image (after push): e.g. IMAGE=berkelioar/botiaask:0.3.2 and remove/override `build: .` to pull from Docker Hub.
+
+services:
+  botiaask:
+    build: .
+    image: ${IMAGE:-botiaask:local}
+    container_name: botiaask
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3366}:3366"
+    volumes:
+      - ${STATE_DIR:-./state}/data:/app/data
+      - ${STATE_DIR:-./state}/config:/app/config
+      - ${STATE_DIR:-./state}/logs:/app/logs
+      - ${STATE_DIR:-./state}/pastes:/app/pastes
+      - ${STATE_DIR:-./state}/upload_files:/app/upload_files
+    # If LM Studio runs on the same Linux host, you can use:
+    # network_mode: "host"
+    # and set ai.lm_studio_url in config to http://127.0.0.1:1234/v1 (host ports, not the mapped 3366).
