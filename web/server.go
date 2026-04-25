@@ -1026,6 +1026,11 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			"feed_urls":        s.getConfig().RSS.FeedURLs,
 			"announce_to_irc":  s.getConfig().RSS.AnnounceToIRCEnabled(),
 		}
+		if s.rssFetcher != nil {
+			response["feed_status"] = s.rssFetcher.FeedStatuses()
+		} else {
+			response["feed_status"] = []rss.FeedStatus{}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 		return
