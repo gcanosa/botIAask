@@ -24,7 +24,8 @@ type Config struct {
 	RSS         RSSConfig       `yaml:"rss,omitempty"`
 	Stats       StatsConfig     `yaml:"stats,omitempty"`
 	Uploads     UploadsConfig   `yaml:"uploads,omitempty"`
-	Flight      FlightConfig     `yaml:"flight,omitempty"`
+	Flight      FlightConfig    `yaml:"flight,omitempty"`
+	OMDB        OMDBConfig      `yaml:"omdb,omitempty"`
 }
 
 // FlightConfig holds AirLabs Data API (v9) settings for !flight.
@@ -43,6 +44,23 @@ func (f FlightConfig) AirLabsAPIKeyOrEnv() string {
 		return strings.TrimSpace(f.APIKey)
 	}
 	return strings.TrimSpace(os.Getenv(envAirLabsKey))
+}
+
+// OMDBConfig holds OMDb API settings for !movie.
+// Get a key at https://www.omdbapi.com — set api_key in YAML or OMDB_API_KEY.
+type OMDBConfig struct {
+	APIKey  string `yaml:"api_key,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+}
+
+const envOMDBKey = "OMDB_API_KEY"
+
+// OMDBAPIKeyOrEnv returns the API key from config or OMDB_API_KEY.
+func (o OMDBConfig) OMDBAPIKeyOrEnv() string {
+	if strings.TrimSpace(o.APIKey) != "" {
+		return strings.TrimSpace(o.APIKey)
+	}
+	return strings.TrimSpace(os.Getenv(envOMDBKey))
 }
 
 // UploadsConfig holds limits for user file uploads (!upload flow).
@@ -184,6 +202,7 @@ func LoadConfig(path string) (*Config, error) {
 	applyRSSDefaults(&cfg)
 	applyWebDefaults(&cfg)
 	applyFlightDefaults(&cfg)
+	applyOMDBDefaults(&cfg)
 
 	return &cfg, nil
 }
@@ -221,6 +240,14 @@ const defaultAirLabsBase = "https://airlabs.co/api/v9"
 func applyFlightDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Flight.BaseURL) == "" {
 		cfg.Flight.BaseURL = defaultAirLabsBase
+	}
+}
+
+const defaultOMDBBase = "https://www.omdbapi.com/"
+
+func applyOMDBDefaults(cfg *Config) {
+	if strings.TrimSpace(cfg.OMDB.BaseURL) == "" {
+		cfg.OMDB.BaseURL = defaultOMDBBase
 	}
 }
 

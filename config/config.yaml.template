@@ -69,3 +69,7 @@ stats:
     retention_days: 7
 uploads:
     max_file_mb: 200
+# OMDb for !movie (year, IMDb rating, short plot). Key: https://www.omdbapi.com/apikey.aspx
+# omdb:
+#     api_key: your_omdb_key
+#     # base_url: https://www.omdbapi.com/

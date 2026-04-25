@@ -819,8 +819,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %smovie <title>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sping <host>, %sreminder add/del/list/read, %stodo add|private|list|del",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -1070,6 +1070,26 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !ping <host> (single probe; rate-limited when enabled)
+	{
+		parts := strings.Fields(message)
+		if len(parts) > 0 && parts[0] == b.prefix+"ping" {
+			if b.rateLimiter != nil && !b.rateLimiter.Allow(sender, target, b.cfg.Bot.RateLimiting.Limit, b.cfg.Bot.RateLimiting.Burst) {
+				if b.cfg.Bot.Debug {
+					log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
+				}
+				b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
+				return
+			}
+			if len(parts) < 2 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sping <host> — e.g. %sping 1.1.1.1", b.prefix, b.prefix))
+				return
+			}
+			b.handlePingCommand(target, sender, parts[1])
+			return
+		}
+	}
+
 	// Handle !euro command
 	if strings.HasPrefix(message, b.prefix+"euro") {
 		b.handleEuroCommand(target)
@@ -1107,6 +1127,13 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			return
 		}
 		b.handleWeatherCommand(target, sender, rest)
+		return
+	}
+
+	// Handle !movie <title> (OMDb)
+	if strings.HasPrefix(message, b.prefix+"movie") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"movie"))
+		b.handleMovieCommand(target, sender, rest)
 		return
 	}
 
