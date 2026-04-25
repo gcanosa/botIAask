@@ -5,7 +5,7 @@ const (
 	// Name is the application name shown in CLI and banners.
 	Name = "botIAask"
 	// Version is the release version (keep in sync with CLI -version / CTCP VERSION).
-	Version = "0.3.1"
+	Version = "0.3.2"
 	// Author is shown in -help, -about, and daemon startup banners.
 	Author = "Gerardo Canosa - gera.canosa@gmail.com"
 )
