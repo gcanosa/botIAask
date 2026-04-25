@@ -39,7 +39,8 @@ type Tracker struct {
 	loopMu  sync.Mutex
 	runWG   sync.WaitGroup
 	// runCancel stops the active snapshot loop (restarted on ApplyConfig / SetEnabled / Start).
-	runCancel context.CancelFunc
+	runCancel        context.CancelFunc
+	lastStatsPrune   time.Time // throttles db.Cleanup (stats retention)
 }
 
 // NewTracker initializes a new statistics tracker.
@@ -239,14 +240,30 @@ func (t *Tracker) snapshot() {
 	t.mu.Unlock()
 
 	// Save to DB if enabled
-	if t.cfg.Stats.SaveToDB && t.db != nil {
+	if t.cfg.Stats.ShouldSaveToDB() && t.db != nil {
 		if err := t.db.SaveEntry(entry); err != nil {
 			log.Printf("Error saving stats: %v", err)
 		}
 	}
+	if t.db != nil {
+		t.maybePruneStatsHistory()
+	}
 
 	// Broadcast to subscribers
 	t.broadcast(entry)
+}
+
+func (t *Tracker) maybePruneStatsHistory() {
+	if t.db == nil || t.cfg.Stats.RetentionDays <= 0 {
+		return
+	}
+	if !t.lastStatsPrune.IsZero() && time.Since(t.lastStatsPrune) < 24*time.Hour {
+		return
+	}
+	t.lastStatsPrune = time.Now()
+	if err := t.db.Cleanup(t.cfg.Stats.RetentionDays); err != nil {
+		log.Printf("stats retention cleanup: %v", err)
+	}
 }
 
 // GetHistory retrieves historical stats from the database.

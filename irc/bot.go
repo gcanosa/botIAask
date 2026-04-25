@@ -20,6 +20,7 @@ import (
 	"botIAask/internal/sysinfo"
 	"botIAask/logger"
 	"botIAask/meta"
+	"botIAask/progtodo"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -80,6 +81,9 @@ type Bot struct {
 
 	// Crypto Database
 	cryptoDB *crypto.Database
+
+	// Programmer TODO backlog
+	progtodoDB *progtodo.Database
 
 	// IRC Authentication status
 	authenticated bool
@@ -156,6 +160,11 @@ func (b *Bot) SetUploadsDatabase(db *uploads.Database) {
 // SetCryptoDatabase sets the crypto database for the bot
 func (b *Bot) SetCryptoDatabase(db *crypto.Database) {
 	b.cryptoDB = db
+}
+
+// SetProgtodoDatabase sets the programmer TODO / backlog database (IRC + web).
+func (b *Bot) SetProgtodoDatabase(db *progtodo.Database) {
+	b.progtodoDB = db
 }
 
 // SetRehashHook registers the process-wide live reload handler (set from main).
@@ -800,8 +809,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// !help command
 	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sreminder add/del/list/read, %stodo add|private|list|del",
+			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
 				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
@@ -1060,6 +1069,17 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	// Handle !crypto command
 	if strings.HasPrefix(message, b.prefix+"crypto") {
 		b.handleCryptoCommand(target)
+		return
+	}
+
+	// Handle !weather <place> (Open-Meteo; comma in place is OK)
+	if strings.HasPrefix(message, b.prefix+"weather") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"weather"))
+		if rest == "" {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sweather <place> — e.g. %sweather Barcelona, Spain", b.prefix, b.prefix))
+			return
+		}
+		b.handleWeatherCommand(target, sender, rest)
 		return
 	}
 
@@ -1347,6 +1367,103 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, r.Note))
 		default:
 			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+		}
+		return
+	}
+
+	// !todo add | !todo private (admins) | !todo list | !todo del — per-user list/delete; add uses random id like pastes
+	if strings.HasPrefix(message, b.prefix+"todo") {
+		if b.progtodoDB == nil {
+			b.sendPrivmsg(target, "Programmer TODO system not initialized.")
+			return
+		}
+		parts := strings.Fields(message)
+		if len(parts) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+			return
+		}
+		sub := strings.ToLower(parts[1])
+		todoBodyAfterSub := func() string {
+			skip := len(parts[0]) + 1 + len(parts[1])
+			if skip >= len(message) {
+				return ""
+			}
+			return strings.TrimSpace(message[skip:])
+		}
+		switch sub {
+		case "add":
+			body := todoBodyAfterSub()
+			if body == "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text>", b.prefix))
+				return
+			}
+			// Public backlog: visible to all web users (non–dashboard-staff see non–staff-only rows).
+			id, err := b.progtodoDB.Add(body, sender, false)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s added. Visible on the web TODO list (use %stodo private for staff-only).", sender, id, b.prefix))
+		case "private", "staff":
+			if !isAdmin {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Only config admins can add staff-only TODOs. Use %stodo add <text> for the public backlog.", sender, b.prefix))
+				return
+			}
+			body := todoBodyAfterSub()
+			if body == "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo private <text>  (dashboard staff only; alias: %stodo staff <text>)", b.prefix, b.prefix))
+				return
+			}
+			id, err := b.progtodoDB.Add(body, sender, true)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s added (visible to dashboard staff only).", sender, id))
+		case "list":
+			if len(parts) != 2 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo list", b.prefix))
+				return
+			}
+			items, err := b.progtodoDB.ListByAuthor(sender)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error listing TODOs: %v", sender, err))
+				return
+			}
+			if len(items) == 0 {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: You have no TODO entries.", sender))
+				return
+			}
+			const maxTodoLine = 200
+			for _, it := range items {
+				note := it.Body
+				if len(note) > maxTodoLine {
+					note = note[:maxTodoLine-3] + "..."
+				}
+				line := fmt.Sprintf("@%s: [%s] %s", sender, it.ID, note)
+				if it.AdminOnly {
+					line += " (staff-only)"
+				}
+				b.sendPrivmsg(target, b.sanitize(line))
+			}
+		case "del", "delete":
+			if len(parts) < 3 {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo del <id>", b.prefix))
+				return
+			}
+			pubID := parts[2]
+			ok, err := b.progtodoDB.DeleteByAuthor(sender, pubID)
+			if err != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error deleting: %v", sender, err))
+				return
+			}
+			if !ok {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: No TODO with that id, or it is not yours.", sender))
+				return
+			}
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s deleted.", sender, pubID))
+		default:
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.prefix, b.prefix, b.prefix, b.prefix))
 		}
 		return
 	}

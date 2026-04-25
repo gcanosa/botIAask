@@ -37,6 +37,169 @@ const rowIcons = {
     linkChain: _icon24('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>'),
 };
 
+/** Open-Meteo icon kinds → inline SVG (stroke currentColor; theme via CSS variables). */
+function weatherIconHTML(kind) {
+    const w = (inner) => `<svg class="weather-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+    const k = kind != null ? String(kind) : 'cloud';
+    const icons = {
+        clear: w('<circle cx="12" cy="10" r="3.2"/><path d="M12 1.5V4.5M12 15.5V18.5M4.2 9.2l2.1 1.2M17.7 9.2l2.1-1.2M6.1 3.2l1.4 1.4M16.5 3.2l-1.4 1.4M6.1 16.8l1.4-1.4M16.5 16.8l-1.4-1.4M1.5 10h3M19.5 10h3"/>'),
+        night_clear: w('<path d="M12 3a6.5 6.5 0 0 0 0 12 7 7 0 0 1-6.5-8.5A6.5 6.5 0 0 0 12 3zM19 4l.5.5.5.5.5.5" opacity=".75"/><path d="M4 6l-1-1" opacity=".5"/>'),
+        partly: w('<circle cx="7" cy="6" r="2.2"/><path d="M2 16a3.5 3.5 0 0 1 0-7h.2A4.2 4.2 0 0 1 12 6.5a3.3 3.3 0 0 1 .1 6.4H3.5"/>'),
+        cloud: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.3 3.3 0 0 0-2.1 5.5A2.3 2.3 0 0 0 6.5 18z"/>'),
+        fog: w('<path d="M2 10h4M7 10h3M12 10h7M2 14h8M12 14h7M2 18h3M6 18h3M10 18h3M14 18h2"/>'),
+        rain: w('<path d="M6.5 19H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 7a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 19zM8 22l1-3M12 22l1-3M16 22l1-3"/>'),
+        snow: w('<path d="M6.5 19H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 7a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 19z"/><path d="M9 21l.5-1M12 21v-1.5M15 21l-.5-1M8 16.5l.5.5M12 15.5v1.2M16 16.5l-.5.5"/>'),
+        shower: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 18zM8 20l.5-2.5M12 20l.5-2.5M16 20l.5-2.5"/>'),
+        thunder: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 18z"/><path d="M12 20V12l-2.5 3H12l-1.5 5"/>'),
+    };
+    return icons[k] || icons.cloud;
+}
+
+/** Max/min °C as themed pills (matches IRC red/blue pattern on the web). */
+function weatherTempPillsHTML(maxC, minC) {
+    const hi = Math.round(Number(maxC));
+    const lo = Math.round(Number(minC));
+    return `<span class="weather-temp-pill weather-temp-pill--max">${hi}°</span><span class="weather-daily__temps-sep" aria-hidden="true">/</span><span class="weather-temp-pill weather-temp-pill--min">${lo}°</span>`;
+}
+
+/**
+ * One short label for the condition (Sunny, Cloudy, Windy, …). Icon kind is from the API; wind can promote "Windy" for fair-weather days.
+ * @param {string} kind
+ * @param {{ isDay?: number, windKmh?: number | null, daily?: boolean }} [opts]
+ */
+function weatherKindToShortLabel(kind, opts) {
+    const k = kind != null ? String(kind) : 'cloud';
+    const daily = opts && opts.daily;
+    const isDay = !(opts && opts.isDay === 0);
+    const w = opts && opts.windKmh != null && opts.windKmh !== '' ? Number(opts.windKmh) : NaN;
+    if (!daily && !Number.isNaN(w) && w >= 32) {
+        if (k === 'clear' || k === 'partly' || k === 'cloud' || k === 'night_clear') {
+            return 'Windy';
+        }
+    }
+    if (k === 'clear') {
+        return isDay ? 'Sunny' : 'Clear';
+    }
+    if (k === 'night_clear') {
+        return 'Clear';
+    }
+    const m = {
+        partly: 'Partly cloudy',
+        cloud: 'Cloudy',
+        fog: 'Foggy',
+        rain: 'Rainy',
+        snow: 'Snowy',
+        shower: 'Showers',
+        thunder: 'Thunderstorms',
+    };
+    return m[k] || 'Cloudy';
+}
+
+async function fetchServerWeather() {
+    const elLoad = document.getElementById('server-weather-loading');
+    const elErr = document.getElementById('server-weather-error');
+    const elBody = document.getElementById('server-weather-body');
+    if (!elLoad || !elErr || !elBody) return;
+    elErr.classList.add('hidden');
+    elLoad.classList.remove('hidden');
+    elBody.classList.add('hidden');
+    try {
+        const res = await fetch('/api/weather');
+        const data = await res.json();
+        elLoad.classList.add('hidden');
+        if (!data.ok) {
+            elErr.textContent = data.message || 'Weather unavailable';
+            elErr.classList.remove('hidden');
+            return;
+        }
+        const place = document.getElementById('server-weather-place');
+        if (place) {
+            const tz = data.timezone ? ` · ${data.timezone}` : '';
+            place.textContent = (data.location || '—') + tz;
+        }
+        const c = data.current;
+        if (c) {
+            const t = document.getElementById('server-weather-temp');
+            if (t) t.textContent = Math.round(c.temp_c) + '°C';
+            const labelEl = document.getElementById('server-weather-label');
+            if (labelEl) {
+                const short = weatherKindToShortLabel(c.icon, { isDay: c.is_day, windKmh: c.wind_kmh });
+                labelEl.textContent = short;
+            }
+            const heroI = document.getElementById('server-weather-hero-icon');
+            if (heroI) heroI.innerHTML = weatherIconHTML(c.icon);
+            const heroExtras = document.getElementById('server-weather-hero-extras');
+            if (heroExtras) {
+                heroExtras.innerHTML = '';
+                const hasFeels = c.apparent_c != null && Number.isFinite(Number(c.apparent_c));
+                const rh = c.humidity != null ? Number(c.humidity) : NaN;
+                const hasRh = Number.isFinite(rh) && rh >= 0 && rh <= 100;
+                if (hasFeels) {
+                    const p = document.createElement('p');
+                    p.className = 'weather-card__hero-extra';
+                    p.textContent = `Feels like ${Math.round(Number(c.apparent_c))}°C`;
+                    heroExtras.appendChild(p);
+                }
+                if (hasRh) {
+                    const p = document.createElement('p');
+                    p.className = 'weather-card__hero-extra weather-card__hero-extra--muted';
+                    p.textContent = `Humidity ${Math.round(rh)}%`;
+                    heroExtras.appendChild(p);
+                }
+            }
+            const meta = document.getElementById('server-weather-meta');
+            if (meta) {
+                const bits = [];
+                if (c.wind_kmh != null && Number.isFinite(Number(c.wind_kmh))) {
+                    bits.push(`Wind ${Math.round(Number(c.wind_kmh))} km/h`);
+                }
+                meta.textContent = bits.length ? bits.join(' · ') : '—';
+            }
+        }
+        const todayR = document.getElementById('server-weather-today-range');
+        if (todayR) {
+            if (Array.isArray(data.daily) && data.daily[0] && Number.isFinite(Number(data.daily[0].max_c)) && Number.isFinite(Number(data.daily[0].min_c))) {
+                const t0 = data.daily[0];
+                todayR.innerHTML = `<p class="weather-today__label">Today</p><div class="weather-today__row">${weatherTempPillsHTML(t0.max_c, t0.min_c)}</div>`;
+                todayR.classList.remove('hidden');
+            } else {
+                todayR.innerHTML = '';
+                todayR.classList.add('hidden');
+            }
+        }
+        const dailyEl = document.getElementById('server-weather-daily');
+        if (dailyEl && Array.isArray(data.daily)) {
+            dailyEl.innerHTML = data.daily
+                .map((d) => {
+                    const short = weatherKindToShortLabel(d.icon, { daily: true });
+                    return `<div class="weather-daily__cell" role="listitem">
+                        <div class="weather-daily__icon">${weatherIconHTML(d.icon)}</div>
+                        <div class="weather-daily__word">${financeEscapeHtml(short)}</div>
+                        <div class="weather-daily__dow">${financeEscapeHtml(d.weekday || '')}</div>
+                        <div class="weather-daily__temps">${weatherTempPillsHTML(d.max_c, d.min_c)}</div>
+                        ${d.pop > 0 ? `<div class="weather-daily__pop">Rain ${d.pop}%</div>` : '<div class="weather-daily__pop">&nbsp;</div>'}
+                    </div>`;
+                })
+                .join('');
+        }
+        const fetchEl = document.getElementById('server-weather-fetched');
+        if (fetchEl && data.fetched_at) {
+            try {
+                const dt = new Date(data.fetched_at);
+                fetchEl.textContent = 'Updated ' + dt.toLocaleString();
+            } catch {
+                fetchEl.textContent = '';
+            }
+        }
+        elBody.classList.remove('hidden');
+    } catch (e) {
+        console.error('weather', e);
+        elLoad.classList.add('hidden');
+        elErr.textContent = 'Could not load weather';
+        elErr.classList.remove('hidden');
+    }
+}
+
 function newsSourceAbbrevFromKey(key) {
     let out = '';
     for (const c of String(key)) {
@@ -200,6 +363,7 @@ function showPanel(panelId) {
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
          fetchHistory(currentTimeframe);
+         fetchServerWeather();
     }
     if (panelId === 'finance') {
         fetchCryptoChart();
@@ -209,6 +373,7 @@ function showPanel(panelId) {
         fetchLogCatalog();
         bindLogsPanelListeners();
     }
+    if (panelId === 'todos') fetchProgrammerTodos();
 
     closeSidebarIfMobile();
 }
@@ -269,6 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start background tasks
     fetchFinance();
     setInterval(fetchFinance, 60000); // 1m finance refresh
+    setInterval(fetchServerWeather, 600000); // 10m; server also caches
     
     // Poll for pending/approved pastes and news every 5s if admin and on respective panel
     setInterval(() => {
@@ -282,6 +448,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (document.getElementById('panel-news').classList.contains('active')) {
             fetchNews(newsPage);
+        }
+        if (document.getElementById('panel-todos')?.classList.contains('active')) {
+            fetchProgrammerTodos();
         }
     }, 5000);
 
@@ -310,6 +479,9 @@ async function fetchStatus() {
         const data = await res.json();
         lastIsAdmin = data.is_admin;
         lastStaffAdmin = data.staff_admin != null ? !!data.staff_admin : !!data.is_admin;
+        if (data.stats_interval_seconds != null && Number.isFinite(data.stats_interval_seconds) && data.stats_interval_seconds > 0) {
+            statsIntervalSec = Math.max(1, Math.floor(data.stats_interval_seconds));
+        }
 
         const appVersionEl = document.getElementById('app-version');
         if (appVersionEl && data.version) {
@@ -323,6 +495,10 @@ async function fetchStatus() {
         // Features
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
+        const actEmpty = document.getElementById('activity-chart-empty');
+        if (activityChart && actEmpty && !actEmpty.classList.contains('hidden') && currentTimeframe) {
+            setActivityChartEmptyHint(currentTimeframe, activityChart.data.labels.length);
+        }
         
         // State updates
         updateAdminView(data.is_admin);
@@ -1238,6 +1414,8 @@ async function fetchForexChart(range) {
 
 let currentTimeframe = '1h';
 let statsEnabledState = false;
+/** Snapshot period from server (stats.interval), for empty-chart messaging */
+let statsIntervalSec = 60;
 
 function formatActivityChartLabel(d, tf) {
     const t = d instanceof Date ? d : new Date(d);
@@ -1248,10 +1426,11 @@ function formatActivityChartLabel(d, tf) {
         case '6h':
             return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         case '1d':
-            return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            return t.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         case '5d':
             return t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' });
         case '1m':
+            return t.toLocaleString([], { month: 'short', day: 'numeric' });
         case '6m':
             return t.toLocaleString([], { month: 'short', day: 'numeric' });
         case '1y':
@@ -1263,6 +1442,45 @@ function formatActivityChartLabel(d, tf) {
 
 function activityChartLiveMaxPoints() {
     return 60;
+}
+
+function applyActivityChartScales(tf) {
+    if (!activityChart) return;
+    const st = getComputedStyle(document.documentElement);
+    const tick = (st.getPropertyValue('--chart-tick').trim() || '#94a3b8');
+    const subt = (st.getPropertyValue('--text-muted').trim() || 'rgba(148, 163, 184, 0.85)');
+
+    const ranges = {
+        '1h':  { title: 'Last hour',       unit: 'Hours',  maxTicks: 8,  maxRot: 0,  minRot: 0  },
+        '6h':  { title: 'Last 6 hours',    unit: 'Hours',  maxTicks: 9,  maxRot: 0,  minRot: 0  },
+        '1d':  { title: 'Last 24 hours',   unit: 'Hours',  maxTicks: 10, maxRot: 35, minRot: 0  },
+        '5d':  { title: 'Last 5 days',     unit: 'Days',   maxTicks: 10, maxRot: 40, minRot: 0  },
+        '1m':  { title: 'Last month',      unit: 'Days',   maxTicks: 8,  maxRot: 45, minRot: 0  },
+        '6m':  { title: 'Last 6 months',   unit: 'Months', maxTicks: 8,  maxRot: 45, minRot: 0  },
+        '1y':  { title: 'Last year',       unit: 'Months', maxTicks: 12, maxRot: 45, minRot: 0  },
+    };
+    const r = ranges[tf] || ranges['1h'];
+
+    activityChart.options.scales.x.ticks = {
+        ...activityChart.options.scales.x.ticks,
+        color: tick,
+        autoSkip: true,
+        maxTicksLimit: r.maxTicks,
+        maxRotation: r.maxRot,
+        minRotation: r.minRot,
+    };
+    activityChart.options.scales.x.title = {
+        display: true,
+        text: `${r.title} (${r.unit})`,
+        color: subt,
+        font: { size: 11, weight: '500' },
+        padding: { top: 0, bottom: 4 },
+    };
+    activityChart.options.scales.y.beginAtZero = true;
+    activityChart.options.scales.y.ticks = {
+        ...(activityChart.options.scales.y.ticks || {}),
+        color: tick,
+    };
 }
 
 function syncActivityChartColors() {
@@ -1278,9 +1496,9 @@ function syncActivityChartColors() {
     activityChart.data.datasets[0].backgroundColor = fillA;
     activityChart.data.datasets[1].borderColor = accent;
     activityChart.data.datasets[1].backgroundColor = fillB;
-    activityChart.options.scales.y.grid.color = grid;
+    activityChart.options.scales.y.grid = { color: grid };
     activityChart.options.scales.y.ticks.color = tick;
-    activityChart.options.scales.x.ticks.color = tick;
+    applyActivityChartScales(currentTimeframe);
     activityChart.update('none');
 }
 
@@ -1305,6 +1523,10 @@ function updateStatsStatus(enabled, isAdmin) {
         indicator.style.background = 'var(--text-muted)';
         stopStatsStream();
     }
+    const emptyEl = document.getElementById('activity-chart-empty');
+    if (activityChart && emptyEl && !emptyEl.classList.contains('hidden') && currentTimeframe) {
+        setActivityChartEmptyHint(currentTimeframe, activityChart.data.labels.length);
+    }
 }
 
 async function toggleStats() {
@@ -1327,7 +1549,7 @@ function initChart() {
         options: {
             responsive: true, maintainAspectRatio: false,
             scales: {
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
                 x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
             },
             plugins: { legend: { display: false } }
@@ -1336,16 +1558,74 @@ function initChart() {
     syncActivityChartColors();
 }
 
+function setActivityChartError(msg) {
+    const el = document.getElementById('activity-chart-error');
+    const empty = document.getElementById('activity-chart-empty');
+    if (!el) return;
+    if (empty) empty.classList.add('hidden');
+    if (msg) {
+        el.textContent = msg;
+        el.classList.remove('hidden');
+    } else {
+        el.textContent = '';
+        el.classList.add('hidden');
+    }
+}
+
+function formatStatsIntervalPhrase(sec) {
+    const s = Math.max(1, Math.floor(sec || 60));
+    if (s < 60) return `${s} second${s === 1 ? '' : 's'}`;
+    if (s % 3600 === 0) {
+        const h = s / 3600;
+        return `${h} hour${h === 1 ? '' : 's'}`;
+    }
+    if (s % 60 === 0) {
+        const m = s / 60;
+        return `${m} minute${m === 1 ? '' : 's'}`;
+    }
+    return `${s} seconds`;
+}
+
+function setActivityChartEmptyHint(tf, pointCount) {
+    const empty = document.getElementById('activity-chart-empty');
+    if (!empty) return;
+    if (pointCount > 0) {
+        empty.classList.add('hidden');
+        return;
+    }
+    const rangeLabel = (tf || '1h').toUpperCase();
+    const iv = formatStatsIntervalPhrase(statsIntervalSec);
+
+    if (!statsEnabledState) {
+        empty.textContent = `No data in this view (${rangeLabel}). Turn Statistics on under Feature Control to record activity. The chart will stay empty until then.`;
+        empty.classList.remove('hidden');
+        return;
+    }
+
+    empty.textContent = `Collecting… new snapshot about every ${iv} (see config stats.interval). This range (${rangeLabel}) has no rows yet — wait for the next snapshot or pick a longer window. The chart below is empty until data exists.`;
+    empty.classList.remove('hidden');
+}
+
 async function fetchHistory(tf) {
     if (!document.getElementById('activityChart')) return;
     currentTimeframe = tf;
     if (!activityChart) initChart();
     if (!activityChart) return;
 
+    setActivityChartError('');
     try {
-        const res = await fetch(`/api/stats/history?timeframe=${tf}`);
+        const res = await fetch(`/api/stats/history?timeframe=${encodeURIComponent(tf)}`, { credentials: 'same-origin' });
         if (!res.ok) {
+            activityChart.data.labels = [];
+            activityChart.data.datasets[0].data = [];
+            activityChart.data.datasets[1].data = [];
+            activityChart._seenTs = new Set();
+            const empty = document.getElementById('activity-chart-empty');
+            if (empty) empty.classList.add('hidden');
+            activityChart.update();
+            setActivityChartError(`Could not load activity history (HTTP ${res.status}).`);
             console.error('Stats history HTTP', res.status);
+            refreshStatsStreamState();
             return;
         }
         const raw = await res.json();
@@ -1355,11 +1635,21 @@ async function fetchHistory(tf) {
         activityChart.data.datasets[0].data = data.map(e => e.messages);
         activityChart.data.datasets[1].data = data.map(e => e.ai_requests);
         activityChart._seenTs = new Set(data.map(e => new Date(e.timestamp).getTime()));
+        setActivityChartEmptyHint(tf, data.length);
         syncActivityChartColors();
         activityChart.update();
         refreshStatsStreamState();
     } catch (err) {
+        activityChart.data.labels = [];
+        activityChart.data.datasets[0].data = [];
+        activityChart.data.datasets[1].data = [];
+        activityChart._seenTs = new Set();
+        const empty = document.getElementById('activity-chart-empty');
+        if (empty) empty.classList.add('hidden');
+        activityChart.update();
+        setActivityChartError('Could not load activity history. Check the network and try again.');
         console.error('Stats history fetch error', err);
+        refreshStatsStreamState();
     }
 }
 
@@ -1390,6 +1680,7 @@ function startStatsStream() {
             activityChart.data.labels.shift();
             activityChart.data.datasets.forEach(d => d.data.shift());
         }
+        setActivityChartEmptyHint('1h', activityChart.data.labels.length);
         activityChart.update('none');
     };
 }
@@ -2672,6 +2963,143 @@ window.deleteUser = deleteUser;
 window.showAddUser = () => { document.getElementById('modal-overlay').classList.remove('hidden'); document.getElementById('adduser-modal').classList.remove('hidden'); };
 window.hideAddUser = () => { document.getElementById('modal-overlay').classList.add('hidden'); document.getElementById('adduser-modal').classList.add('hidden'); };
 window.addUser = addUser;
+
+function formatTodoDate(iso) {
+    if (iso == null || iso === '') return '—';
+    try {
+        const d = new Date(iso);
+        return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+    } catch {
+        return String(iso);
+    }
+}
+
+async function fetchProgrammerTodos() {
+    const tbody = document.getElementById('programmer-todos-list');
+    const errEl = document.getElementById('programmer-todos-error');
+    if (!tbody) return;
+    try {
+        const res = await fetch('/api/programmer-todos', { credentials: 'same-origin' });
+        if (!res.ok) {
+            const errText = (await res.text() || '').trim();
+            const msg = errText || `HTTP ${res.status}`;
+            throw new Error(res.status === 503 ? (errText || 'Programmer TODO database not available') : msg);
+        }
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        const staff = data.staff === true;
+        if (errEl) {
+            errEl.classList.add('hidden');
+            errEl.textContent = '';
+        }
+        const th = document.getElementById('programmer-todos-actions-th');
+        if (th) th.classList.toggle('hidden', !staff);
+        if (items.length === 0) {
+            const c = staff ? 6 : 5;
+            tbody.innerHTML = `<tr><td colspan="${c}" style="padding:1rem;color:var(--text-muted);">No entries yet.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = items.map((it) => {
+            const imp = String(it.importance || 'medium').toLowerCase();
+            const rev = String(it.review_status || 'pending').toLowerCase();
+            const isRejected = rev === 'rejected';
+            const isPending = rev === 'pending';
+            const strike = isRejected ? ' progtodo-row--disabled' : '';
+            const bodyClass = isRejected ? 'progtodo-strike' : '';
+            let info = `<span class="progtodo-badge progtodo-badge--imp progtodo-badge--imp-${imp}">${financeEscapeHtml(imp)}</span> <span class="progtodo-badge progtodo-badge--rev progtodo-badge--rev-${rev}">${financeEscapeHtml(rev)}</span>`;
+            if (staff && it.admin_only) info += ' <span class="progtodo-badge progtodo-badge--priv">staff-only</span>';
+            const id = String(it.id || '');
+            const safeId = id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            let actions = '';
+            if (staff) {
+                const reviewActions = isPending
+                    ? `<button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','approved')">Approve</button>
+                        <button type="button" class="btn btn-ghost" style="padding:0.2rem 0.45rem;font-size:0.7rem" onclick="onProgrammerTodoReview('${safeId}','rejected')">Reject</button>`
+                    : `<span class="mono" style="font-size:0.68rem;color:var(--text-muted);white-space:nowrap" title="Review is final">${rev === 'approved' ? 'Locked · approved' : 'Locked · rejected'}</span>`;
+                actions = `<td style="text-align:right;white-space:normal;max-width:14rem;">
+                    <div style="display:flex;flex-wrap:wrap;gap:0.35rem;justify-content:flex-end;align-items:center;">
+                        <select class="btn btn-ghost" style="padding:0.2rem 0.35rem;font-size:0.7rem;max-width:5rem" data-progtodo-id="${financeEscapeHtml(id)}" onchange="onProgrammerTodoImportance(this)">
+                            <option value="low" ${imp === 'low' ? 'selected' : ''}>low</option>
+                            <option value="medium" ${imp === 'medium' ? 'selected' : ''}>med</option>
+                            <option value="high" ${imp === 'high' ? 'selected' : ''}>high</option>
+                        </select>
+                        ${reviewActions}
+                        <button type="button" class="btn btn-ghost row-action--danger" style="padding:0.2rem" title="Delete" onclick="deleteProgrammerTodo('${safeId}')">${rowIcons.trash}</button>
+                    </div>
+                </td>`;
+            }
+            return `<tr class="${strike}">
+                <td class="mono">${financeEscapeHtml(id)}</td>
+                <td class="${bodyClass}">${financeEscapeHtml(it.body || '')}</td>
+                <td class="mono progtodo-col-nick">${financeEscapeHtml(it.author_nick || '')}</td>
+                <td class="mono" style="font-size:0.8rem;">${financeEscapeHtml(formatTodoDate(it.created_at))}</td>
+                <td>${info}</td>
+                ${actions}
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        if (errEl) {
+            const detail = e && e.message ? String(e.message) : 'Could not load.';
+            errEl.textContent = `Could not load programmer TODOs. ${detail}`;
+            errEl.classList.remove('hidden');
+        }
+        tbody.innerHTML = '';
+    }
+}
+
+function onProgrammerTodoImportance(sel) {
+    const id = sel && sel.getAttribute('data-progtodo-id');
+    const importance = sel && sel.value;
+    if (!id || !importance) return;
+    patchProgrammerTodo(id, { importance });
+}
+
+function onProgrammerTodoReview(id, review_status) {
+    patchProgrammerTodo(id, { review_status });
+}
+
+async function patchProgrammerTodo(id, fields) {
+    const body = { id, ...fields };
+    try {
+        const res = await fetch('/api/programmer-todos', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            throw new Error(t || 'Update failed');
+        }
+        await fetchProgrammerTodos();
+    } catch (e) {
+        console.error(e);
+        alert(e.message || 'Update failed');
+    }
+}
+
+async function deleteProgrammerTodo(id) {
+    if (!id || !window.confirm('Delete this TODO entry?')) return;
+    try {
+        const res = await fetch(`/api/programmer-todos?id=${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            throw new Error(t || 'Delete failed');
+        }
+        await fetchProgrammerTodos();
+    } catch (e) {
+        console.error(e);
+        alert(e.message || 'Delete failed');
+    }
+}
+
+window.fetchProgrammerTodos = fetchProgrammerTodos;
+window.onProgrammerTodoImportance = onProgrammerTodoImportance;
+window.onProgrammerTodoReview = onProgrammerTodoReview;
+window.deleteProgrammerTodo = deleteProgrammerTodo;
 
 // RSS SETTINGS
 async function toggleRSSSettings() {
