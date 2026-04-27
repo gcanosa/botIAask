@@ -181,6 +181,18 @@ body {
 }
 
 /* Sidebar Branding */
+a.brand {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+a.brand:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+    border-radius: 10px;
+}
+
 .brand {
     margin-bottom: 3rem;
     display: flex;
@@ -1003,6 +1015,14 @@ input.btn-ghost:focus {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+a.mobile-top-bar__title:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+    border-radius: 6px;
 }
 
 .sidebar-backdrop {

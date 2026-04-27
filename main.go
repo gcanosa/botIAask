@@ -257,30 +257,6 @@ func main() {
 	go statsTracker.Start()
 	bot.SetStatsTracker(statsTracker)
 
-	rehashCoordinator := func(source string) error {
-		newCfg, err := config.LoadConfig(configPath)
-		if err != nil {
-			return err
-		}
-		aiClient.UpdateConfig(newCfg.AI.LMStudioURL, newCfg.AI.Model)
-		bot.ApplyLiveConfig(newCfg)
-		rssFetcher.ApplyConfig(newCfg)
-		statsTracker.ApplyConfig(newCfg)
-		webServerMu.Lock()
-		ws := webServerRef
-		webServerMu.Unlock()
-		if ws != nil {
-			ws.SetConfig(newCfg)
-		}
-		if err := rssDB.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
-			log.Printf("RSS: repair source column after rehash: %v", err)
-		}
-		bot.NotifyLoggedInAdminsNotice(fmt.Sprintf("Config rehashed (%s) at %s", source, time.Now().Format(time.RFC3339)))
-		log.Printf("Config rehash complete (%s)", source)
-		return nil
-	}
-	bot.SetRehashHook(rehashCoordinator)
-
 	// Initialize Bookmarks Database
 	bookmarksDB, err := bookmarks.NewDatabase("data/bookmarks.db")
 	if err != nil {
@@ -332,25 +308,44 @@ func main() {
 		go cryptoFetcher.Start()
 	}
 
-	// Start Log Rotator
-	if cfg.Logger.RotationDays > 0 {
-		logger.StartLogRotator(cfg.Logger.RotationDays)
+	rstate := &rehashState{
+		configPath:   configPath,
+		aiClient:     aiClient,
+		bot:          bot,
+		rssFetcher:   rssFetcher,
+		statsTracker: statsTracker,
+		rssDB:        rssDB,
+		webMu:        &webServerMu,
+		webRef:       &webServerRef,
 	}
+	var applyRehash func(string, bool) error
+	rstate.startWeb = func(cfg *config.Config) {
+		startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, applyRehash, &webServerMu, &webServerRef)
+	}
+	applyRehash = func(source string, fromWeb bool) error {
+		return doApplyRehash(rstate, source, fromWeb)
+	}
+	bot.SetRehashHook(func(s string) error {
+		return applyRehash(s, false)
+	})
+
+	// Start Log Rotator (loop reads live retention via SetRotationDays / rehash)
+	logger.StartLogRotator(cfg.Logger.RotationDays)
 
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehashCoordinator, &webServerMu, &webServerRef)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, applyRehash, &webServerMu, &webServerRef)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehashCoordinator, &webServerMu, &webServerRef)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, applyRehash, &webServerMu, &webServerRef)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) error {
 	// Forked daemon child has stdio detached; avoid fmt to stdout (no terminal). Debug goes to log if configured.
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
@@ -361,7 +356,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehash, webMu, webRef)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -385,7 +380,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 		sig := <-c
 		if sig == syscall.SIGHUP {
 			log.Println("SIGHUP received, reloading configuration...")
-			if err := rehash("CLI (SIGHUP)"); err != nil {
+			if err := rehash("CLI (SIGHUP)", false); err != nil {
 				log.Printf("Failed to reload config: %v", err)
 			}
 			continue
@@ -405,14 +400,14 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, rehash, webMu, webRef)
+		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
 	}
 
 	// Start the IRC bot
@@ -433,7 +428,7 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 		sig := <-c
 		if sig == syscall.SIGHUP {
 			log.Println("SIGHUP received, reloading configuration...")
-			if err := rehash("CLI (SIGHUP)"); err != nil {
+			if err := rehash("CLI (SIGHUP)", false); err != nil {
 				log.Printf("Failed to reload config: %v", err)
 			}
 			continue
@@ -448,11 +443,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, rehash func(string) error, webMu *sync.Mutex, webRef **web.Server) {
-	webRehash := func() error {
-		return rehash("web admin")
-	}
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, webRehash)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, aiClient *ai.Client, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, aiClient, rehash)
 	webMu.Lock()
 	*webRef = ws
 	webMu.Unlock()
@@ -463,7 +455,7 @@ func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats
 
 func signalDaemonRehash(cfg *config.Config) error {
 	if !cfg.Daemon.Enabled {
-		return fmt.Errorf("daemon is disabled in config; use !rehash in IRC or the web dashboard when not using a PID file")
+		return fmt.Errorf("daemon is disabled in config: enable [daemon] to use -rehash, or reload with `kill -HUP <pid>` on the running bot, `!rehash` in IRC, or POST /api/rehash on the dashboard")
 	}
 	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
 	if err != nil {

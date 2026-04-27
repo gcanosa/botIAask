@@ -133,6 +133,72 @@ func (d *Database) GetLatestForexPerKey() (map[string]float64, error) {
 	return out, rows.Err()
 }
 
+// GetForexPerKeySecondLatest returns, for each rate_key, the value from the previous
+// snapshot (strictly before the latest fetched_at for that key). Use with current values
+// to show change since the last stored fetch.
+func (d *Database) GetForexPerKeySecondLatest() (map[string]float64, error) {
+	rows, err := d.db.Query(`
+		SELECT fr.rate_key, fr.value
+		FROM forex_rates fr
+		INNER JOIN (
+			SELECT fr2.rate_key, MAX(fr2.fetched_at) AS prev_at
+			FROM forex_rates fr2
+			INNER JOIN (
+				SELECT rate_key, MAX(fetched_at) AS latest_at
+				FROM forex_rates
+				GROUP BY rate_key
+			) latest ON fr2.rate_key = latest.rate_key
+			WHERE fr2.fetched_at < latest.latest_at
+			GROUP BY fr2.rate_key
+		) p ON fr.rate_key = p.rate_key AND fr.fetched_at = p.prev_at
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]float64)
+	for rows.Next() {
+		var key string
+		var v float64
+		if err := rows.Scan(&key, &v); err != nil {
+			return nil, err
+		}
+		out[key] = v
+	}
+	return out, rows.Err()
+}
+
+// GetForexPerKeyAtOrBefore returns, for each rate_key, the value from the most recent
+// snapshot with fetched_at <= t. Used to compare current rates to a past baseline (e.g. 24h ago).
+func (d *Database) GetForexPerKeyAtOrBefore(t time.Time) (map[string]float64, error) {
+	rows, err := d.db.Query(`
+		SELECT fr.rate_key, fr.value
+		FROM forex_rates fr
+		INNER JOIN (
+			SELECT rate_key, MAX(fetched_at) AS mx
+			FROM forex_rates
+			WHERE fetched_at <= ?
+			GROUP BY rate_key
+		) x ON fr.rate_key = x.rate_key AND fr.fetched_at = x.mx
+	`, t)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]float64)
+	for rows.Next() {
+		var key string
+		var v float64
+		if err := rows.Scan(&key, &v); err != nil {
+			return nil, err
+		}
+		out[key] = v
+	}
+	return out, rows.Err()
+}
+
 func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 	// We want the latest price for each symbol that was fetched in the last "batch"
 	// For simplicity, we just fetch the last 10 entries ordered by fetched_at desc
