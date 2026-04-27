@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"botIAask/ai"
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
@@ -72,7 +73,13 @@ type Server struct {
 	weatherKey    string
 	weatherClient *http.Client
 
-	rehashFn func() error
+	aiClient *ai.Client
+	// rehashExt runs the same full apply as IRC/SIGHUP; fromWeb is true for any HTTP-originated reload
+	// so listener stop/rebind can be deferred and avoid deadlock with the active request.
+	rehashExt func(source string, fromWeb bool) error
+
+	httpSvr   *http.Server
+	httpSvrMu sync.Mutex
 }
 
 type marketChartRawCacheEntry struct {
@@ -121,7 +128,7 @@ func (s *Server) SetConfig(cfg *config.Config) {
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, rehashFn func() error) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, aiClient *ai.Client, rehashExt func(source string, fromWeb bool) error) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -146,16 +153,17 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		uploadsDB:    uploadsDB,
 		cryptoDB:     cryptoDB,
 		progtodoDB:   progtodoDB,
+		aiClient:     aiClient,
 		templates:    tmpl,
-		rehashFn:     rehashFn,
+		rehashExt:    rehashExt,
 		weatherClient: &http.Client{
 			Timeout: 22 * time.Second,
 		},
 	}
 }
 
-// Start starts the web server
-func (s *Server) Start() error {
+// newServeMux builds the HTTP route table (reused on hot rebind after Shutdown).
+func (s *Server) newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// API endpoints
@@ -200,6 +208,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/programmer-todos", s.handleProgrammerTodos)
 	mux.HandleFunc("/api/weather", s.handleWeather)
 	mux.HandleFunc("/api/weather/settings", s.handleWeatherSettings)
+	mux.HandleFunc("/api/logger/settings", s.handleLoggerSettings)
+	mux.HandleFunc("/api/ai/settings", s.handleAISettings)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -212,20 +222,50 @@ func (s *Server) Start() error {
 
 	// Dashboard page
 	mux.HandleFunc("/", s.handleDashboard)
+	return mux
+}
 
+// Start runs the web listener in a goroutine. It is a no-op if already listening.
+func (s *Server) Start() error {
+	s.httpSvrMu.Lock()
+	if s.httpSvr != nil {
+		s.httpSvrMu.Unlock()
+		return nil
+	}
 	cfg := s.getConfig()
 	addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
+	mux := s.newServeMux()
+	srv := &http.Server{Addr: addr, Handler: mux}
+	s.httpSvr = srv
+	s.httpSvrMu.Unlock()
+
 	log.Printf("Starting web dashboard on http://%s", addr)
 	fmt.Printf("\n--------------------------------------------------\n")
 	fmt.Printf("🚀 Web Dashboard: http://%s\n", addr)
 	fmt.Printf("--------------------------------------------------\n\n")
 
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("web server: %v", err)
+		}
+	}()
+	return nil
+}
 
-	return server.ListenAndServe()
+// Stop gracefully shuts down the HTTP server. No-op if not listening. Safe to call multiple times.
+func (s *Server) Stop(ctx context.Context) error {
+	s.httpSvrMu.Lock()
+	srv := s.httpSvr
+	s.httpSvr = nil
+	s.httpSvrMu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	if err := srv.Shutdown(ctx); err != nil {
+		_ = srv.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +294,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		weatherMin = 1
 	}
 	status := map[string]interface{}{
-		"version":                  meta.Version,
+		"version":                 meta.Version,
 		"uptime":                  s.bot.GetUptime(),
 		"connected":               s.bot.IsConnected(),
 		"server":                  s.getConfig().IRC.Server,
@@ -407,6 +447,199 @@ func (s *Server) handleWeatherSettings(w http.ResponseWriter, r *http.Request) {
 		s.clearWeatherCache()
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+const (
+	loggerSettingsMin = 0
+	loggerSettingsMax = 3650
+)
+
+func loggerRetentionToDays(value int, unit string) (int, error) {
+	if value < 0 {
+		return 0, fmt.Errorf("retention value must be non-negative")
+	}
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "", "days":
+		if value > loggerSettingsMax {
+			return 0, fmt.Errorf("rotation_days must be between %d and %d", loggerSettingsMin, loggerSettingsMax)
+		}
+		return value, nil
+	case "months":
+		d := value * 30
+		if d > loggerSettingsMax {
+			return 0, fmt.Errorf("retention exceeds %d days", loggerSettingsMax)
+		}
+		return d, nil
+	case "years":
+		d := value * 365
+		if d > loggerSettingsMax {
+			return 0, fmt.Errorf("retention exceeds %d days", loggerSettingsMax)
+		}
+		return d, nil
+	default:
+		return 0, fmt.Errorf("retention_unit must be days, months, or years")
+	}
+}
+
+func (s *Server) handleLoggerSettings(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		d := s.getConfig().Logger.RotationDays
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int{"rotation_days": d})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			RotationDays   *int   `json:"rotation_days"`
+			RetentionValue *int   `json:"retention_value"`
+			RetentionUnit  string `json:"retention_unit"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		var days int
+		var err error
+		if req.RetentionValue != nil {
+			unit := req.RetentionUnit
+			if unit == "" {
+				unit = "days"
+			}
+			days, err = loggerRetentionToDays(*req.RetentionValue, unit)
+		} else if req.RotationDays != nil {
+			days = *req.RotationDays
+			if days < loggerSettingsMin || days > loggerSettingsMax {
+				err = fmt.Errorf("rotation_days must be between %d and %d", loggerSettingsMin, loggerSettingsMax)
+			}
+		} else {
+			http.Error(w, "rotation_days or retention_value required", http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		s.cfgMu.Lock()
+		s.cfg.Logger.RotationDays = days
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		logger.SetRotationDays(days)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "rotation_days": days})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+const (
+	aiEndpointMaxLen = 2048
+	aiModelMaxLen    = 512
+)
+
+func validateLMStudioURL(raw string) (string, error) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return "", fmt.Errorf("lm_studio_url is required")
+	}
+	if len(u) > aiEndpointMaxLen {
+		return "", fmt.Errorf("lm_studio_url exceeds %d characters", aiEndpointMaxLen)
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return "", fmt.Errorf("invalid lm_studio_url")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("lm_studio_url must use http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("lm_studio_url must include a host")
+	}
+	return u, nil
+}
+
+func validateAIModel(raw string) (string, error) {
+	m := strings.TrimSpace(raw)
+	if m == "" {
+		return "", fmt.Errorf("model is required")
+	}
+	if len(m) > aiModelMaxLen {
+		return "", fmt.Errorf("model exceeds %d characters", aiModelMaxLen)
+	}
+	return m, nil
+}
+
+func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.checkAuth(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		cfg := s.getConfig()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"lm_studio_url": cfg.AI.LMStudioURL,
+			"model":         cfg.AI.Model,
+		})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			LMStudioURL string `json:"lm_studio_url"`
+			Model       string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		baseURL, err := validateLMStudioURL(req.LMStudioURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		model, err := validateAIModel(req.Model)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		s.cfgMu.Lock()
+		s.cfg.AI.LMStudioURL = baseURL
+		s.cfg.AI.Model = model
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if s.aiClient != nil {
+			s.aiClient.UpdateConfig(baseURL, model)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"lm_studio_url": baseURL,
+			"model":         model,
+		})
 		return
 	}
 
@@ -699,11 +932,11 @@ func (s *Server) handleRehash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.rehashFn == nil {
+	if s.rehashExt == nil {
 		http.Error(w, "Rehash unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.rehashFn(); err != nil {
+	if err := s.rehashExt("web admin", true); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -711,30 +944,12 @@ func (s *Server) handleRehash(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-// applyConfigFromFile reloads config from disk and applies it to IRC, RSS, and stats (no AI update, no IRC admin NOTICE). Mirrors main rehash except notifications.
-func (s *Server) applyConfigFromFile(path string) error {
-	newCfg, err := config.LoadConfig(path)
-	if err != nil {
-		return err
+// runFullRehashFromWeb applies the same reload as !rehash / SIGHUP (AI, diff NOTICE, web hot, etc.).
+func (s *Server) runFullRehashFromWeb(source string) error {
+	if s.rehashExt == nil {
+		return fmt.Errorf("rehash not configured")
 	}
-	s.SetConfig(newCfg)
-	if s.bot != nil {
-		s.bot.ApplyLiveConfig(newCfg)
-	}
-	if s.rssFetcher != nil {
-		s.rssFetcher.ApplyConfig(newCfg)
-	}
-	if s.statsTracker != nil {
-		s.statsTracker.ApplyConfig(newCfg)
-	}
-	if s.rssFetcher != nil {
-		if db := s.rssFetcher.GetDB(); db != nil {
-			if err := db.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
-				log.Printf("RSS: repair source column (web): %v", err)
-			}
-		}
-	}
-	return nil
+	return s.rehashExt(source, true)
 }
 
 func ircWebChannelNameOK(s string) bool {
@@ -743,10 +958,10 @@ func ircWebChannelNameOK(s string) bool {
 }
 
 type ircChannelRow struct {
-	Name         string `json:"name"`
-	HasPassword  bool   `json:"has_password"`
-	AnnounceRSS  bool   `json:"announce_rss"`
-	AutoJoin     bool   `json:"auto_join"`
+	Name        string `json:"name"`
+	HasPassword bool   `json:"has_password"`
+	AnnounceRSS bool   `json:"announce_rss"`
+	AutoJoin    bool   `json:"auto_join"`
 }
 
 type ircSessionRow struct {
@@ -796,7 +1011,7 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Unlock()
-		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+		if err := s.runFullRehashFromWeb("web (config irc-admins)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -832,7 +1047,7 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Unlock()
-		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+		if err := s.runFullRehashFromWeb("web (config irc-admins)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -855,10 +1070,10 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 		rows := make([]ircChannelRow, 0, len(cfg.IRC.Channels))
 		for _, ch := range cfg.IRC.Channels {
 			rows = append(rows, ircChannelRow{
-				Name:         ch.Name,
-				HasPassword:  ch.Password != "",
-				AnnounceRSS:  config.RSSChannelContainsFold(cfg.RSS.Channels, ch.Name),
-				AutoJoin:     ch.AutoJoinEnabled(),
+				Name:        ch.Name,
+				HasPassword: ch.Password != "",
+				AnnounceRSS: config.RSSChannelContainsFold(cfg.RSS.Channels, ch.Name),
+				AutoJoin:    ch.AutoJoinEnabled(),
 			})
 		}
 		sessRows := make([]ircSessionRow, 0)
@@ -874,10 +1089,10 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
-			Name         string `json:"name"`
-			Password     string `json:"password"`
-			AutoJoin     *bool  `json:"auto_join"`
-			SessionOnly  bool   `json:"session_only"`
+			Name        string `json:"name"`
+			Password    string `json:"password"`
+			AutoJoin    *bool  `json:"auto_join"`
+			SessionOnly bool   `json:"session_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
@@ -921,7 +1136,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Unlock()
-		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+		if err := s.runFullRehashFromWeb("web (irc channels add)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -960,7 +1175,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Unlock()
-		if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+		if err := s.runFullRehashFromWeb("web (irc channels remove)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1100,7 +1315,7 @@ func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.cfgMu.Unlock()
-	if err := s.applyConfigFromFile(config.DefaultConfigPath); err != nil {
+	if err := s.runFullRehashFromWeb("web (irc autoin)"); err != nil {
 		http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2187,6 +2402,22 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	}
 	data["forex"] = forexOut
 	data["forex_last_update"] = s.forexUpdate.Format(time.RFC3339)
+
+	// % change vs previous stored snapshot (second-latest row per key), not 24h — matches "last fetch" up/down.
+	forexChange := map[string]float64{}
+	if s.cryptoDB != nil && len(forexOut) > 0 {
+		baseline, err := s.cryptoDB.GetForexPerKeySecondLatest()
+		if err == nil {
+			for k, current := range forexOut {
+				old, ok := baseline[k]
+				if !ok || old == 0 {
+					continue
+				}
+				forexChange[k] = (current - old) / old * 100
+			}
+		}
+	}
+	data["forex_change_24h"] = forexChange
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)

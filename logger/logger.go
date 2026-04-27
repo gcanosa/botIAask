@@ -13,6 +13,10 @@ import (
 var (
 	logsDir = "logs"
 	mu      sync.Mutex
+
+	rotationMu   sync.RWMutex
+	rotationDays int
+	rotatorOnce  sync.Once
 )
 
 // LogEvent represents an enumeration of different types of IRC events
@@ -93,19 +97,44 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 	f.WriteString(logLine)
 }
 
-// StartLogRotator runs in the background and rotates logs periodically.
-func StartLogRotator(rotationDays int) {
-	if rotationDays <= 0 {
+// SetRotationDays updates how far back daily .log files are kept before archival.
+// Values <= 0 disable rotation (existing files are not touched by the rotator).
+func SetRotationDays(days int) {
+	rotationMu.Lock()
+	rotationDays = days
+	rotationMu.Unlock()
+}
+
+func rotationDaysSnapshot() int {
+	rotationMu.RLock()
+	defer rotationMu.RUnlock()
+	return rotationDays
+}
+
+// StartLogRotator starts a single background loop (once per process) that reads
+// the current retention with SetRotationDays / config reloads.
+func StartLogRotator(initial int) {
+	SetRotationDays(initial)
+	rotatorOnce.Do(func() {
+		go logRotatorLoop()
+	})
+}
+
+func logRotatorLoop() {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	runRotationIfEnabled()
+	for range ticker.C {
+		runRotationIfEnabled()
+	}
+}
+
+func runRotationIfEnabled() {
+	d := rotationDaysSnapshot()
+	if d <= 0 {
 		return
 	}
-
-	ticker := time.NewTicker(24 * time.Hour)
-	go func() {
-		rotateLogs(rotationDays) // run once initially
-		for range ticker.C {
-			rotateLogs(rotationDays)
-		}
-	}()
+	rotateLogs(d)
 }
 
 func rotateLogs(days int) {

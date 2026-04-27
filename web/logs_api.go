@@ -23,10 +23,10 @@ const (
 )
 
 type logCalendarMeta struct {
-	MinDate       string `json:"min_date"`
-	MaxDate       string `json:"max_date"`
-	RotationDays  int    `json:"rotation_days"`
-	LocalToday    string `json:"server_local_today"`
+	MinDate      string `json:"min_date"`
+	MaxDate      string `json:"max_date"`
+	RotationDays int    `json:"rotation_days"`
+	LocalToday   string `json:"server_local_today"`
 }
 
 type logChannelEntry struct {
@@ -76,7 +76,8 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	localToday := now.Format("2006-01-02")
 	maxDate := localToday
-	rotationDays := s.cfg.Logger.RotationDays
+	cfg := s.getConfig()
+	rotationDays := cfg.Logger.RotationDays
 
 	var minDate string
 	if rotationDays > 0 {
@@ -138,8 +139,8 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	joinedByKey := make(map[string]string)
-	for _, ch := range s.cfg.IRC.Channels {
-		k := logger.ChannelFileKey(ch.Name, s.cfg.IRC.Server)
+	for _, ch := range cfg.IRC.Channels {
+		k := logger.ChannelFileKey(ch.Name, cfg.IRC.Server)
 		joinedByKey[k] = ch.Name
 	}
 
@@ -192,10 +193,10 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type logHistoryResponse struct {
-	Lines   []string `json:"lines"`
-	Truncated bool   `json:"truncated"`
-	Date    string   `json:"date"`
-	Archived bool    `json:"archived"`
+	Lines     []string `json:"lines"`
+	Truncated bool     `json:"truncated"`
+	Date      string   `json:"date"`
+	Archived  bool     `json:"archived"`
 }
 
 func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +217,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := logger.ChannelFileKey(channel, s.cfg.IRC.Server)
+	key := logger.ChannelFileKey(channel, s.getConfig().IRC.Server)
 	activePath := filepath.Join(logsDir, fmt.Sprintf("%s_%s.log", key, date))
 	archivePath := filepath.Join(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
 

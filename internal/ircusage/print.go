@@ -62,7 +62,7 @@ var adminLines = []line{
 	{cmd: "!voice [nick]", desc: "Give voice to self or nick (in channel)"},
 	{cmd: "!devoice [nick]", desc: "Remove voice (in channel)"},
 	{cmd: "!ticket ...", desc: "pending | approve <ID> | cancel <ID>"},
-	{cmd: "!rehash", desc: "Reload config from disk (notifies other admins)"},
+	{cmd: "!rehash", desc: "Reload config from disk (sends each logged-in admin NOTICEs with a change summary)"},
 	{cmd: "!quit [reason]", desc: "Disconnect (default message from irc.quit_message or app meta)"},
 }
 

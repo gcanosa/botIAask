@@ -369,6 +369,14 @@ func (b *Bot) Broadcast(channels []string, message string) {
 	}
 }
 
+// GetConfig returns the live in-memory config (read-only; do not mutate).
+// For a snapshot before rehash, use config.CloneConfig(b.GetConfig()).
+func (b *Bot) GetConfig() *config.Config {
+	b.membersMu.RLock()
+	defer b.membersMu.RUnlock()
+	return b.cfg
+}
+
 // IsAdmin checks if a given hostmask or account matches the admin list.
 func (b *Bot) IsAdmin(fullHostmask string) bool {
 	b.membersMu.RLock()
@@ -1793,6 +1801,27 @@ func (b *Bot) NotifyLoggedInAdminsNotice(message string) {
 	msg := b.sanitize(message)
 	for _, nick := range nicks {
 		b.sendNotice(nick, msg)
+	}
+}
+
+// NotifyLoggedInAdminsRehashSummary sends a header NOTICE plus one NOTICE per diff line, splitting
+// long lines to stay under ircTextBudget. Only reaches logged-in !admin users (no hostmask-based NOTICE).
+func (b *Bot) NotifyLoggedInAdminsRehashSummary(source, timeRFC3339 string, diffLines []string) {
+	if b.conn == nil || !b.IsConnected() {
+		return
+	}
+	b.NotifyLoggedInAdminsNotice(fmt.Sprintf("Config rehash (%s) at %s", b.sanitize(source), timeRFC3339))
+	for _, d := range diffLines {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		for _, chunk := range splitUTF8ByByteBudget(d, ircTextBudget) {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			b.NotifyLoggedInAdminsNotice(chunk)
+		}
 	}
 }
 

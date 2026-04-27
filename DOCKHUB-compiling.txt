@@ -1,0 +1,25 @@
+Usage (for the README or script headers)
+
+Build (same idea as docker compose build / local image):
+
+# Default: tag botiaask:local (matches compose when IMAGE is unset)
+./scripts/podman-build.sh
+
+# Hub-style local tag before pushing
+IMAGE=berkelioar/botiaask:local ./scripts/podman-build.sh
+
+Push latest to Docker Hub:
+
+podman login docker.io
+# after building berkelioar/botiaask:local
+./scripts/push-latest.sh
+
+Push a new version tag:
+
+./scripts/push-version.sh 0.3.4
+
+End-to-end release (example):
+
+IMAGE=berkelioar/botiaask:local ./scripts/podman-build.sh
+./scripts/push-latest.sh
+./scripts/push-version.sh 0.3.4

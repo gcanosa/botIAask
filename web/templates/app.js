@@ -365,6 +365,8 @@ function showPanel(panelId) {
         fetchIRCAutojoin();
         fetchIRCConfigAdmins();
         fetchWeatherSettings();
+        fetchLoggerSettings();
+        fetchAISettings();
     }
     if (panelId === 'dashboard') {
          if (!activityChart) initChart();
@@ -617,6 +619,8 @@ function updateAdminView(isAdmin) {
             fetchIRCAutojoin();
             fetchIRCConfigAdmins();
             fetchWeatherSettings();
+            fetchLoggerSettings();
+            fetchAISettings();
         }
     } else {
         adminNav.classList.add('hidden');
@@ -1166,6 +1170,7 @@ async function fetchFinance() {
 
         if (forexDiv) {
             const fx = normalizeForexObject(data.forex);
+            const chg24 = normalizeForexObject(data.forex_change_24h);
             const entries = sortForexEntries(Object.entries(fx));
             if (entries.length) {
                 forexDiv.innerHTML = entries.map(([k, v]) => {
@@ -1174,6 +1179,12 @@ async function fetchFinance() {
                         ? m.flags.map((f) => `<span class="fi fi-${f} fis finance-flag" aria-hidden="true"></span>`).join('')
                         : '';
                     const hint = m.hint ? `<span class="finance-hint">${financeEscapeHtml(m.hint)}</span>` : '';
+                    const chg = Number(chg24[k]);
+                    const hasChg = Number.isFinite(chg);
+                    const up = chg >= 0;
+                    const pill = hasChg
+                        ? `<span class="finance-change-pill mono ${up ? 'price-up' : 'price-down'}">${up ? '▲' : '▼'} ${Math.abs(chg).toFixed(1)}%</span>`
+                        : '';
                     return `
                 <div class="finance-row finance-row-forex">
                     <div class="finance-row-left">
@@ -1183,7 +1194,10 @@ async function fetchFinance() {
                             ${hint}
                         </div>
                     </div>
-                    <span class="finance-price mono">$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <div class="finance-row-right">
+                        <span class="finance-price mono">$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        ${pill}
+                    </div>
                 </div>`;
                 }).join('');
             } else {
@@ -3345,6 +3359,145 @@ async function fetchWeatherSettings() {
     }
 }
 
+function rotationDaysToDisplay(d) {
+    const n = Number(d);
+    if (!Number.isFinite(n) || n < 0) return { value: 0, unit: 'days' };
+    if (n === 0) return { value: 0, unit: 'days' };
+    if (n % 365 === 0) return { value: n / 365, unit: 'years' };
+    if (n % 30 === 0) return { value: n / 30, unit: 'months' };
+    return { value: n, unit: 'days' };
+}
+
+function displayToRotationDays(value, unit) {
+    const v = parseInt(String(value), 10);
+    if (!Number.isFinite(v) || v < 0) return NaN;
+    const days = unit === 'years' ? v * 365 : unit === 'months' ? v * 30 : v;
+    if (days > 3650) return NaN;
+    return days;
+}
+
+async function fetchLoggerSettings() {
+    if (!lastIsAdmin) return;
+    try {
+        const res = await fetch('/api/logger/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.rotation_days == null) return;
+        const disp = rotationDaysToDisplay(data.rotation_days);
+        const valEl = document.getElementById('logger-retention-value');
+        const unitEl = document.getElementById('logger-retention-unit');
+        if (valEl) valEl.value = disp.value;
+        if (unitEl) unitEl.value = disp.unit;
+    } catch (e) {
+        console.error('logger settings', e);
+    }
+}
+
+async function saveLoggerSettings() {
+    const status = document.getElementById('logger-settings-status');
+    if (status) {
+        status.textContent = 'Saving...';
+        status.style.color = 'var(--text-muted)';
+    }
+    const valEl = document.getElementById('logger-retention-value');
+    const unitEl = document.getElementById('logger-retention-unit');
+    const unit = unitEl ? unitEl.value : 'days';
+    const days = displayToRotationDays(valEl ? valEl.value : '', unit);
+    if (!Number.isFinite(days)) {
+        if (status) {
+            status.textContent = 'Use a non-negative amount; total must not exceed 3650 days.';
+            status.style.color = 'var(--error)';
+        }
+        return;
+    }
+    try {
+        const res = await fetch('/api/logger/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rotation_days: days })
+        });
+        if (res.ok) {
+            if (status) {
+                status.textContent = 'Saved.';
+                status.style.color = 'var(--success)';
+                setTimeout(() => { status.textContent = ''; }, 3000);
+            }
+            await fetchLogCatalog();
+        } else {
+            const t = await res.text();
+            if (status) {
+                status.textContent = t || 'Save failed';
+                status.style.color = 'var(--error)';
+            }
+        }
+    } catch (e) {
+        if (status) {
+            status.textContent = 'Error: ' + e.message;
+            status.style.color = 'var(--error)';
+        }
+    }
+}
+
+async function fetchAISettings() {
+    if (!lastIsAdmin) return;
+    try {
+        const res = await fetch('/api/ai/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const urlEl = document.getElementById('ai-lm-studio-url');
+        const modelEl = document.getElementById('ai-model');
+        if (urlEl && data.lm_studio_url != null) urlEl.value = data.lm_studio_url;
+        if (modelEl && data.model != null) modelEl.value = data.model;
+    } catch (e) {
+        console.error('ai settings', e);
+    }
+}
+
+async function saveAISettings() {
+    const status = document.getElementById('ai-settings-status');
+    if (status) {
+        status.textContent = 'Saving...';
+        status.style.color = 'var(--text-muted)';
+    }
+    const urlEl = document.getElementById('ai-lm-studio-url');
+    const modelEl = document.getElementById('ai-model');
+    const lmStudioURL = urlEl ? String(urlEl.value).trim() : '';
+    const model = modelEl ? String(modelEl.value).trim() : '';
+    if (!lmStudioURL || !model) {
+        if (status) {
+            status.textContent = 'API URL and model are required.';
+            status.style.color = 'var(--error)';
+        }
+        return;
+    }
+    try {
+        const res = await fetch('/api/ai/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lm_studio_url: lmStudioURL, model })
+        });
+        if (res.ok) {
+            if (status) {
+                status.textContent = 'Saved.';
+                status.style.color = 'var(--success)';
+                setTimeout(() => { status.textContent = ''; }, 3000);
+            }
+            await fetchStatus();
+        } else {
+            const t = await res.text();
+            if (status) {
+                status.textContent = t || 'Save failed';
+                status.style.color = 'var(--error)';
+            }
+        }
+    } catch (e) {
+        if (status) {
+            status.textContent = 'Error: ' + e.message;
+            status.style.color = 'var(--error)';
+        }
+    }
+}
+
 async function saveWeatherSettings() {
     const status = document.getElementById('weather-settings-status');
     if (status) {
@@ -3489,3 +3642,5 @@ async function saveRSSSettings() {
 window.toggleRSSSettings = toggleRSSSettings;
 window.saveRSSSettings = saveRSSSettings;
 window.saveWeatherSettings = saveWeatherSettings;
+window.saveLoggerSettings = saveLoggerSettings;
+window.saveAISettings = saveAISettings;
