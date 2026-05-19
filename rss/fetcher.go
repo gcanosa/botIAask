@@ -241,7 +241,7 @@ func (f *Fetcher) Fetch() {
 		entry := newEntries[i]
 
 		// Shorten link and store it in entry
-		entry.ShortLink = ShortenURL(entry.Link)
+		entry.ShortLink = ShortenURLWithService(entry.Link, f.cfg.RSS.URLShortener)
 
 		// Mark as seen FIRST so we don't retry if broadcast fails for some reason
 		if err := f.db.MarkSeen(entry); err != nil {
@@ -299,7 +299,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			if dup {
 				continue
 			}
-			entry.ShortLink = ShortenURL(entry.Link)
+			entry.ShortLink = ShortenURLWithService(entry.Link, f.cfg.RSS.URLShortener)
 			if err := f.db.MarkSeen(entry); err != nil {
 				log.Printf("[RSS] Failed to save backfill entry: %v", err)
 				continue
@@ -311,30 +311,132 @@ func (f *Fetcher) Backfill(limit int) int {
 	return totalAdded
 }
 
-func ShortenURL(longURL string) string {
-	if longURL == "" {
-		return ""
-	}
+var shortenerServices = []struct {
+	name string
+	fn   func(string) (string, error)
+}{
+	{"is.gd", shortenWithIsGd},
+	{"tinyurl", shortenWithTinyURL},
+	{"v.gd", shortenWithVGd},
+}
 
+func shortenWithIsGd(longURL string) (string, error) {
 	apiURL := fmt.Sprintf("https://is.gd/create.php?format=simple&url=%s", url.QueryEscape(longURL))
-
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		log.Printf("[RSS] Error shortening URL: %v", err)
-		return longURL // Fallback to long URL
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[RSS] Shortener returned status: %s", resp.Status)
-		return longURL
+		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	shortURL, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[RSS] Error reading shortener response: %v", err)
-		return longURL
+		return "", err
 	}
 
-	return string(shortURL)
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "", fmt.Errorf("empty response")
+	}
+	return s, nil
+}
+
+func shortenWithTinyURL(longURL string) (string, error) {
+	apiURL := fmt.Sprintf("https://tinyurl.com/api/create.php?url=%s", url.QueryEscape(longURL))
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "", fmt.Errorf("empty response")
+	}
+	return s, nil
+}
+
+func shortenWithVGd(longURL string) (string, error) {
+	apiURL := fmt.Sprintf("https://v.gd/?url=%s", url.QueryEscape(longURL))
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "", fmt.Errorf("empty response")
+	}
+	return s, nil
+}
+
+// ShortenURL shortens a URL using the configured service with automatic fallback.
+func ShortenURL(longURL string) string {
+	return ShortenURLWithService(longURL, "")
+}
+
+// ShortenURLWithService shortens a URL using the specified service, with fallback chain.
+func ShortenURLWithService(longURL string, preferredService string) string {
+	if longURL == "" {
+		return ""
+	}
+
+	// Try preferred service first
+	if preferredService != "" {
+		for _, svc := range shortenerServices {
+			if svc.name == preferredService {
+				shortURL, err := svc.fn(longURL)
+				if err == nil {
+					log.Printf("[RSS] Shortened URL using %s", svc.name)
+					return shortURL
+				}
+				log.Printf("[RSS] Failed to shorten with %s: %v", svc.name, err)
+				break
+			}
+		}
+	}
+
+	// Fallback chain: try all services
+	for _, svc := range shortenerServices {
+		shortURL, err := svc.fn(longURL)
+		if err == nil {
+			log.Printf("[RSS] Shortened URL using %s", svc.name)
+			return shortURL
+		}
+		log.Printf("[RSS] Fallback %s failed: %v", svc.name, err)
+	}
+
+	log.Printf("[RSS] All shorteners failed, returning long URL")
+	return longURL
+}
+
+// AvailableShorteners returns the list of available URL shortener service names.
+func AvailableShorteners() []string {
+	services := make([]string, len(shortenerServices))
+	for i, svc := range shortenerServices {
+		services[i] = svc.name
+	}
+	return services
 }

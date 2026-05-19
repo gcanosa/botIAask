@@ -3590,12 +3590,22 @@ async function fetchRSSSettings() {
     try {
         const res = await fetch('/api/rss/settings');
         const data = await res.json();
-        
+
         document.getElementById('rss-interval').value = data.interval_minutes;
         document.getElementById('rss-retention').value = data.retention_count;
         document.getElementById('rss-urls').value = (data.feed_urls || []).join('\n');
         const announce = document.getElementById('rss-announce-irc');
         if (announce) announce.checked = !!data.announce_to_irc;
+
+        // Populate URL shortener dropdown
+        const shortenerSelect = document.getElementById('rss-url-shortener');
+        const availableShorteners = data.available_shorteners || [];
+        const currentShortener = data.url_shortener || '';
+
+        shortenerSelect.innerHTML = availableShorteners.map(s =>
+            `<option value="${s}" ${s === currentShortener ? 'selected' : ''}>${s || 'default (is.gd)'}</option>`
+        ).join('');
+
         renderRssFeedStatusList(data.feed_status);
     } catch (e) { console.error("Failed to fetch RSS settings", e); }
 }
@@ -3610,6 +3620,7 @@ async function saveRSSSettings() {
     const urls = document.getElementById('rss-urls').value.split('\n').map(u => u.trim()).filter(u => u !== '');
     const announceEl = document.getElementById('rss-announce-irc');
     const announce_to_irc = announceEl ? announceEl.checked : true;
+    const urlShortener = document.getElementById('rss-url-shortener').value;
 
     try {
         const res = await fetch('/api/rss/settings', {
@@ -3619,7 +3630,8 @@ async function saveRSSSettings() {
                 interval_minutes: interval,
                 retention_count: retention,
                 feed_urls: urls,
-                announce_to_irc
+                announce_to_irc,
+                url_shortener: urlShortener
             })
         });
 

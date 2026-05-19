@@ -157,6 +157,8 @@ type RSSConfig struct {
 	FeedURLs        []string `yaml:"feed_urls"`
 	// AnnounceToIRC: nil means true (see applyRSSDefaults). When false, feeds are still fetched and the DB updated, but nothing is posted to IRC.
 	AnnounceToIRC *bool `yaml:"announce_to_irc,omitempty"`
+	// URLShortener is the preferred URL shortener service (is.gd, tinyurl, v.gd). Defaults to is.gd with fallback chain.
+	URLShortener string `yaml:"url_shortener,omitempty"`
 }
 
 // AnnounceToIRCEnabled returns whether new RSS items should be broadcast to channels.
