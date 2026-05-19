@@ -55,6 +55,43 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+func TestAllShortenerServicesAvailable(t *testing.T) {
+	expected := []string{
+		"is.gd",
+		"tinyurl",
+		"v.gd",
+		"shorturl.at",
+		"clck.ru",
+		"turl.at",
+		"bc.vc",
+		"po.st",
+	}
+
+	shorteners := AvailableShorteners()
+	if len(shorteners) != len(expected) {
+		t.Errorf("Expected %d shorteners, got %d: %v", len(expected), len(shorteners), shorteners)
+	}
+
+	for _, exp := range expected {
+		if !contains(shorteners, exp) {
+			t.Errorf("Expected shortener %s not found in available list", exp)
+		}
+	}
+}
+
+func TestPreferredServiceSelection(t *testing.T) {
+	longURL := "https://example.com/very/long/url"
+
+	for _, service := range AvailableShorteners() {
+		result := ShortenURLWithService(longURL, service)
+		if result == longURL {
+			t.Logf("Service %s failed (all fallbacks exhausted)", service)
+		} else {
+			t.Logf("Service %s OK: %s", service, result)
+		}
+	}
+}
+
 func TestShortenersHaveValidNames(t *testing.T) {
 	services := []struct {
 		name string

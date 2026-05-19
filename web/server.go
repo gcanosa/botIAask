@@ -1439,10 +1439,14 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.cfgMu.Unlock()
 
-		// Restart fetcher if enabled and interval changed
-		if s.rssFetcher.IsEnabled() && oldInterval != req.IntervalMinutes {
-			s.rssFetcher.SetEnabled(false)
-			s.rssFetcher.SetEnabled(true)
+		// Always push the updated config into the fetcher so settings like
+		// URLShortener and AnnounceToIRC take effect immediately.
+		if oldInterval != req.IntervalMinutes {
+			// Interval change requires a full restart to reset the ticker.
+			s.rssFetcher.ApplyConfig(s.cfg)
+		} else {
+			// Non-structural change: swap config without restarting the loop.
+			s.rssFetcher.SetConfig(s.cfg)
 		}
 
 		// Always trigger cleanup if retention changed
