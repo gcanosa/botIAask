@@ -1389,10 +1389,12 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		response := map[string]interface{}{
-			"interval_minutes": s.getConfig().RSS.IntervalMinutes,
-			"retention_count":  s.getConfig().RSS.RetentionCount,
-			"feed_urls":        s.getConfig().RSS.FeedURLs,
-			"announce_to_irc":  s.getConfig().RSS.AnnounceToIRCEnabled(),
+			"interval_minutes":      s.getConfig().RSS.IntervalMinutes,
+			"retention_count":       s.getConfig().RSS.RetentionCount,
+			"feed_urls":             s.getConfig().RSS.FeedURLs,
+			"announce_to_irc":       s.getConfig().RSS.AnnounceToIRCEnabled(),
+			"url_shortener":         s.getConfig().RSS.URLShortener,
+			"available_shorteners":  rss.AvailableShorteners(),
 		}
 		if s.rssFetcher != nil {
 			response["feed_status"] = s.rssFetcher.FeedStatuses()
@@ -1410,6 +1412,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			RetentionCount  int      `json:"retention_count"`
 			FeedURLs        []string `json:"feed_urls"`
 			AnnounceToIRC   *bool    `json:"announce_to_irc,omitempty"`
+			URLShortener    string   `json:"url_shortener,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1425,6 +1428,9 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 		if req.AnnounceToIRC != nil {
 			v := *req.AnnounceToIRC
 			s.cfg.RSS.AnnounceToIRC = &v
+		}
+		if req.URLShortener != "" {
+			s.cfg.RSS.URLShortener = req.URLShortener
 		}
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
