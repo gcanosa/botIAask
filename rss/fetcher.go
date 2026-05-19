@@ -126,6 +126,14 @@ func (f *Fetcher) IsEnabled() bool {
 	return f.enabled
 }
 
+// SetConfig atomically replaces the live config without restarting the fetch loop.
+// Use this when only non-structural settings change (e.g. URL shortener, announce flag).
+func (f *Fetcher) SetConfig(cfg *config.Config) {
+	f.mu.Lock()
+	f.cfg = cfg
+	f.mu.Unlock()
+}
+
 // ApplyConfig swaps in a new root config and restarts the fetch loop when RSS.Enabled or the ticker interval must change.
 func (f *Fetcher) ApplyConfig(cfg *config.Config) {
 	f.mu.Lock()
@@ -318,78 +326,74 @@ var shortenerServices = []struct {
 	{"is.gd", shortenWithIsGd},
 	{"tinyurl", shortenWithTinyURL},
 	{"v.gd", shortenWithVGd},
+	{"shorturl.at", shortenWithShortUrlAt},
+	{"clck.ru", shortenWithClckRu},
+	{"turl.at", shortenWithTurlAt},
+	{"bc.vc", shortenWithBcVc},
+	{"po.st", shortenWithPost},
+}
+
+// parseShortURL reads a plain-text shortener response and validates it looks like a URL.
+func parseShortURL(body []byte) (string, error) {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "", fmt.Errorf("empty response")
+	}
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return "", fmt.Errorf("response is not a URL: %.80s", s)
+	}
+	return s, nil
+}
+
+// doShorten performs a GET to apiURL and returns the plain-text short URL.
+func doShorten(apiURL string) (string, error) {
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return parseShortURL(body)
 }
 
 func shortenWithIsGd(longURL string) (string, error) {
-	apiURL := fmt.Sprintf("https://is.gd/create.php?format=simple&url=%s", url.QueryEscape(longURL))
-	resp, err := http.Get(apiURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	s := strings.TrimSpace(string(body))
-	if s == "" {
-		return "", fmt.Errorf("empty response")
-	}
-	return s, nil
+	return doShorten(fmt.Sprintf("https://is.gd/create.php?format=simple&url=%s", url.QueryEscape(longURL)))
 }
 
 func shortenWithTinyURL(longURL string) (string, error) {
-	apiURL := fmt.Sprintf("https://tinyurl.com/api/create.php?url=%s", url.QueryEscape(longURL))
-	resp, err := http.Get(apiURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	s := strings.TrimSpace(string(body))
-	if s == "" {
-		return "", fmt.Errorf("empty response")
-	}
-	return s, nil
+	return doShorten(fmt.Sprintf("https://tinyurl.com/api/create.php?url=%s", url.QueryEscape(longURL)))
 }
 
 func shortenWithVGd(longURL string) (string, error) {
-	apiURL := fmt.Sprintf("https://v.gd/?url=%s", url.QueryEscape(longURL))
-	resp, err := http.Get(apiURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+	return doShorten(fmt.Sprintf("https://v.gd/?url=%s", url.QueryEscape(longURL)))
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
-	}
+func shortenWithShortUrlAt(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://shorturl.at/api/links/shorten?url=%s", url.QueryEscape(longURL)))
+}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
+func shortenWithClckRu(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://clck.ru/--?url=%s", url.QueryEscape(longURL)))
+}
 
-	s := strings.TrimSpace(string(body))
-	if s == "" {
-		return "", fmt.Errorf("empty response")
-	}
-	return s, nil
+func shortenWithTurlAt(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://turl.at/new?url=%s", url.QueryEscape(longURL)))
+}
+
+func shortenWithBcVc(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://bc.vc/shorten?url=%s", url.QueryEscape(longURL)))
+}
+
+func shortenWithPost(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://po.st/shorten?url=%s", url.QueryEscape(longURL)))
 }
 
 // ShortenURL shortens a URL using the configured service with automatic fallback.
