@@ -170,6 +170,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// API endpoints
+	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/logs/catalog", s.handleLogCatalog)
 	mux.HandleFunc("/api/logs/history", s.handleLogHistory)
@@ -269,6 +270,40 @@ func (s *Server) Stop(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// handleHealth returns a simple health check response for load balancers and monitoring.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := map[string]interface{}{
+		"status": "healthy",
+		"version": meta.Version,
+		"uptime_seconds": int(time.Since(s.bot.GetStartTime()).Seconds()),
+	}
+
+	// Check database connectivity
+	if s.cryptoDB != nil {
+		if prices, err := s.cryptoDB.GetLatestPrices(); err == nil && len(prices) > 0 {
+			status["db_status"] = "ok"
+		} else {
+			status["db_status"] = "degraded"
+		}
+	}
+
+	// Check IRC connection
+	if !s.bot.IsConnected() {
+		status["status"] = "degraded"
+		status["irc_connected"] = false
+	} else {
+		status["irc_connected"] = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
