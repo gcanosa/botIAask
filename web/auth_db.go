@@ -48,15 +48,23 @@ func NewAuthDatabase(dbPath string) (*AuthDatabase, error) {
 			expires_at DATETIME NOT NULL,
 			FOREIGN KEY(user_id) REFERENCES web_users(id)
 		);
+		CREATE TABLE IF NOT EXISTS csrf_tokens (
+			token TEXT PRIMARY KEY,
+			session_token TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			UNIQUE(session_token)
+		);
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create auth tables: %w", err)
 	}
 
-	// Migration: Add needs_password_change if it doesn't exist
+	// Migrations
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN needs_password_change INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN ui_theme TEXT DEFAULT 'dark'")
 	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN last_login_at DATETIME")
+	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS csrf_tokens (token TEXT PRIMARY KEY, session_token TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, UNIQUE(session_token))")
 
 	return &AuthDatabase{db: db}, nil
 }
@@ -289,6 +297,46 @@ func (a *AuthDatabase) GetUITheme(userID int) (string, error) {
 // SetUITheme persists UI theme (caller validates allowed values).
 func (a *AuthDatabase) SetUITheme(userID int, theme string) error {
 	_, err := a.db.Exec("UPDATE web_users SET ui_theme = ? WHERE id = ?", theme, userID)
+	return err
+}
+
+// GenerateCSRFToken creates and stores a CSRF token for a session. Token expires in 1 hour.
+func (a *AuthDatabase) GenerateCSRFToken(sessionToken string) (string, error) {
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	expiresAt := time.Now().Add(1 * time.Hour)
+	_, err := a.db.Exec("INSERT OR REPLACE INTO csrf_tokens (token, session_token, expires_at) VALUES (?, ?, ?)", token, sessionToken, expiresAt)
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
+}
+
+// ValidateCSRFToken checks if the token is valid and matches the session.
+func (a *AuthDatabase) ValidateCSRFToken(token, sessionToken string) bool {
+	var dbToken string
+	var expiresAt time.Time
+	err := a.db.QueryRow("SELECT token, expires_at FROM csrf_tokens WHERE token = ? AND session_token = ?", token, sessionToken).Scan(&dbToken, &expiresAt)
+	if err != nil {
+		return false
+	}
+
+	if time.Now().After(expiresAt) {
+		a.db.Exec("DELETE FROM csrf_tokens WHERE token = ?", token)
+		return false
+	}
+
+	return true
+}
+
+// DeleteCSRFToken removes a CSRF token (call after use to prevent replay).
+func (a *AuthDatabase) DeleteCSRFToken(token string) error {
+	_, err := a.db.Exec("DELETE FROM csrf_tokens WHERE token = ?", token)
 	return err
 }
 

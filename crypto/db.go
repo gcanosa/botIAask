@@ -54,6 +54,22 @@ func NewDatabase(dbPath string) (*Database, error) {
 	}
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_forex_rates_fetched_at ON forex_rates(fetched_at)`)
 
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS crypto_market_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			gecko_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			price_usd REAL NOT NULL,
+			timestamp_ms INTEGER NOT NULL,
+			fetched_at DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate crypto_market_history: %w", err)
+	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_gecko_id ON crypto_market_history(gecko_id)`)
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_timestamp ON crypto_market_history(timestamp_ms)`)
+
 	return &Database{db: db}, nil
 }
 
@@ -280,6 +296,65 @@ func (d *Database) GetForexHistorySince(since time.Time) ([]ForexHistoryRow, err
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SaveMarketHistory stores historical price points for a coin.
+func (d *Database) SaveMarketHistory(geckoID, symbol string, points [][2]float64) error {
+	if len(points) == 0 {
+		return nil
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT INTO crypto_market_history (gecko_id, symbol, price_usd, timestamp_ms, fetched_at) VALUES (?, ?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	now := time.Now()
+	for _, p := range points {
+		// p[0] = timestamp (ms), p[1] = price
+		if _, err := stmt.Exec(geckoID, symbol, p[1], int64(p[0]), now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetMarketHistoryForCoin returns price history for a gecko_id within a time range.
+func (d *Database) GetMarketHistoryForCoin(geckoID string, since time.Time) ([][2]float64, error) {
+	sinceMs := since.UnixMilli()
+	rows, err := d.db.Query(`
+		SELECT timestamp_ms, price_usd FROM crypto_market_history
+		WHERE gecko_id = ? AND timestamp_ms >= ?
+		ORDER BY timestamp_ms ASC
+	`, geckoID, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result [][2]float64
+	for rows.Next() {
+		var tsMs int64
+		var price float64
+		if err := rows.Scan(&tsMs, &price); err != nil {
+			return nil, err
+		}
+		result = append(result, [2]float64{float64(tsMs), price})
+	}
+	return result, rows.Err()
+}
+
+// CleanupMarketHistory removes entries older than a specified time (retention policy).
+func (d *Database) CleanupMarketHistory(keepSince time.Time) error {
+	sinceMs := keepSince.UnixMilli()
+	_, err := d.db.Exec("DELETE FROM crypto_market_history WHERE timestamp_ms < ?", sinceMs)
+	return err
 }
 
 func (d *Database) Close() error {

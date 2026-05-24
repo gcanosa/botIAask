@@ -78,6 +78,8 @@ type Server struct {
 	// so listener stop/rebind can be deferred and avoid deadlock with the active request.
 	rehashExt func(source string, fromWeb bool) error
 
+	loginRateLimiter *LoginRateLimiter
+
 	httpSvr   *http.Server
 	httpSvrMu sync.Mutex
 }
@@ -156,6 +158,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		aiClient:     aiClient,
 		templates:    tmpl,
 		rehashExt:    rehashExt,
+		loginRateLimiter: NewLoginRateLimiter(15*time.Minute, 5),
 		weatherClient: &http.Client{
 			Timeout: 22 * time.Second,
 		},
@@ -1677,6 +1680,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientIP := GetClientIP(r)
+	if !s.loginRateLimiter.IsAllowed(clientIP) {
+		http.Error(w, "Too many login attempts. Please try again later.", http.StatusTooManyRequests)
+		return
+	}
+
 	var creds struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -1702,23 +1711,73 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	csrfToken, err := s.authDB.GenerateCSRFToken(token)
+	if err != nil {
+		log.Printf("csrf token generation: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	secure := true
+	if r.Header.Get("X-Forwarded-Proto") != "https" && !isLocalhost(r.Host) {
+		secure = false
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     "admin_session",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(24 * time.Hour),
 	})
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "needs_password_change": needsChange})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"needs_password_change": needsChange,
+		"csrf_token": csrfToken,
+	})
+}
+
+// isLocalhost checks if the host is localhost or 127.0.0.1
+func isLocalhost(host string) bool {
+	return strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "[::1]")
+}
+
+// validateCSRFAndGetSessionToken validates the CSRF token from request and returns the session token if valid.
+func (s *Server) validateCSRFAndGetSessionToken(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return "", false
+	}
+
+	var csrfToken string
+	if r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
+		csrfToken = r.Header.Get("X-CSRF-Token")
+		if csrfToken == "" {
+			csrfToken = r.FormValue("csrf_token")
+		}
+	}
+
+	if csrfToken != "" && !s.authDB.ValidateCSRFToken(csrfToken, cookie.Value) {
+		return "", false
+	}
+
+	return cookie.Value, true
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("admin_session")
 	if err == nil {
 		s.authDB.DeleteSession(cookie.Value)
+		s.authDB.DeleteCSRFToken(cookie.Value)
+	}
+
+	secure := true
+	if r.Header.Get("X-Forwarded-Proto") != "https" && !isLocalhost(r.Host) {
+		secure = false
 	}
 
 	http.SetCookie(w, &http.Cookie{
@@ -1726,6 +1785,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 
@@ -1963,6 +2024,38 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// isAllowedFileType validates file uploads to prevent dangerous file types.
+func isAllowedFileType(filename, contentType string) bool {
+	blockedExts := map[string]bool{
+		".exe": true, ".bat": true, ".cmd": true, ".com": true, ".scr": true,
+		".vbs": true, ".js": true, ".jar": true, ".app": true, ".deb": true, ".rpm": true,
+		".sh": true, ".bash": true, ".ps1": true, ".py": true, ".rb": true,
+	}
+
+	blockedMimes := map[string]bool{
+		"application/x-executable": true,
+		"application/x-msdownload": true,
+		"application/x-msdos-program": true,
+		"application/x-sh": true,
+		"application/x-shellscript": true,
+		"application/x-perl": true,
+		"application/x-python": true,
+		"application/x-ruby": true,
+	}
+
+	ext := strings.ToLower(filepath.Ext(filename))
+	if blockedExts[ext] {
+		return false
+	}
+
+	ct := strings.ToLower(strings.SplitN(contentType, ";", 2)[0])
+	if blockedMimes[ct] {
+		return false
+	}
+
+	return true
+}
+
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token string, sess *uploads.Upload) {
 	if r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -2053,6 +2146,12 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 	ctype := hdr.Header.Get("Content-Type")
 	if ctype == "" || ctype == "application/octet-stream" {
 		ctype = ""
+	}
+
+	if !isAllowedFileType(hdr.Filename, ctype) {
+		os.Remove(diskPath)
+		http.Error(w, "File type not allowed", http.StatusBadRequest)
+		return
 	}
 
 	mdH, shH, err := uploads.HexMD5SHA256FromFile(diskPath)
@@ -2470,50 +2569,28 @@ func (s *Server) handleCryptoChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	days, err := crypto.RangeToCoinGeckoDays(rangeKey)
+	win, err := crypto.RangeToWindow(rangeKey)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	client := &http.Client{Timeout: 20 * time.Second}
 	raw := make([]crypto.MarketRawSeries, 0, len(prices))
 
-	// CoinGecko free tier rate-limits hard on burst parallel calls. We cache raw
-	// market_chart by (coin, days) so 6h/1d and 3d/1w reuse the same upstream data,
-	// and we fetch sequentially with a short pause between network calls.
+	// Get historical data from local DB instead of live API (much faster)
+	since := time.Now().Add(-win)
 	for _, p := range prices {
 		if p.GeckoID == "" {
 			continue
 		}
-		key := marketChartRawKey(p.GeckoID, days)
-		var pts [][2]float64
-		cacheRead := time.Now()
-		s.marketChartRawMu.Lock()
-		if s.marketChartRawCache != nil {
-			if e, ok := s.marketChartRawCache[key]; ok && cacheRead.Sub(e.at) < chartTTL {
-				pts = e.pts
-			}
+		pts, err := s.cryptoDB.GetMarketHistoryForCoin(p.GeckoID, since)
+		if err != nil {
+			log.Printf("GetMarketHistoryForCoin %s: %v", p.GeckoID, err)
+			continue
 		}
-		s.marketChartRawMu.Unlock()
-
-		if pts == nil {
-			fetched, ferr := crypto.FetchMarketChartWithRetry(client, p.GeckoID, days)
-			if ferr != nil || len(fetched) < 2 {
-				time.Sleep(150 * time.Millisecond)
-				continue
-			}
-			pts = fetched
-			clipAt := time.Now()
-			s.marketChartRawMu.Lock()
-			if s.marketChartRawCache == nil {
-				s.marketChartRawCache = make(map[string]marketChartRawCacheEntry)
-			}
-			s.marketChartRawCache[key] = marketChartRawCacheEntry{at: clipAt, pts: pts}
-			s.marketChartRawMu.Unlock()
-			time.Sleep(150 * time.Millisecond)
+		if len(pts) < 2 {
+			continue
 		}
-
 		raw = append(raw, crypto.MarketRawSeries{
 			Symbol:  p.Symbol,
 			GeckoID: p.GeckoID,
@@ -2537,6 +2614,7 @@ func (s *Server) handleCryptoChart(w http.ResponseWriter, r *http.Request) {
 		s.cryptoChartCache = make(map[string]cryptoChartCacheEntry)
 	}
 	s.cryptoChartCache[rangeKey] = cryptoChartCacheEntry{at: time.Now(), body: body}
+	s.evictExpiredCacheEntries(s.cryptoChartCache, 1*time.Hour)
 	s.cryptoChartMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2598,10 +2676,21 @@ func (s *Server) handleForexChart(w http.ResponseWriter, r *http.Request) {
 		s.forexChartCache = make(map[string]cryptoChartCacheEntry)
 	}
 	s.forexChartCache[rangeKey] = cryptoChartCacheEntry{at: time.Now(), body: body}
+	s.evictExpiredCacheEntries(s.forexChartCache, 1*time.Hour)
 	s.forexChartMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
+}
+
+// evictExpiredCacheEntries removes old entries from a cache map to prevent unbounded memory growth.
+func (s *Server) evictExpiredCacheEntries(cache map[string]cryptoChartCacheEntry, maxAge time.Duration) {
+	now := time.Now()
+	for k, e := range cache {
+		if now.Sub(e.at) > maxAge {
+			delete(cache, k)
+		}
+	}
 }
 
 func contentDispositionAttachment(orig, ticketID, pathExt string) string {

@@ -48,7 +48,7 @@ func (f *Fetcher) Start() {
 
 func (f *Fetcher) FetchAndSave() error {
 	url := "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=10&page=1&sparkline=false"
-	
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -78,5 +78,34 @@ func (f *Fetcher) FetchAndSave() error {
 		})
 	}
 
-	return f.db.SavePrices(entries)
+	if err := f.db.SavePrices(entries); err != nil {
+		return err
+	}
+
+	// Fetch and store 7-day historical data for each coin
+	for _, m := range markets {
+		if m.ID == "" {
+			continue
+		}
+		// Fetch 7 days of market history, sleep between requests to avoid rate limiting
+		pts, err := FetchMarketChartWithRetry(client, m.ID, "7")
+		if err != nil {
+			log.Printf("Failed to fetch market history for %s: %v", m.ID, err)
+			continue
+		}
+		if len(pts) > 0 {
+			if err := f.db.SaveMarketHistory(m.ID, strings.ToUpper(m.Symbol), pts); err != nil {
+				log.Printf("Failed to save market history for %s: %v", m.ID, err)
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// Cleanup old data (keep last 90 days)
+	cutoff := time.Now().AddDate(0, 0, -90)
+	if err := f.db.CleanupMarketHistory(cutoff); err != nil {
+		log.Printf("Failed to cleanup market history: %v", err)
+	}
+
+	return nil
 }
