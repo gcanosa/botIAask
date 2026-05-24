@@ -1,6 +1,7 @@
 package bookmarks
 
 import (
+	"botIAask/db"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -8,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	
 )
 
 type Bookmark struct {
@@ -32,16 +33,11 @@ type Reminder struct {
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase( dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open bookmarks database: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 8000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite busy_timeout: %w", err)
-	}
-
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS bookmarks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT UNIQUE,
@@ -51,11 +47,11 @@ func NewDatabase(dbPath string) (*Database, error) {
 		)
 	`)
 	if err != nil {
-		db.Close()
+		sqldb.Close()
 		return nil, fmt.Errorf("failed to create bookmarks table: %w", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS reminders (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			public_id TEXT NOT NULL UNIQUE,
@@ -65,16 +61,13 @@ func NewDatabase(dbPath string) (*Database, error) {
 		)
 	`)
 	if err != nil {
-		db.Close()
+		sqldb.Close()
 		return nil, fmt.Errorf("failed to create reminders table: %w", err)
 	}
 
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_reminders_owner_nick ON reminders (owner_nick)`)
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_reminders_owner_nick ON reminders (owner_nick)`)
 
-	db.Exec("PRAGMA journal_mode=WAL;")
-	db.Exec("PRAGMA synchronous=NORMAL;")
-
-	return &Database{db: db}, nil
+	return &Database{db: sqldb}, nil
 }
 
 func (d *Database) AddBookmark(url, nickname, hostname string) (int64, error) {

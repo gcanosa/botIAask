@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"botIAask/db"
 )
 
 type PriceEntry struct {
@@ -22,12 +22,12 @@ type Database struct {
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open crypto database: %w", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS crypto_prices (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			symbol TEXT,
@@ -38,10 +38,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 		)
 	`)
 	// Migration: Ensure change_24h column exists
-	_, _ = db.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
-	_, _ = db.Exec("ALTER TABLE crypto_prices ADD COLUMN gecko_id TEXT DEFAULT '';")
+	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
+	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN gecko_id TEXT DEFAULT '';")
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS forex_rates (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rate_key TEXT NOT NULL,
@@ -52,9 +52,9 @@ func NewDatabase(dbPath string) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to migrate forex_rates: %w", err)
 	}
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_forex_rates_fetched_at ON forex_rates(fetched_at)`)
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_forex_rates_fetched_at ON forex_rates(fetched_at)`)
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS crypto_market_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			gecko_id TEXT NOT NULL,
@@ -67,10 +67,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to migrate crypto_market_history: %w", err)
 	}
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_gecko_id ON crypto_market_history(gecko_id)`)
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_timestamp ON crypto_market_history(timestamp_ms)`)
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_gecko_id ON crypto_market_history(gecko_id)`)
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_timestamp ON crypto_market_history(timestamp_ms)`)
 
-	return &Database{db: db}, nil
+	return &Database{db: sqldb}, nil
 }
 
 func (d *Database) SavePrices(entries []PriceEntry) error {

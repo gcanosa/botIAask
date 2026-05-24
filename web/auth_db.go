@@ -1,6 +1,7 @@
 package web
 
 import (
+	"botIAask/db"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -11,7 +12,7 @@ import (
 	"botIAask/config"
 
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite"
+	
 )
 
 type User struct {
@@ -27,12 +28,12 @@ type AuthDatabase struct {
 }
 
 func NewAuthDatabase(dbPath string) (*AuthDatabase, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open auth database: %w", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS web_users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
@@ -61,12 +62,12 @@ func NewAuthDatabase(dbPath string) (*AuthDatabase, error) {
 	}
 
 	// Migrations
-	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN needs_password_change INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN ui_theme TEXT DEFAULT 'dark'")
-	_, _ = db.Exec("ALTER TABLE web_users ADD COLUMN last_login_at DATETIME")
-	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS csrf_tokens (token TEXT PRIMARY KEY, session_token TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, UNIQUE(session_token))")
+	_, _ = sqldb.Exec("ALTER TABLE web_users ADD COLUMN needs_password_change INTEGER DEFAULT 0")
+	_, _ = sqldb.Exec("ALTER TABLE web_users ADD COLUMN ui_theme TEXT DEFAULT 'dark'")
+	_, _ = sqldb.Exec("ALTER TABLE web_users ADD COLUMN last_login_at DATETIME")
+	_, _ = sqldb.Exec("CREATE TABLE IF NOT EXISTS csrf_tokens (token TEXT PRIMARY KEY, session_token TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, UNIQUE(session_token))")
 
-	return &AuthDatabase{db: db}, nil
+	return &AuthDatabase{db: sqldb}, nil
 }
 
 // TouchLastLogin sets last_login_at to now for the given user.

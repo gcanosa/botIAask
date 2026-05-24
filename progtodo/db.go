@@ -2,6 +2,7 @@
 package progtodo
 
 import (
+	"botIAask/db"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	
 )
 
 // Entry is one backlog item.
@@ -32,15 +33,11 @@ type Database struct {
 
 // NewDatabase opens or creates the DB at dbPath.
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase( dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("progtodo: open: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 8000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("progtodo: busy_timeout: %w", err)
-	}
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS programmer_todos (
 			id TEXT PRIMARY KEY,
 			body TEXT NOT NULL,
@@ -53,18 +50,16 @@ func NewDatabase(dbPath string) (*Database, error) {
 		)
 	`)
 	if err != nil {
-		db.Close()
+		sqldb.Close()
 		return nil, fmt.Errorf("progtodo: create table: %w", err)
 	}
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_author ON programmer_todos (author_nick)`)
-	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_admin_only ON programmer_todos (admin_only)`)
-	_, _ = db.Exec("PRAGMA journal_mode=WAL;")
-	_, _ = db.Exec("PRAGMA synchronous=NORMAL;")
-	if err := runProgtodoMigrations(db); err != nil {
-		db.Close()
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_author ON programmer_todos (author_nick)`)
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_admin_only ON programmer_todos (admin_only)`)
+	if err := runProgtodoMigrations(sqldb); err != nil {
+		sqldb.Close()
 		return nil, fmt.Errorf("progtodo: migrate: %w", err)
 	}
-	return &Database{db: db}, nil
+	return &Database{db: sqldb}, nil
 }
 
 // runProgtodoMigrations applies one-time PRAGMA user_version upgrades.
