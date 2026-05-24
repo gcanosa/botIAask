@@ -1,6 +1,7 @@
 package uploads
 
 import (
+	"botIAask/db"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	
 )
 
 const (
@@ -58,16 +59,10 @@ type Database struct {
 }
 
 func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase( dbPath)
 	if err != nil {
 		return nil, err
 	}
-	// Reduce "database is locked" when IRC and web hit the same DB concurrently.
-	if _, err := db.Exec("PRAGMA busy_timeout = 8000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite busy_timeout: %w", err)
-	}
-
 	query := `
 	CREATE TABLE IF NOT EXISTS uploads (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,17 +78,17 @@ func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
 		created_at DATETIME,
 		approved_at DATETIME
 	);`
-	if _, err = db.Exec(query); err != nil {
+	if _, err = sqldb.Exec(query); err != nil {
 		return nil, err
 	}
 
-	if err := migrateUploadsSchema(db); err != nil {
+	if err := migrateUploadsSchema(sqldb); err != nil {
 		return nil, err
 	}
 
-	d := &Database{db: db, pastesDir: pastesDir, filesDir: filesDir}
+	d := &Database{db: sqldb, pastesDir: pastesDir, filesDir: filesDir}
 	if err := d.backfillLegacyUploadRows(); err != nil {
-		db.Close()
+		sqldb.Close()
 		return nil, err
 	}
 
@@ -103,9 +98,6 @@ func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
 	if err := os.MkdirAll(filesDir, 0755); err != nil {
 		return nil, err
 	}
-
-	db.Exec("PRAGMA journal_mode=WAL;")
-	db.Exec("PRAGMA synchronous=NORMAL;")
 
 	return d, nil
 }

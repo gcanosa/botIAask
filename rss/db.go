@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"botIAask/db"
 )
 
 type Database struct {
@@ -28,20 +28,12 @@ type NewsEntry struct {
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if _, err := db.Exec("PRAGMA busy_timeout = 8000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite busy_timeout: %w", err)
-	}
-	// WAL reduces lock contention when another process (e.g. a second bot) hits the DB briefly.
-	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS seen_news (
 			guid TEXT PRIMARY KEY,
 			title TEXT,
@@ -56,20 +48,20 @@ func NewDatabase(dbPath string) (*Database, error) {
 	}
 
 	// Migration: Add columns if they don't exist
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN link TEXT")
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN short_link TEXT")
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN source TEXT")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN link TEXT")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN short_link TEXT")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN source TEXT")
 	// Fix NULL links from migration
-	_, _ = db.Exec("UPDATE seen_news SET link = '' WHERE link IS NULL")
-	_, _ = db.Exec("UPDATE seen_news SET source = '' WHERE source IS NULL")
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN source_icon TEXT")
-	_, _ = db.Exec("UPDATE seen_news SET source_icon = '' WHERE source_icon IS NULL")
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN link_normalized TEXT")
-	_, _ = db.Exec("ALTER TABLE seen_news ADD COLUMN dedup_key TEXT")
-	_, _ = db.Exec("UPDATE seen_news SET link_normalized = '' WHERE link_normalized IS NULL")
-	_, _ = db.Exec("UPDATE seen_news SET dedup_key = '' WHERE dedup_key IS NULL")
+	_, _ = sqldb.Exec("UPDATE seen_news SET link = '' WHERE link IS NULL")
+	_, _ = sqldb.Exec("UPDATE seen_news SET source = '' WHERE source IS NULL")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN source_icon TEXT")
+	_, _ = sqldb.Exec("UPDATE seen_news SET source_icon = '' WHERE source_icon IS NULL")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN link_normalized TEXT")
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN dedup_key TEXT")
+	_, _ = sqldb.Exec("UPDATE seen_news SET link_normalized = '' WHERE link_normalized IS NULL")
+	_, _ = sqldb.Exec("UPDATE seen_news SET dedup_key = '' WHERE dedup_key IS NULL")
 
-	d := &Database{db: db}
+	d := &Database{db: sqldb}
 	if err := d.backfillDedupColumns(); err != nil {
 		return nil, err
 	}

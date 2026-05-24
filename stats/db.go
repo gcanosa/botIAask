@@ -1,12 +1,13 @@
 package stats
 
 import (
+	"botIAask/db"
 	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	
 )
 
 type Database struct {
@@ -29,12 +30,12 @@ type StatEntry struct {
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	sqldb, err := db.OpenDatabase( dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stats database: %w", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS bot_stats (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			timestamp DATETIME NOT NULL,
@@ -54,11 +55,11 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create stats table: %w", err)
 	}
 
-	if err := migrateStatsSchema(db); err != nil {
+	if err := migrateStatsSchema(sqldb); err != nil {
 		return nil, err
 	}
 
-	return &Database{db: db}, nil
+	return &Database{db: sqldb}, nil
 }
 
 // migrateStatsSchema adds columns introduced after older deployments (CREATE TABLE IF NOT EXISTS does not upgrade schema).
