@@ -773,6 +773,11 @@ func (d *Database) ReplaceApprovedFileContent(ticketID, newPath, origName, conte
 	return nil
 }
 
+// PastesDiskDir returns the directory used for paste content files.
+func (d *Database) PastesDiskDir() string {
+	return d.pastesDir
+}
+
 // FilesDiskDir returns the directory used for binary uploads (for saving temp files).
 func (d *Database) FilesDiskDir() string {
 	return d.filesDir

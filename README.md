@@ -147,6 +147,14 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 - **System Stats**: Detailed charts for AI requests and system performance.
 - **Bookmarks**: Searchable database of links shared across channels.
 
+### Web Dashboard Security
+
+- **Initial admin password**: If `web.auth.password` is not set in `config.yaml`, a random 32-character password is generated on first run and printed once to the log — save it immediately.
+- **CSRF protection**: All state-changing API endpoints require a valid `X-CSRF-Token` header (or `csrf_token` form field). The token is returned at login.
+- **Login rate limiting**: 5 failed attempts per IP per 15 minutes.
+- **Session cookies**: HttpOnly, Secure, SameSite=Strict, 24-hour TTL.
+- **Reverse proxy**: If running behind a trusted proxy, set `web.trust_forwarded_for: true` in config to enable correct client IP detection. Leave it disabled (default) when exposed directly.
+
 ---
 
 ## 📄 License
