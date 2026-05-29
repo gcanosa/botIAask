@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
+
+const lmStudioTimeout = 90 * time.Second
 
 // Client handles communication with the LM Studio server using the OpenAI SDK.
 type Client struct {
@@ -21,7 +24,7 @@ func NewClient(baseURL string, model string) *Client {
 	// LM Studio uses a dummy API key, but the SDK requires one to be present.
 	config := openai.DefaultConfig(baseURL)
 	config.BaseURL = baseURL
-	config.HTTPClient = &http.Client{}
+	config.HTTPClient = &http.Client{Timeout: lmStudioTimeout}
 
 	return &Client{
 		apiClient: openai.NewClientWithConfig(config),

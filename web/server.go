@@ -445,7 +445,7 @@ const (
 )
 
 func (s *Server) handleWeatherSettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -524,7 +524,7 @@ func loggerRetentionToDays(value int, unit string) (int, error) {
 }
 
 func (s *Server) handleLoggerSettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -624,7 +624,7 @@ func validateAIModel(raw string) (string, error) {
 }
 
 func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -689,7 +689,7 @@ func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -867,7 +867,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -919,7 +919,7 @@ func (s *Server) handleRSSNews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodDelete {
-		isAdmin, _ := s.checkAuth(r)
+		isAdmin, _ := s.requireAdminCSRF(r)
 		if !isAdmin {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -944,7 +944,7 @@ func (s *Server) handleRSSNews(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRSSFetchNow(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -965,7 +965,7 @@ func (s *Server) handleRehash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1008,7 +1008,7 @@ type ircSessionRow struct {
 }
 
 func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1097,7 +1097,7 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1231,7 +1231,7 @@ func (s *Server) handleIRCChannelReveal(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1270,7 +1270,7 @@ func (s *Server) handleIRCChannelAnnounce(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1315,7 +1315,7 @@ func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1362,7 +1362,7 @@ func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1419,7 +1419,7 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1501,7 +1501,7 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.checkAuth(r)
+	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1608,7 +1608,7 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodDelete {
-		isAdmin, _ := s.checkAuth(r)
+		isAdmin, _ := s.requireAdminCSRF(r)
 		if !isAdmin {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -1682,6 +1682,41 @@ func (s *Server) checkAuth(r *http.Request) (bool, bool) {
 	return err == nil, needsChange
 }
 
+// requireAdminCSRF checks session validity and, for mutating methods
+// (POST/PUT/PATCH/DELETE), also validates the CSRF token from X-CSRF-Token header
+// or csrf_token form field.
+func (s *Server) requireAdminCSRF(r *http.Request) (bool, bool) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		return false, false
+	}
+	_, needsChange, err := s.authDB.ValidateSession(cookie.Value)
+	if err != nil {
+		return false, false
+	}
+	if r.Method == http.MethodPost || r.Method == http.MethodPut ||
+		r.Method == http.MethodPatch || r.Method == http.MethodDelete {
+		if !s.csrfValid(r, cookie.Value) {
+			return false, false
+		}
+	}
+	return true, needsChange
+}
+
+// csrfValid returns true if the request carries a valid CSRF token for the
+// given session token. For non-mutating methods it always returns true.
+func (s *Server) csrfValid(r *http.Request, sessionToken string) bool {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut &&
+		r.Method != http.MethodPatch && r.Method != http.MethodDelete {
+		return true
+	}
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken == "" {
+		csrfToken = r.FormValue("csrf_token")
+	}
+	return csrfToken != "" && s.authDB.ValidateCSRFToken(csrfToken, sessionToken)
+}
+
 func isPrivilegedAdminRole(role string) bool {
 	r := strings.ToLower(strings.TrimSpace(role))
 	return r == "" || r == "admin"
@@ -1715,7 +1750,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := GetClientIP(r)
+	clientIP := GetClientIP(r, s.getConfig().Web.TrustForwardedFor)
 	if !s.loginRateLimiter.IsAllowed(clientIP) {
 		http.Error(w, "Too many login attempts. Please try again later.", http.StatusTooManyRequests)
 		return
@@ -1796,7 +1831,7 @@ func (s *Server) validateCSRFAndGetSessionToken(r *http.Request) (string, bool) 
 		}
 	}
 
-	if csrfToken != "" && !s.authDB.ValidateCSRFToken(csrfToken, cookie.Value) {
+	if csrfToken == "" || !s.authDB.ValidateCSRFToken(csrfToken, cookie.Value) {
 		return "", false
 	}
 
@@ -1829,8 +1864,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	if !s.staffAdminFromRequest(r) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil || !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -1903,6 +1943,11 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 	userID, _, err := s.authDB.ValidateSession(cookie.Value)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -2266,6 +2311,10 @@ func (s *Server) handlePasteView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.pathWithinDir(upload.ContentPath, s.uploadsDB.PastesDiskDir()) {
+		http.Error(w, "Invalid content path", http.StatusInternalServerError)
+		return
+	}
 	content, err := os.ReadFile(upload.ContentPath)
 	if err != nil {
 		http.Error(w, "Error reading content", http.StatusInternalServerError)
@@ -2356,8 +2405,13 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteDelete(w http.ResponseWriter, r *http.Request) {
-	if !s.staffAdminFromRequest(r) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil || !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -2403,8 +2457,13 @@ func (s *Server) handlePendingPastes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
-	if !s.staffAdminFromRequest(r) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil || !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -2437,8 +2496,13 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
-	if !s.staffAdminFromRequest(r) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil || !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -2775,6 +2839,10 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if upload.IsAccessExpired(time.Now()) && !s.staffAdminFromRequest(r) {
 		http.Error(w, "This file has expired", http.StatusGone)
+		return
+	}
+	if !s.pathWithinDir(upload.ContentPath, s.uploadsDB.FilesDiskDir()) {
+		http.Error(w, "Invalid file path", http.StatusInternalServerError)
 		return
 	}
 	f, err := os.Open(upload.ContentPath)
@@ -3169,8 +3237,13 @@ func (s *Server) handleUploadFileCompress(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleUploadSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.staffAdminFromRequest(r) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil || !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.csrfValid(r, cookie.Value) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	switch r.Method {

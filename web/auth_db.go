@@ -6,13 +6,13 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"botIAask/config"
 
 	"golang.org/x/crypto/bcrypt"
-	
 )
 
 type User struct {
@@ -90,7 +90,12 @@ func (a *AuthDatabase) CheckAndSeedInitialAdmin(cfg *config.Config) error {
 			username = "admin"
 		}
 		if password == "" {
-			password = "password"
+			b := make([]byte, 16)
+			if _, err := rand.Read(b); err != nil {
+				return fmt.Errorf("failed to generate initial admin password: %w", err)
+			}
+			password = hex.EncodeToString(b)
+			log.Printf("[SECURITY] Generated initial admin password for %q: %s — save this, it will not be shown again", username, password)
 		}
 
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -102,7 +107,7 @@ func (a *AuthDatabase) CheckAndSeedInitialAdmin(cfg *config.Config) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Initial admin account created: %s / %s (Change required on first login)\n", username, password)
+		log.Printf("Initial admin account created for user %q (change password on first login)", username)
 	}
 	return nil
 }

@@ -83,21 +83,22 @@ func (l *LoginRateLimiter) cleanupLoop() {
 	}
 }
 
-// GetClientIP extracts the real client IP from a request, accounting for proxies.
-func GetClientIP(r *http.Request) string {
-	// Check X-Forwarded-For (for proxies)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			if ip := strings.TrimSpace(ips[0]); ip != "" {
-				return ip
+// GetClientIP extracts the real client IP from a request.
+// When trustForwarded is true, X-Forwarded-For and X-Real-IP headers are
+// trusted (use only behind a known reverse proxy). Otherwise RemoteAddr is used.
+func GetClientIP(r *http.Request, trustForwarded bool) string {
+	if trustForwarded {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ips := strings.Split(xff, ",")
+			if len(ips) > 0 {
+				if ip := strings.TrimSpace(ips[0]); ip != "" {
+					return ip
+				}
 			}
 		}
-	}
-
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
 	}
 
 	// Fall back to RemoteAddr (strip port)
