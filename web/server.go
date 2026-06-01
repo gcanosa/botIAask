@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -214,6 +215,8 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/weather/settings", s.handleWeatherSettings)
 	mux.HandleFunc("/api/logger/settings", s.handleLoggerSettings)
 	mux.HandleFunc("/api/ai/settings", s.handleAISettings)
+	mux.HandleFunc("/api/changelog", s.handleChangelog)
+	mux.HandleFunc("/favicon.ico", s.handleFavicon)
 
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
@@ -723,6 +726,80 @@ func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleChangelog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+
+	gitLog := executeGitLog(limit)
+	commits := parseGitLog(gitLog)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"commits": commits,
+		"total":   len(commits),
+	})
+}
+
+func executeGitLog(limit int) string {
+	// Run git log command
+	cmd := exec.CommandContext(context.Background(), "git", "log", "--pretty=format:%H|%an|%ae|%ai|%s", fmt.Sprintf("-n%d", limit))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func parseGitLog(gitLog string) []map[string]interface{} {
+	var commits []map[string]interface{}
+	lines := strings.Split(strings.TrimSpace(gitLog), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) >= 5 {
+			// Parse git date format: "2026-05-29 09:16:08 +0200"
+			dateStr := strings.TrimSpace(parts[3])
+			commitTime, err := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+			if err != nil {
+				commitTime = time.Now()
+			}
+			commit := map[string]interface{}{
+				"id":        parts[0],
+				"author":    parts[1],
+				"email":     parts[2],
+				"timestamp": commitTime.Format(time.RFC3339),
+				"date":      commitTime.Format("2006-01-02"),
+				"time":      commitTime.Format("15:04:05"),
+				"message":   parts[4],
+				"shortId":   parts[0][:7],
+			}
+			commits = append(commits, commit)
+		}
+	}
+	return commits
+}
+
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect fill="#0284c7" width="24" height="24"/><path fill="#fff" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`))
 }
 
 func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
