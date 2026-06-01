@@ -382,6 +382,7 @@ function showPanel(panelId) {
         bindLogsPanelListeners();
     }
     if (panelId === 'todos') fetchProgrammerTodos();
+    if (panelId === 'changelog') loadChangelog();
 
     closeSidebarIfMobile();
 }
@@ -3651,8 +3652,120 @@ async function saveRSSSettings() {
     }
 }
 
+// Changelog
+let changelogData = null;
+let changelogSearchInput = '';
+let changelogDebounceTimer = null;
+
+async function loadChangelog() {
+    const loadEl = document.getElementById('changelog-loading');
+    const errEl = document.getElementById('changelog-error');
+    const listEl = document.getElementById('changelog-list');
+
+    if (!loadEl || !errEl || !listEl) return;
+
+    errEl.classList.add('hidden');
+    listEl.classList.add('hidden');
+    loadEl.classList.remove('hidden');
+
+    try {
+        const res = await fetch('/api/changelog?limit=100');
+        const data = await res.json();
+
+        if (!data.commits || data.commits.length === 0) {
+            errEl.textContent = 'No commits found';
+            errEl.classList.remove('hidden');
+            loadEl.classList.add('hidden');
+            return;
+        }
+
+        changelogData = data.commits;
+        renderChangelog(changelogData);
+        loadEl.classList.add('hidden');
+    } catch (e) {
+        console.error('changelog fetch:', e);
+        errEl.textContent = 'Failed to load changelog';
+        errEl.classList.remove('hidden');
+        loadEl.classList.add('hidden');
+    }
+}
+
+function renderChangelog(commits) {
+    const listEl = document.getElementById('changelog-list');
+    if (!listEl) return;
+
+    if (!commits || commits.length === 0) {
+        listEl.innerHTML = '<p style="text-align: center; color: var(--text-muted);">No commits found</p>';
+        listEl.classList.remove('hidden');
+        return;
+    }
+
+    listEl.innerHTML = commits.map((commit) => {
+        const timestamp = new Date(commit.timestamp);
+        const timeStr = timestamp.toLocaleString();
+        const shortId = commit.shortId || commit.id.substring(0, 7);
+
+        return `
+            <div style="
+                padding: 1rem;
+                border: 1px solid var(--glass-border);
+                border-radius: 8px;
+                transition: all 0.2s ease;
+                background: rgba(0,0,0,0.02);
+            " onmouseover="this.style.borderColor='var(--primary)';this.style.background='rgba(2,132,199,0.06)'" onmouseout="this.style.borderColor='var(--glass-border)';this.style.background='rgba(0,0,0,0.02)'">
+                <div style="display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.75rem;">
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
+                            <code style="
+                                background: var(--surface-ghost);
+                                padding: 0.25rem 0.5rem;
+                                border-radius: 4px;
+                                font-size: 0.75rem;
+                                color: var(--primary);
+                            ">${financeEscapeHtml(shortId)}</code>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">${financeEscapeHtml(timeStr)}</span>
+                        </div>
+                        <h4 style="margin: 0.5rem 0 0; font-size: 0.95rem; font-weight: 500; word-break: break-word; line-height: 1.4;">${financeEscapeHtml(commit.message)}</h4>
+                        <p style="margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--text-muted);">by ${financeEscapeHtml(commit.author)}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.classList.remove('hidden');
+}
+
+function debounceChangelogSearch() {
+    if (changelogDebounceTimer) {
+        clearTimeout(changelogDebounceTimer);
+    }
+
+    const searchEl = document.getElementById('changelog-search');
+    if (!searchEl) return;
+
+    changelogSearchInput = searchEl.value.toLowerCase().trim();
+
+    changelogDebounceTimer = setTimeout(() => {
+        if (!changelogData) return;
+
+        let filtered = changelogData;
+        if (changelogSearchInput) {
+            filtered = changelogData.filter(c =>
+                c.message.toLowerCase().includes(changelogSearchInput) ||
+                c.author.toLowerCase().includes(changelogSearchInput) ||
+                c.id.toLowerCase().includes(changelogSearchInput)
+            );
+        }
+
+        renderChangelog(filtered);
+    }, 200);
+}
+
 window.toggleRSSSettings = toggleRSSSettings;
 window.saveRSSSettings = saveRSSSettings;
 window.saveWeatherSettings = saveWeatherSettings;
 window.saveLoggerSettings = saveLoggerSettings;
 window.saveAISettings = saveAISettings;
+window.loadChangelog = loadChangelog;
+window.debounceChangelogSearch = debounceChangelogSearch;
