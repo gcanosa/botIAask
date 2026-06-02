@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "chunks": [
+    {
+      "id": "a77f73cf",
+      "created_by": "ethernet",
+      "created_at": "2026-06-02T13:58:34Z",
+      "sessions": 5,
+      "memories": 0,
+      "prompts": 0
+    }
+  ]
+}
