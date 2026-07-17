@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"botIAask/config"
+	"botIAask/internal/guard"
 )
 
 // Tracker monitors bot activity and handles interval-based snapshots.
@@ -79,10 +80,10 @@ func (t *Tracker) restartTrackingLoop() {
 	t.runCancel = cancel
 	t.loopMu.Unlock()
 	t.runWG.Add(1)
-	go func() {
+	guard.Go("stats tracker loop", func() {
 		defer t.runWG.Done()
 		t.runLoop(ctx)
-	}()
+	})
 }
 
 func (t *Tracker) runLoop(ctx context.Context) {
@@ -113,8 +114,8 @@ func (t *Tracker) runLoop(ctx context.Context) {
 
 // ApplyConfig replaces config and restarts the snapshot loop to pick up interval / enabled flags.
 func (t *Tracker) ApplyConfig(cfg *config.Config) {
-	t.cfg = cfg
 	t.subMu.Lock()
+	t.cfg = cfg
 	t.enabled = cfg.Stats.Enabled
 	t.subMu.Unlock()
 	t.restartTrackingLoop()
@@ -239,29 +240,33 @@ func (t *Tracker) snapshot() {
 	t.users = make(map[string]struct{})
 	t.mu.Unlock()
 
+	t.subMu.RLock()
+	cfg := t.cfg
+	t.subMu.RUnlock()
+
 	// Save to DB if enabled
-	if t.cfg.Stats.ShouldSaveToDB() && t.db != nil {
+	if cfg.Stats.ShouldSaveToDB() && t.db != nil {
 		if err := t.db.SaveEntry(entry); err != nil {
 			log.Printf("Error saving stats: %v", err)
 		}
 	}
 	if t.db != nil {
-		t.maybePruneStatsHistory()
+		t.maybePruneStatsHistory(cfg)
 	}
 
 	// Broadcast to subscribers
 	t.broadcast(entry)
 }
 
-func (t *Tracker) maybePruneStatsHistory() {
-	if t.db == nil || t.cfg.Stats.RetentionDays <= 0 {
+func (t *Tracker) maybePruneStatsHistory(cfg *config.Config) {
+	if t.db == nil || cfg.Stats.RetentionDays <= 0 {
 		return
 	}
 	if !t.lastStatsPrune.IsZero() && time.Since(t.lastStatsPrune) < 24*time.Hour {
 		return
 	}
 	t.lastStatsPrune = time.Now()
-	if err := t.db.Cleanup(t.cfg.Stats.RetentionDays); err != nil {
+	if err := t.db.Cleanup(cfg.Stats.RetentionDays); err != nil {
 		log.Printf("stats retention cleanup: %v", err)
 	}
 }

@@ -26,6 +26,21 @@ type Config struct {
 	Uploads     UploadsConfig   `yaml:"uploads,omitempty"`
 	Flight      FlightConfig    `yaml:"flight,omitempty"`
 	OMDB        OMDBConfig      `yaml:"omdb,omitempty"`
+	GitHub      GitHubConfig    `yaml:"github,omitempty"`
+	Backup      BackupConfig    `yaml:"backup,omitempty"`
+}
+
+// BackupConfig controls scheduled hot backups of the SQLite databases in data/.
+// Backups use VACUUM INTO (consistent snapshot, WAL-safe) written to data/backups/.
+type BackupConfig struct {
+	Enabled     *bool `yaml:"enabled,omitempty"`        // default true when section/field omitted
+	IntervalHrs int   `yaml:"interval_hours,omitempty"` // default 24
+	Keep        int   `yaml:"keep,omitempty"`           // backups to retain per DB, default 7
+}
+
+// BackupEnabled reports whether scheduled backups should run (default true).
+func (b BackupConfig) BackupEnabled() bool {
+	return b.Enabled == nil || *b.Enabled
 }
 
 // FlightConfig holds AirLabs Data API (v9) settings for !flight.
@@ -51,6 +66,16 @@ func (f FlightConfig) AirLabsAPIKeyOrEnv() string {
 type OMDBConfig struct {
 	APIKey  string `yaml:"api_key,omitempty"`
 	BaseURL string `yaml:"base_url,omitempty"`
+}
+
+// GitHubConfig holds GitHub API settings for the changelog (fetches commits from remote repository).
+// Set owner and repo for the project, and optionally a token for higher rate limits.
+// Set token in YAML or GITHUB_TOKEN environment variable.
+type GitHubConfig struct {
+	Owner string `yaml:"owner,omitempty"`           // GitHub username or organization
+	Repo  string `yaml:"repo,omitempty"`            // Repository name
+	Token string `yaml:"token,omitempty"`           // Personal access token (optional, for higher rate limits)
+	Ref   string `yaml:"ref,omitempty"`             // Branch/tag/commit ref to fetch from (default: main or master)
 }
 
 const envOMDBKey = "OMDB_API_KEY"

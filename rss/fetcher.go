@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"botIAask/config"
+	"botIAask/internal/guard"
 	"github.com/mmcdole/gofeed"
 )
 
@@ -34,6 +35,10 @@ type lastFeedFetch struct {
 	Label string
 	At    time.Time
 }
+
+// feedHTTPClient bounds gofeed's fetch of each feed URL so one hung feed can't
+// stall the rest of the cycle (gofeed's own default client has no timeout).
+var feedHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type Fetcher struct {
 	cfg        *config.Config
@@ -65,18 +70,27 @@ func (f *Fetcher) Start() {
 		f.mu.Unlock()
 		return
 	}
+	// Capture the current stop channel once; Stop()/SetEnabled(false) close it and
+	// install a fresh one for the next run, so reading f.stopChan again later in this
+	// loop could observe the new (open) channel and miss the close entirely.
+	stop := f.stopChan
+	intervalMin := f.cfg.RSS.IntervalMinutes
 	f.mu.Unlock()
 
-	ticker := time.NewTicker(time.Duration(f.cfg.RSS.IntervalMinutes) * time.Minute)
+	ticker := time.NewTicker(time.Duration(intervalMin) * time.Minute)
 	defer ticker.Stop()
 
-	// Wait for bot to be connected before initial fetch
-	// Retry every 5 seconds for up to 2 minutes
+	// Wait for bot to be connected before initial fetch (up to 2 minutes), honoring stop
+	// so a Stop() during this wait doesn't leave the loop running past shutdown.
 	for i := 0; i < 24; i++ {
 		if f.bot.IsConnected() {
 			break
 		}
-		time.Sleep(5 * time.Second)
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 
 	// Initial fetch
@@ -86,7 +100,7 @@ func (f *Fetcher) Start() {
 		select {
 		case <-ticker.C:
 			f.Fetch()
-		case <-f.stopChan:
+		case <-stop:
 			return
 		}
 	}
@@ -112,7 +126,7 @@ func (f *Fetcher) SetEnabled(enabled bool) {
 
 	if enabled {
 		f.enabled = true
-		go f.Start()
+		guard.Go("rss fetcher", f.Start)
 	} else {
 		close(f.stopChan)
 		f.enabled = false
@@ -134,13 +148,19 @@ func (f *Fetcher) SetConfig(cfg *config.Config) {
 	f.mu.Unlock()
 }
 
-// ApplyConfig swaps in a new root config and restarts the fetch loop when RSS.Enabled or the ticker interval must change.
+// ApplyConfig swaps in a new root config and restarts the fetch loop only when RSS.Enabled
+// or the ticker interval actually changed, so a rehash that touches unrelated settings
+// (e.g. announce flag, URL shortener) doesn't tear down and relaunch the running loop.
 func (f *Fetcher) ApplyConfig(cfg *config.Config) {
 	f.mu.Lock()
+	sameLoop := f.enabled == cfg.RSS.Enabled && f.cfg.RSS.IntervalMinutes == cfg.RSS.IntervalMinutes
 	f.cfg = cfg
 	f.mu.Unlock()
-	was := f.IsEnabled()
-	if was {
+
+	if sameLoop {
+		return
+	}
+	if f.IsEnabled() {
 		f.Stop()
 	}
 	if cfg.RSS.Enabled {
@@ -160,7 +180,9 @@ func (f *Fetcher) GetDB() *Database {
 
 // FeedStatuses returns one row per configured feed URL, in order, for the admin UI.
 func (f *Fetcher) FeedStatuses() []FeedStatus {
+	f.mu.Lock()
 	urls := f.cfg.RSS.FeedURLs
+	f.mu.Unlock()
 	f.feedLastMu.RLock()
 	defer f.feedLastMu.RUnlock()
 	out := make([]FeedStatus, 0, len(urls))
@@ -197,15 +219,20 @@ func (f *Fetcher) Fetch() {
 		return
 	}
 
+	f.mu.Lock()
+	cfg := f.cfg
+	f.mu.Unlock()
+
 	f.lfMu.Lock()
 	f.lastFetch = time.Now()
 	f.lfMu.Unlock()
 
 	fp := gofeed.NewParser()
+	fp.Client = feedHTTPClient
 	var newEntries []NewsEntry
-	perFeed := make(map[string]lastFeedFetch, len(f.cfg.RSS.FeedURLs))
+	perFeed := make(map[string]lastFeedFetch, len(cfg.RSS.FeedURLs))
 
-	for _, feedURL := range f.cfg.RSS.FeedURLs {
+	for _, feedURL := range cfg.RSS.FeedURLs {
 		if feedURL == "" {
 			continue
 		}
@@ -249,7 +276,7 @@ func (f *Fetcher) Fetch() {
 		entry := newEntries[i]
 
 		// Shorten link and store it in entry
-		entry.ShortLink = ShortenURLWithService(entry.Link, f.cfg.RSS.URLShortener)
+		entry.ShortLink = ShortenURLWithService(entry.Link, cfg.RSS.URLShortener)
 
 		// Mark as seen FIRST so we don't retry if broadcast fails for some reason
 		if err := f.db.MarkSeen(entry); err != nil {
@@ -257,15 +284,15 @@ func (f *Fetcher) Fetch() {
 			continue
 		}
 
-		if f.cfg.RSS.AnnounceToIRCEnabled() {
+		if cfg.RSS.AnnounceToIRCEnabled() {
 			msg := FormatIRCNewsLine(entry, entry.ShortLink)
-			f.bot.Broadcast(f.cfg.RSS.Channels, msg)
+			f.bot.Broadcast(cfg.RSS.Channels, msg)
 			time.Sleep(3 * time.Second)
 		}
 	}
 
 	// Cleanup old entries
-	retention := f.cfg.RSS.RetentionCount
+	retention := cfg.RSS.RetentionCount
 	if retention <= 0 {
 		retention = 50 // Default fallback
 	}
@@ -276,10 +303,15 @@ func (f *Fetcher) Fetch() {
 
 // Backfill populates the database with the latest X items without broadcasting them.
 func (f *Fetcher) Backfill(limit int) int {
+	f.mu.Lock()
+	cfg := f.cfg
+	f.mu.Unlock()
+
 	fp := gofeed.NewParser()
+	fp.Client = feedHTTPClient
 	totalAdded := 0
 
-	for _, feedURL := range f.cfg.RSS.FeedURLs {
+	for _, feedURL := range cfg.RSS.FeedURLs {
 		feed, err := fp.ParseURL(feedURL)
 		if err != nil {
 			log.Printf("[RSS] Error fetching feed %s for backfill: %v", feedURL, err)
@@ -307,7 +339,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			if dup {
 				continue
 			}
-			entry.ShortLink = ShortenURLWithService(entry.Link, f.cfg.RSS.URLShortener)
+			entry.ShortLink = ShortenURLWithService(entry.Link, cfg.RSS.URLShortener)
 			if err := f.db.MarkSeen(entry); err != nil {
 				log.Printf("[RSS] Failed to save backfill entry: %v", err)
 				continue
@@ -345,9 +377,13 @@ func parseShortURL(body []byte) (string, error) {
 	return s, nil
 }
 
+// shortenerClient bounds the URL-shortener GET so a hung service can't stall
+// the announce path. ponytail: shared client, no per-call ctx needed here.
+var shortenerClient = &http.Client{Timeout: 10 * time.Second}
+
 // doShorten performs a GET to apiURL and returns the plain-text short URL.
 func doShorten(apiURL string) (string, error) {
-	resp, err := http.Get(apiURL)
+	resp, err := shortenerClient.Get(apiURL)
 	if err != nil {
 		return "", err
 	}

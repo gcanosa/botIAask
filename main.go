@@ -18,6 +18,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/internal/guard"
 	"botIAask/internal/ircusage"
 	"botIAask/irc"
 	"botIAask/logger"
@@ -238,7 +239,7 @@ func main() {
 	// Initialize RSS Fetcher
 	rssFetcher := rss.NewFetcher(cfg, bot, rssDB)
 	if cfg.RSS.Enabled {
-		go rssFetcher.Start()
+		guard.Go("rss fetcher", rssFetcher.Start)
 	}
 
 	var webServerMu sync.Mutex
@@ -254,7 +255,7 @@ func main() {
 
 	// Initialize Stats Tracker
 	statsTracker := stats.NewTracker(cfg, statsDB)
-	go statsTracker.Start()
+	guard.Go("stats tracker", statsTracker.Start)
 	bot.SetStatsTracker(statsTracker)
 
 	// Initialize Bookmarks Database
@@ -305,7 +306,7 @@ func main() {
 
 		// Initialize Crypto Fetcher
 		cryptoFetcher := crypto.NewFetcher(cryptoDB)
-		go cryptoFetcher.Start()
+		guard.Go("crypto fetcher", cryptoFetcher.Start)
 	}
 
 	rstate := &rehashState{
@@ -332,6 +333,13 @@ func main() {
 	// Start Log Rotator (loop reads live retention via SetRotationDays / rehash)
 	logger.StartLogRotator(cfg.Logger.RotationDays)
 
+	// Start scheduled SQLite backups (data/backups) unless explicitly disabled.
+	if cfg.Backup.BackupEnabled() {
+		guard.Go("backup scheduler", func() {
+			startBackupScheduler("data", cfg.Backup.IntervalHrs, cfg.Backup.Keep)
+		})
+	}
+
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
@@ -356,7 +364,9 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+		guard.Go("web server", func() {
+			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+		})
 	}
 
 	// Start the IRC bot
@@ -365,12 +375,11 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	}
 
 	// Run the bot in a goroutine so we can handle signals
-	go func() {
-		err := bot.Start()
-		if err != nil {
+	guard.Go("irc bot", func() {
+		if err := bot.Start(); err != nil {
 			log.Printf("Bot error: %v", err)
 		}
-	}()
+	})
 
 	// Wait for signals or shutdown
 	c := make(chan os.Signal, 2)
@@ -407,7 +416,9 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
-		go startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+		guard.Go("web server", func() {
+			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+		})
 	}
 
 	// Start the IRC bot
@@ -416,12 +427,11 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	}
 
 	// Start the bot in a goroutine so we can handle signals
-	go func() {
-		err := bot.Start()
-		if err != nil {
+	guard.Go("irc bot", func() {
+		if err := bot.Start(); err != nil {
 			log.Printf("Bot error: %v", err)
 		}
-	}()
+	})
 
 	// Wait for signal
 	for {

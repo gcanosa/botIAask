@@ -73,3 +73,19 @@ uploads:
 # omdb:
 #     api_key: your_omdb_key
 #     # base_url: https://www.omdbapi.com/
+
+# GitHub for changelog (fetches commits from remote repository instead of local git).
+# Useful for Docker/pod deployments where git history is not available locally.
+# Set token for higher API rate limits (60 req/hr unauthenticated, 5000 req/hr authenticated).
+# Get a token at https://github.com/settings/tokens (needs public_repo scope at minimum).
+# github:
+#     owner: your-github-username-or-org
+#     repo: repository-name
+#     token: ghp_xxxxx  # Optional; also reads GITHUB_TOKEN env var
+#     ref: main  # Optional; defaults to "main" if omitted
+
+# Scheduled SQLite hot backups (VACUUM INTO data/backups/). Enabled by default.
+# backup:
+#     enabled: true          # set false to disable
+#     interval_hours: 24     # how often to snapshot (default 24)
+#     keep: 7                # snapshots to retain per database (default 7)

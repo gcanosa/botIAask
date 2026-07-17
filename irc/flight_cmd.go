@@ -19,7 +19,7 @@ var (
 func (b *Bot) handleFlightCommand(target, sender, rest string) {
 	parts := strings.Fields(rest)
 	if len(parts) < 1 {
-		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100 (AirLabs v9; set flight.api_key or AIRLABS_API_KEY; paid = higher daily quota; date optional)", b.prefix, b.prefix))
+		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100 (AirLabs v9; set flight.api_key or AIRLABS_API_KEY; paid = higher daily quota; date optional)", b.pfx(), b.pfx()))
 		return
 	}
 	fid := strings.ToUpper(strings.TrimSpace(parts[0]))
@@ -33,12 +33,12 @@ func (b *Bot) handleFlightCommand(target, sender, rest string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
 	defer cancel()
 	p := flight.FetchParams{
-		APIKey:   b.cfg.Flight.AirLabsAPIKeyOrEnv(),
-		BaseURL:  b.cfg.Flight.BaseURL,
+		APIKey:   b.getCfg().Flight.AirLabsAPIKeyOrEnv(),
+		BaseURL:  b.getCfg().Flight.BaseURL,
 		FlightID: fid,
 		HTTP:     flightHTTP,
+		Date:     flightDate,
 	}
-	_ = flightDate
 	snap, err := flight.Fetch(ctx, p)
 	if err != nil {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: flight: %v", sender, err)))

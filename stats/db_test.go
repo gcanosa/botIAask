@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -61,5 +62,38 @@ func TestNewDatabase_migratesOldSchema(t *testing.T) {
 		if _, ok := names[col]; !ok {
 			t.Errorf("missing column %q after migration", col)
 		}
+	}
+}
+
+func TestGetRecentStats_chronologicalOrder(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "stats.db")
+	sdb, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	defer sdb.Close()
+
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < 5; i++ {
+		e := StatEntry{Timestamp: base.Add(time.Duration(i) * time.Minute), Messages: i}
+		if err := sdb.SaveEntry(e); err != nil {
+			t.Fatalf("SaveEntry %d: %v", i, err)
+		}
+	}
+
+	entries, err := sdb.GetRecentStats(5)
+	if err != nil {
+		t.Fatalf("GetRecentStats: %v", err)
+	}
+	if len(entries) != 5 {
+		t.Fatalf("got %d entries, want 5", len(entries))
+	}
+	for i := 0; i < len(entries)-1; i++ {
+		if entries[i].Timestamp.After(entries[i+1].Timestamp) {
+			t.Fatalf("entries not in chronological order at index %d: %v after %v", i, entries[i].Timestamp, entries[i+1].Timestamp)
+		}
+	}
+	if entries[0].Messages != 0 || entries[4].Messages != 4 {
+		t.Fatalf("unexpected order: first.Messages=%d last.Messages=%d", entries[0].Messages, entries[4].Messages)
 	}
 }

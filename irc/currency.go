@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,11 +16,13 @@ type ExchangeRates struct {
 	Rates map[string]float64 `json:"rates"`
 }
 
+// currencyHTTP is shared across calls instead of building a new *http.Client per request.
+var currencyHTTP = &http.Client{Timeout: 10 * time.Second}
+
 // FetchRates retrieves current exchange rates for a given base currency.
 func FetchRates(base string) (*ExchangeRates, error) {
 	url := fmt.Sprintf("https://api.exchangerate-api.com/v4/latest/%s", base)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := currencyHTTP.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +81,46 @@ func (b *Bot) handlePesoCommand(target string) {
 	}
 
 	b.sendPrivmsg(target, msg)
+}
+
+// parseConvertArgs parses "<amount> <from> <to>" (e.g. "100 usd ars") into an
+// amount and uppercased currency codes. Pure/no I/O so it's directly testable.
+func parseConvertArgs(rest string) (amount float64, from, to string, err error) {
+	fields := strings.Fields(rest)
+	if len(fields) != 3 {
+		return 0, "", "", fmt.Errorf("expected 3 arguments, got %d", len(fields))
+	}
+	amount, err = strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("invalid amount %q", fields[0])
+	}
+	return amount, strings.ToUpper(fields[1]), strings.ToUpper(fields[2]), nil
+}
+
+// formatConvertReply renders the !convert reply line. Pure/no I/O so it's directly testable.
+func formatConvertReply(sender string, amount float64, from string, converted float64, to string) string {
+	return fmt.Sprintf("\x0303,01[CURRENCY]\x03 %s: %.2f %s = %.2f %s", sender, amount, from, converted, to)
+}
+
+// handleConvertCommand: !convert <amount> <from> <to> — e.g. !convert 100 USD ARS.
+func (b *Bot) handleConvertCommand(target, sender, rest string) {
+	amount, from, to, err := parseConvertArgs(rest)
+	if err != nil {
+		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sconvert <amount> <from> <to> — e.g. %sconvert 100 USD ARS", b.pfx(), b.pfx()))
+		return
+	}
+
+	rates, err := FetchRates(from)
+	if err != nil {
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: error fetching rates: %v", sender, err))
+		return
+	}
+	rate, ok := rates.Rates[to]
+	if !ok {
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: no rate found for %s -> %s", sender, from, to))
+		return
+	}
+	b.sendPrivmsg(target, formatConvertReply(sender, amount, from, amount*rate, to))
 }
 
 func (b *Bot) handleCryptoCommand(target string) {
