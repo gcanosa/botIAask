@@ -4,10 +4,9 @@ import (
 	"botIAask/db"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
-
-	
 )
 
 type Database struct {
@@ -128,9 +127,10 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
-		// Prepend to maintain chronological order in the result slice
-		entries = append([]StatEntry{e}, entries...)
+		entries = append(entries, e)
 	}
+	// Query is DESC (newest first); reverse once to return chronological order.
+	slices.Reverse(entries)
 	return entries, nil
 }
 

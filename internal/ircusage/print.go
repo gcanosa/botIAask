@@ -39,9 +39,12 @@ var userLines = []line{
 	{cmd: "!download [N]", desc: "List your approved uploads with URLs (newest first; optional last N)"},
 	{cmd: "!euro", desc: "Euro / forex rate view"},
 	{cmd: "!peso", desc: "Argentine peso rate view"},
+	{cmd: "!convert <amount> <from> <to>", desc: "Convert between currencies, e.g. !convert 100 USD ARS"},
 	{cmd: "!crypto", desc: "Crypto market view"},
 	{cmd: "!ping <host>", desc: "Single probe: RTT in ms, or unreachable"},
-	{cmd: "!reminder ...", desc: "add <note> | del <id> | list | read <id>"},
+	{cmd: "!reminder ...", desc: "add <time> <note> (time e.g. 30m/2h/3d, 0=on next join) | del <id> | list | read <id>"},
+	{cmd: "!tell <nick> <msg>", desc: "Leave a message; delivered when that nick is next seen"},
+	{cmd: "!seen <nick>", desc: "Show when a nick was last active"},
 	{cmd: "!todo ...", desc: "add <text> (public web) | list | del <id> | private <text> (admins: staff-only)"},
 	{cmd: "!help", desc: "Short command list in the channel"},
 }

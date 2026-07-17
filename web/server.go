@@ -741,8 +741,16 @@ func (s *Server) handleChangelog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	gitLog := executeGitLog(limit)
-	commits := parseGitLog(gitLog)
+	cfg := s.getConfig()
+	var commits []map[string]interface{}
+
+	// Use GitHub API if configured, otherwise fall back to local git
+	if cfg.GitHub.Owner != "" && cfg.GitHub.Repo != "" {
+		commits = fetchFromGitHub(cfg.GitHub, limit)
+	} else {
+		gitLog := executeGitLog(limit)
+		commits = parseGitLog(gitLog)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -776,6 +784,10 @@ func parseGitLog(gitLog string) []map[string]interface{} {
 			if err != nil {
 				commitTime = time.Now()
 			}
+			shortID := parts[0]
+			if len(shortID) > 7 {
+				shortID = shortID[:7]
+			}
 			commit := map[string]interface{}{
 				"id":        parts[0],
 				"author":    parts[1],
@@ -784,12 +796,106 @@ func parseGitLog(gitLog string) []map[string]interface{} {
 				"date":      commitTime.Format("2006-01-02"),
 				"time":      commitTime.Format("15:04:05"),
 				"message":   parts[4],
-				"shortId":   parts[0][:7],
+				"shortId":   shortID,
 			}
 			commits = append(commits, commit)
 		}
 	}
 	return commits
+}
+
+func fetchFromGitHub(ghCfg config.GitHubConfig, limit int) []map[string]interface{} {
+	ref := ghCfg.Ref
+	if ref == "" {
+		ref = "main"
+	}
+
+	// GitHub's commits API caps per_page at 100.
+	if limit > 100 {
+		limit = 100
+	}
+
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits?per_page=%d&sha=%s",
+		url.QueryEscape(ghCfg.Owner), url.QueryEscape(ghCfg.Repo), limit, url.QueryEscape(ref))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		log.Printf("github changelog: request creation failed: %v", err)
+		return nil
+	}
+
+	req.Header.Set("User-Agent", "botIAask")
+	if ghCfg.Token != "" {
+		req.Header.Set("Authorization", "token "+ghCfg.Token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("github changelog: request failed: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("github changelog: status %d", resp.StatusCode)
+		return nil
+	}
+
+	var commits []struct {
+		SHA    string `json:"sha"`
+		Author struct {
+			Name  string `json:"name"`
+			Email string `json:"email"`
+			Date  string `json:"date"`
+		} `json:"author"`
+		Commit struct {
+			Message string `json:"message"`
+			Author  struct {
+				Name  string `json:"name"`
+				Email string `json:"email"`
+				Date  string `json:"date"`
+			} `json:"author"`
+		} `json:"commit"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&commits); err != nil {
+		log.Printf("github changelog: decode failed: %v", err)
+		return nil
+	}
+
+	var result []map[string]interface{}
+	for _, c := range commits {
+		if c.Commit.Author.Date == "" {
+			continue
+		}
+
+		commitTime, err := time.Parse(time.RFC3339, c.Commit.Author.Date)
+		if err != nil {
+			continue
+		}
+
+		shortID := c.SHA
+		if len(shortID) > 7 {
+			shortID = shortID[:7]
+		}
+
+		commit := map[string]interface{}{
+			"id":        c.SHA,
+			"author":    c.Commit.Author.Name,
+			"email":     c.Commit.Author.Email,
+			"timestamp": commitTime.Format(time.RFC3339),
+			"date":      commitTime.Format("2006-01-02"),
+			"time":      commitTime.Format("15:04:05"),
+			"message":   c.Commit.Message,
+			"shortId":   shortID,
+		}
+		result = append(result, commit)
+	}
+
+	return result
 }
 
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {

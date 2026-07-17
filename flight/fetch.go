@@ -21,6 +21,10 @@ type FetchParams struct {
 	APIKey   string
 	HTTP     *http.Client
 	FlightID string
+	// Date, when set, looks up a scheduled flight via /schedules instead of the
+	// real-time /flight endpoint (which only returns currently in-progress flights).
+	// Live position fields (lat/lng/speed/etc.) are unavailable for scheduled lookups.
+	Date *time.Time
 }
 
 // Snapshot is a normalized leg + live position (AirLabs /flight + airport lookup).
@@ -87,11 +91,21 @@ func Fetch(ctx context.Context, p FetchParams) (*Snapshot, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 35 * time.Second}
 	}
-	raw, err := getJSON(ctx, client, base, "/flight", key, map[string]string{"flight_iata": flightI})
+
+	var raw interface{}
+	var err error
+	if p.Date != nil {
+		raw, err = fetchScheduledFlight(ctx, client, base, key, flightI, *p.Date)
+	} else {
+		raw, err = getJSON(ctx, client, base, "/flight", key, map[string]string{"flight_iata": flightI})
+	}
 	if err != nil {
 		return &Snapshot{OK: false, Error: err.Error()}, nil
 	}
 	if raw == nil {
+		if p.Date != nil {
+			return &Snapshot{OK: false, Error: fmt.Sprintf("no schedule data for %s on %s (schedules window is limited)", flightI, p.Date.Format("2006-01-02"))}, nil
+		}
 		return &Snapshot{OK: false, Error: "no flight in response"}, nil
 	}
 	snap, perr := normalizeAirlabs(raw)
@@ -154,6 +168,33 @@ func mergeAirport(s *Snapshot, dep, arr *airportRow) {
 			s.Arr.Timezone = arr.Timezone
 		}
 	}
+}
+
+// fetchScheduledFlight queries AirLabs /schedules for flightI and returns the raw
+// entry whose dep_time falls on date. /flight only returns currently in-progress
+// flights, so a date lookup needs the schedules endpoint instead. Returns (nil, nil)
+// when no entry matches that date (schedules windows are limited to a few days).
+func fetchScheduledFlight(ctx context.Context, client *http.Client, base, key, flightI string, date time.Time) (interface{}, error) {
+	raw, err := getJSON(ctx, client, base, "/schedules", key, map[string]string{"flight_iata": flightI})
+	if err != nil {
+		return nil, err
+	}
+	entries, ok := raw.([]interface{})
+	if !ok {
+		return nil, nil
+	}
+	wantDate := date.Format("2006-01-02")
+	for _, e := range entries {
+		m, ok := e.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		depTime, _ := m["dep_time"].(string)
+		if strings.HasPrefix(strings.TrimSpace(depTime), wantDate) {
+			return m, nil
+		}
+	}
+	return nil, nil
 }
 
 type airportRow struct {

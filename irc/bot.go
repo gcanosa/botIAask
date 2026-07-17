@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -17,6 +18,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/internal/guard"
 	"botIAask/internal/sysinfo"
 	"botIAask/logger"
 	"botIAask/meta"
@@ -32,21 +34,25 @@ import (
 
 // Bot represents the IRC bot instance using the ergochat/irc-go library.
 type Bot struct {
-	cfg            *config.Config
-	aiClient       *ai.Client
-	conn           *ircevent.Connection
-	prefix         string
-	cmdName        string
-	adminEnabled   bool
-	startTime      time.Time
+	cfg          atomic.Pointer[config.Config]
+	aiClient     *ai.Client
+	conn         *ircevent.Connection
+	adminEnabled bool
+	startTime    time.Time
+
+	// connectionTime is written once per (re)connect and read for uptime/stats;
+	// guarded by statsMu alongside the adjacent `connected` field.
 	connectionTime time.Time
 
 	// Channel membership tracking: channel -> set of users
 	channelMembers map[string]map[string]struct{}
 	membersMu      sync.RWMutex
 
-	// Rate limiting fields
+	// Rate limiting fields; swapped in ApplyLiveConfig under membersMu, read via limiter().
 	rateLimiter *RateLimiter
+
+	// cmdSem bounds concurrent command handlers dispatched off the IRC read loop (see dispatchCommand).
+	cmdSem chan struct{}
 
 	// Version tracking
 	version string
@@ -95,22 +101,27 @@ type Bot struct {
 	// sessionJoins: runtime-only JOINs (not in config; lost on new process, rejoined on IRC reconnect in-process)
 	sessionJoins   []config.IRChannel
 	sessionJoinsMu sync.Mutex
+
+	// tellPending: IRC case-folded nicks with waiting !tell messages, so the
+	// per-line PRIVMSG path stays O(1) and only hits the DB when something is due.
+	tellPending map[string]struct{}
+	tellMu      sync.RWMutex
 }
 
 // NewBot initializes a new Bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	bot := &Bot{
-		cfg:            cfg,
 		aiClient:       aiClient,
-		prefix:         cfg.Bot.CommandPrefix,
-		cmdName:        cfg.Bot.CommandName,
 		startTime:      time.Now(),
 		connectionTime: time.Now(),
 		channelMembers: make(map[string]map[string]struct{}),
 		version:        meta.Version,
 		ignoreList:     make(map[string]bool),
 		loggedInAdmins: make(map[string]bool),
+		tellPending:    make(map[string]struct{}),
+		cmdSem:         make(chan struct{}, 4),
 	}
+	bot.cfg.Store(cfg)
 
 	// Initialize rate limiter
 	if cfg.Bot.RateLimiting != nil && cfg.Bot.RateLimiting.Enabled {
@@ -134,12 +145,12 @@ func (b *Bot) SetRSSDatabase(db *rss.Database) {
 // persistAnnounceToIRC updates rss.announce_to_irc and writes config to disk. The RSS fetcher reads the same cfg pointer, so the next broadcast in an in-flight Fetch() respects the new value.
 func (b *Bot) persistAnnounceToIRC(enabled bool) error {
 	v := enabled
-	b.cfg.RSS.AnnounceToIRC = &v
+	b.getCfg().RSS.AnnounceToIRC = &v
 	path := b.configPath
 	if path == "" {
 		path = config.DefaultConfigPath
 	}
-	return config.SaveConfig(path, b.cfg)
+	return config.SaveConfig(path, b.getCfg())
 }
 
 // SetBookmarksDatabase sets the bookmarks database for the bot
@@ -243,7 +254,7 @@ func channelListDifference(a, b []string) []string {
 }
 
 func (b *Bot) persistIRCChannelsToDisk() error {
-	return config.SaveConfig(configPathOrDefault(b), b.cfg)
+	return config.SaveConfig(configPathOrDefault(b), b.getCfg())
 }
 
 func boolPtrEqualIR(a, b *bool) bool {
@@ -257,27 +268,27 @@ func boolPtrEqualIR(a, b *bool) bool {
 }
 
 func (b *Bot) addIRCChannelToConfig(entry config.IRChannel) error {
-	for i, existing := range b.cfg.IRC.Channels {
+	for i, existing := range b.getCfg().IRC.Channels {
 		if strings.EqualFold(existing.Name, entry.Name) {
 			if existing.Password == entry.Password && boolPtrEqualIR(existing.AutoJoin, entry.AutoJoin) {
 				return nil
 			}
-			b.cfg.IRC.Channels[i] = entry
+			b.getCfg().IRC.Channels[i] = entry
 			return b.persistIRCChannelsToDisk()
 		}
 	}
-	b.cfg.IRC.Channels = append(b.cfg.IRC.Channels, entry)
+	b.getCfg().IRC.Channels = append(b.getCfg().IRC.Channels, entry)
 	return b.persistIRCChannelsToDisk()
 }
 
 func (b *Bot) removeIRCChannelFromConfig(ch string) error {
-	out := b.cfg.IRC.Channels[:0]
-	for _, existing := range b.cfg.IRC.Channels {
+	out := b.getCfg().IRC.Channels[:0]
+	for _, existing := range b.getCfg().IRC.Channels {
 		if !strings.EqualFold(existing.Name, ch) {
 			out = append(out, existing)
 		}
 	}
-	b.cfg.IRC.Channels = out
+	b.getCfg().IRC.Channels = out
 	return b.persistIRCChannelsToDisk()
 }
 
@@ -294,7 +305,7 @@ func (b *Bot) FormatQuitMessage(override string) string {
 	if o != "" {
 		return o
 	}
-	tmpl := strings.TrimSpace(b.cfg.IRC.QuitMessage)
+	tmpl := strings.TrimSpace(b.getCfg().IRC.QuitMessage)
 	if tmpl == "" {
 		return fmt.Sprintf("%s %s Uptime: %s", meta.Name, meta.Version, b.GetUptime())
 	}
@@ -306,7 +317,7 @@ func (b *Bot) expandQuitTemplate(tmpl string) string {
 		"{name}", meta.Name,
 		"{version}", meta.Version,
 		"{uptime}", b.GetUptime(),
-		"{nickname}", b.cfg.IRC.Nickname,
+		"{nickname}", b.getCfg().IRC.Nickname,
 	)
 	return r.Replace(tmpl)
 }
@@ -372,16 +383,34 @@ func (b *Bot) Broadcast(channels []string, message string) {
 // GetConfig returns the live in-memory config (read-only; do not mutate).
 // For a snapshot before rehash, use config.CloneConfig(b.GetConfig()).
 func (b *Bot) GetConfig() *config.Config {
+	return b.cfg.Load()
+}
+
+// getCfg is the internal-use alias for GetConfig, used at hot read sites.
+func (b *Bot) getCfg() *config.Config {
+	return b.cfg.Load()
+}
+
+// pfx returns the live command prefix (e.g. "!"). Reads the atomic cfg pointer, so it's safe from any goroutine.
+func (b *Bot) pfx() string {
+	return b.cfg.Load().Bot.CommandPrefix
+}
+
+// cmd returns the live command name (e.g. "ask").
+func (b *Bot) cmd() string {
+	return b.cfg.Load().Bot.CommandName
+}
+
+// limiter returns the current rate limiter (nil if disabled). Swapped in ApplyLiveConfig under membersMu.
+func (b *Bot) limiter() *RateLimiter {
 	b.membersMu.RLock()
 	defer b.membersMu.RUnlock()
-	return b.cfg
+	return b.rateLimiter
 }
 
 // IsAdmin checks if a given hostmask or account matches the admin list.
 func (b *Bot) IsAdmin(fullHostmask string) bool {
-	b.membersMu.RLock()
-	defer b.membersMu.RUnlock()
-	for _, admin := range b.cfg.Admin.Admins {
+	for _, admin := range b.getCfg().Admin.Admins {
 		if strings.Contains(fullHostmask, admin) {
 			return true
 		}
@@ -391,16 +420,16 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 
 // ApplyLiveConfig swaps in a new config from disk, rebuilds rate limiting, and syncs channel membership without reconnecting.
 func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
-	b.membersMu.Lock()
-	oldAuto := config.IRChannelNamesAutoJoin(b.cfg.IRC.Channels)
-	oldSrv := b.cfg.IRC.Server
-	oldPort := b.cfg.IRC.Port
-	oldNick := b.cfg.IRC.Nickname
-	oldTLS := b.cfg.IRC.UseSSL
+	oldCfg := b.cfg.Load()
+	oldAuto := config.IRChannelNamesAutoJoin(oldCfg.IRC.Channels)
+	oldSrv := oldCfg.IRC.Server
+	oldPort := oldCfg.IRC.Port
+	oldNick := oldCfg.IRC.Nickname
+	oldTLS := oldCfg.IRC.UseSSL
 
-	b.cfg = newCfg
-	b.prefix = newCfg.Bot.CommandPrefix
-	b.cmdName = newCfg.Bot.CommandName
+	b.cfg.Store(newCfg)
+
+	b.membersMu.Lock()
 	if newCfg.Bot.RateLimiting != nil && newCfg.Bot.RateLimiting.Enabled {
 		w := time.Duration(newCfg.Bot.RateLimiting.Window) * time.Second
 		b.rateLimiter = NewRateLimiter(w)
@@ -464,7 +493,7 @@ func (b *Bot) JoinChannelSession(entry config.IRChannel) error {
 	if !ircChannelTarget(name) {
 		return fmt.Errorf("invalid channel name")
 	}
-	if _, ok := config.FindIRChannelByName(b.cfg.IRC.Channels, name); ok {
+	if _, ok := config.FindIRChannelByName(b.getCfg().IRC.Channels, name); ok {
 		return fmt.Errorf("channel already in config; edit autoinjoin or remove from list")
 	}
 	b.sessionJoinsMu.Lock()
@@ -528,24 +557,28 @@ func (b *Bot) ListSessionChannels() []config.IRChannel {
 
 // Start connects to the IRC server and starts the bot event loop.
 func (b *Bot) Start() error {
-	serverAddr := fmt.Sprintf("%s:%d", b.cfg.IRC.Server, b.cfg.IRC.Port)
+	serverAddr := fmt.Sprintf("%s:%d", b.getCfg().IRC.Server, b.getCfg().IRC.Port)
 
-	// Initialize the connection object
+	// Initialize the connection object. ReconnectFreq/KeepAlive/Timeout are tightened
+	// from the library defaults (2m/4m/1m) so netsplits recover faster.
 	b.conn = &ircevent.Connection{
-		Server:      serverAddr,
-		Nick:        b.cfg.IRC.Nickname,
-		User:        b.cfg.IRC.Nickname,
-		RealName:    b.cfg.IRC.Nickname,
-		UseTLS:      b.cfg.IRC.UseSSL,
-		Debug:       b.cfg.Bot.Debug,
-		RequestCaps: []string{"server-time", "message-tags", "sasl"},
+		Server:        serverAddr,
+		Nick:          b.getCfg().IRC.Nickname,
+		User:          b.getCfg().IRC.Nickname,
+		RealName:      b.getCfg().IRC.Nickname,
+		UseTLS:        b.getCfg().IRC.UseSSL,
+		Debug:         b.getCfg().Bot.Debug,
+		RequestCaps:   []string{"server-time", "message-tags", "sasl"},
+		ReconnectFreq: 30 * time.Second,
+		KeepAlive:     60 * time.Second,
+		Timeout:       30 * time.Second,
 	}
 
 	// SASL Authentication setup
-	if b.cfg.IRC.Services.Enabled {
-		b.conn.SASLLogin = b.cfg.IRC.Services.Username
-		b.conn.SASLPassword = b.cfg.IRC.Services.Password
-		if b.cfg.Bot.Debug {
+	if b.getCfg().IRC.Services.Enabled {
+		b.conn.SASLLogin = b.getCfg().IRC.Services.Username
+		b.conn.SASLPassword = b.getCfg().IRC.Services.Password
+		if b.getCfg().Bot.Debug {
 			log.Printf("[DEBUG] SASL Authentication enabled for user: %s", b.conn.SASLLogin)
 		}
 	}
@@ -556,7 +589,7 @@ func (b *Bot) Start() error {
 		b.authMu.Lock()
 		b.authenticated = true
 		b.authMu.Unlock()
-		if b.cfg.Bot.Debug {
+		if b.getCfg().Bot.Debug {
 			log.Println("[DEBUG] Successfully authenticated with services.")
 		}
 	}
@@ -578,18 +611,18 @@ func (b *Bot) Start() error {
 	// Handle connection established event
 	b.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("Connected to %s! Joining channels...", serverAddr)
-		b.connectionTime = time.Now()
 		b.statsMu.Lock()
+		b.connectionTime = time.Now()
 		b.connected = true
 		b.statsMu.Unlock()
-		for _, channel := range b.cfg.IRC.Channels {
+		for _, channel := range b.getCfg().IRC.Channels {
 			if !channel.AutoJoinEnabled() {
-				if b.cfg.Bot.Debug {
+				if b.getCfg().Bot.Debug {
 					log.Printf("[DEBUG] Skipping auto-join (auto_join: false): %s", channel.Name)
 				}
 				continue
 			}
-			if b.cfg.Bot.Debug {
+			if b.getCfg().Bot.Debug {
 				if channel.Password != "" {
 					log.Printf("[DEBUG] Joining channel: %s (key set)", channel.Name)
 				} else {
@@ -609,7 +642,7 @@ func (b *Bot) Start() error {
 		message := e.Params[1]
 		sender := e.Nick()
 
-		if b.cfg.Bot.Debug {
+		if b.getCfg().Bot.Debug {
 			log.Printf("[DEBUG] PRIVMSG received - Sender: %s, Target: %s, Content: %s", sender, target, message)
 		}
 
@@ -617,19 +650,25 @@ func (b *Bot) Start() error {
 			ctcpContent := message[1 : len(message)-1]
 			if strings.HasPrefix(ctcpContent, "ACTION ") {
 				actionMsg := ctcpContent[7:]
-				logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventAction, sender, actionMsg, "")
+				logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventAction, sender, actionMsg, "")
 				if b.tracker != nil {
 					b.tracker.LogAction(sender)
 				}
+				ch, reply := seenTargets(target, sender)
+				b.recordSeen(sender, ch, "action", actionMsg)
+				b.deliverTells(sender, reply)
 			} else {
 				b.handleCTCPRequest(sender, target, ctcpContent)
 			}
 		} else {
-			logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, sender, message, "")
+			logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventMessage, sender, message, "")
 			if b.tracker != nil {
 				b.tracker.LogMessage(sender)
 			}
-			b.handleCommand(target, message, sender, e.Source)
+			ch, reply := seenTargets(target, sender)
+			b.recordSeen(sender, ch, "message", message)
+			b.dispatchCommand(target, message, sender, e.Source)
+			b.deliverTells(sender, reply)
 		}
 	})
 
@@ -640,7 +679,7 @@ func (b *Bot) Start() error {
 		target := e.Params[0]
 		message := e.Params[1]
 		sender := e.Nick()
-		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventNotice, sender, message, "")
+		logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventNotice, sender, message, "")
 	})
 
 	b.conn.AddCallback("JOIN", func(e ircmsg.Message) {
@@ -649,7 +688,7 @@ func (b *Bot) Start() error {
 		}
 		target := e.Params[0] // Channel
 		sender := e.Nick()
-		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventJoin, sender, "", "")
+		logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventJoin, sender, "", "")
 
 		b.membersMu.Lock()
 		if _, exists := b.channelMembers[target]; !exists {
@@ -663,11 +702,13 @@ func (b *Bot) Start() error {
 			b.updateTrackerAdmins()
 		}
 
-		if b.bookmarksDB != nil && bookmarks.IRCCaseFoldNick(sender) != bookmarks.IRCCaseFoldNick(b.cfg.IRC.Nickname) {
-			rems, err := b.bookmarksDB.ListReminders(sender)
+		b.recordSeen(sender, target, "join", "")
+
+		if b.bookmarksDB != nil && bookmarks.IRCCaseFoldNick(sender) != bookmarks.IRCCaseFoldNick(b.getCfg().IRC.Nickname) {
+			rems, err := b.bookmarksDB.ListJoinReminders(sender)
 			if err != nil {
-				if b.cfg.Bot.Debug {
-					log.Printf("[DEBUG] ListReminders on JOIN: %v", err)
+				if b.getCfg().Bot.Debug {
+					log.Printf("[DEBUG] ListJoinReminders on JOIN: %v", err)
 				}
 			} else {
 				const maxJoinNoteBytes = 380
@@ -676,6 +717,7 @@ func (b *Bot) Start() error {
 					b.sendNotice(sender, fmt.Sprintf("[Reminder %s] %s", r.PublicID, note))
 				}
 			}
+			b.deliverTells(sender, target)
 		}
 	})
 
@@ -689,7 +731,7 @@ func (b *Bot) Start() error {
 		if len(e.Params) > 1 {
 			message = e.Params[1]
 		}
-		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventPart, sender, message, "")
+		logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventPart, sender, message, "")
 
 		b.membersMu.Lock()
 		if members, exists := b.channelMembers[target]; exists {
@@ -701,6 +743,8 @@ func (b *Bot) Start() error {
 			b.tracker.LogPart()
 			b.updateTrackerAdmins()
 		}
+
+		b.recordSeen(sender, target, "part", message)
 	})
 
 	b.conn.AddCallback("KICK", func(e ircmsg.Message) {
@@ -714,7 +758,7 @@ func (b *Bot) Start() error {
 		if len(e.Params) > 2 {
 			message = e.Params[2]
 		}
-		logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventKick, sender, message, kicked)
+		logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventKick, sender, message, kicked)
 
 		b.membersMu.Lock()
 		if members, exists := b.channelMembers[target]; exists {
@@ -735,8 +779,8 @@ func (b *Bot) Start() error {
 			message = e.Params[0]
 		}
 		// For quits, we log to all configured channels as we might not have a full state tracker
-		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(b.cfg.IRC.Server, channel.Name, logger.EventQuit, sender, message, "")
+		for _, channel := range b.getCfg().IRC.Channels {
+			logger.LogChannelEvent(b.getCfg().IRC.Server, channel.Name, logger.EventQuit, sender, message, "")
 		}
 
 		b.membersMu.Lock()
@@ -749,6 +793,8 @@ func (b *Bot) Start() error {
 			b.tracker.LogPart()
 			b.updateTrackerAdmins()
 		}
+
+		b.recordSeen(sender, "", "quit", message)
 	})
 
 	b.conn.AddCallback("NICK", func(e ircmsg.Message) {
@@ -757,8 +803,8 @@ func (b *Bot) Start() error {
 		}
 		sender := e.Nick()
 		newNick := e.Params[0]
-		for _, channel := range b.cfg.IRC.Channels {
-			logger.LogChannelEvent(b.cfg.IRC.Server, channel.Name, logger.EventNick, sender, newNick, "")
+		for _, channel := range b.getCfg().IRC.Channels {
+			logger.LogChannelEvent(b.getCfg().IRC.Server, channel.Name, logger.EventNick, sender, newNick, "")
 		}
 
 		b.membersMu.Lock()
@@ -787,34 +833,54 @@ func (b *Bot) Start() error {
 		b.statsMu.Lock()
 		b.connected = false
 		b.statsMu.Unlock()
-		if b.cfg.Bot.Debug {
+		if b.getCfg().Bot.Debug {
 			log.Println("Disconnected from IRC server")
 		}
 	})
 
 	// Initial connect: ircevent only enters its reconnect path after Loop() runs; a failed first
-	// Connect() returns here and never reaches Loop(), so transient TLS/DNS/handshake failures need retries.
-	const maxIRCConnectAttempts = 5
-	connectBackoff := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
-	var err error
-	for attempt := 1; attempt <= maxIRCConnectAttempts; attempt++ {
-		err = b.conn.Connect()
+	// Connect() returns here and never reaches Loop(), so this is a daemon — retry forever
+	// with capped exponential backoff rather than giving up and leaving the process idle.
+	backoff := 2 * time.Second
+	const maxBackoff = 2 * time.Minute
+	for attempt := 1; ; attempt++ {
+		err := b.conn.Connect()
 		if err == nil {
 			break
 		}
-		log.Printf("IRC connect attempt %d/%d failed: %v", attempt, maxIRCConnectAttempts, err)
-		if attempt < maxIRCConnectAttempts {
-			time.Sleep(connectBackoff[attempt-1])
+		log.Printf("IRC connect attempt %d failed (retrying in %s): %v", attempt, backoff, err)
+		time.Sleep(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 		}
 	}
-	if err != nil {
-		return fmt.Errorf("failed to connect to IRC server after %d attempts: %w", maxIRCConnectAttempts, err)
-	}
+
+	// Fire timed reminders and prime the pending-tell cache for the process lifetime.
+	b.startReminderScheduler()
 
 	// The Loop handles reconnection after disconnect
 	b.conn.Loop()
 
 	return nil
+}
+
+// dispatchCommand runs handleCommand off the ircevent read goroutine so a slow
+// HTTP/AI-bound command can't stall PING/PONG and get the bot ping-timed-out.
+// cmdSem bounds concurrency; the semaphore is acquired inside the goroutine so
+// the read loop itself never blocks — a burst of commands just parks extra
+// goroutines instead of stalling message processing.
+func (b *Bot) dispatchCommand(target, message, sender, source string) {
+	if !strings.HasPrefix(message, b.pfx()) {
+		return
+	}
+	guard.Go("handleCommand", func() {
+		b.cmdSem <- struct{}{}
+		defer func() { <-b.cmdSem }()
+		b.handleCommand(target, message, sender, source)
+	})
 }
 
 // handleCommand checks for the commands and interacts with the AI client or management functions.
@@ -826,15 +892,15 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	b.loginsMu.RUnlock()
 
 	// !help command
-	if strings.HasPrefix(message, b.prefix+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %smovie <title>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %scrypto, %sping <host>, %sreminder add/del/list/read, %stodo add|private|list|del",
-			b.prefix, b.cmdName, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+	if strings.HasPrefix(message, b.pfx()+"help") {
+		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %smovie <title>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %sconvert <amount> <from> <to>, %scrypto, %sping <host>, %sreminder add <time> <note>/del/list/read, %stell <nick> <msg>, %sseen <nick>, %stodo add|private|list|del",
+			b.pfx(), b.cmd(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
 		if isAdmin && isLoggedInAdmin {
 			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
-				b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix, b.prefix)
+				b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
 			b.sendPrivmsgMentionedLines(target, sender, public, admin)
 		} else if isAdmin {
-			merged := public + fmt.Sprintf(" | Admin: Auth required using %sadmin", b.prefix)
+			merged := public + fmt.Sprintf(" | Admin: Auth required using %sadmin", b.pfx())
 			b.sendPrivmsgMentionedLines(target, sender, merged)
 		} else {
 			b.sendPrivmsgMentionedLines(target, sender, public)
@@ -843,7 +909,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Session commands
-	if strings.HasPrefix(message, b.prefix+"admin") {
+	if strings.HasPrefix(message, b.pfx()+"admin") {
 		parts := strings.Fields(message)
 		if len(parts) > 1 && parts[1] == "off" {
 			b.loginsMu.Lock()
@@ -883,8 +949,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 	// Admin commands
 	if isAdmin && isLoggedInAdmin {
-		if strings.HasPrefix(message, b.prefix+"join ") {
-			rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"join "))
+		if strings.HasPrefix(message, b.pfx()+"join ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"join "))
 			chName, chKey := parseJoinChannelAndKey(rest)
 			if chName == "" {
 				return
@@ -907,7 +973,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			return
 		}
-		if strings.HasPrefix(message, b.prefix+"part") {
+		if strings.HasPrefix(message, b.pfx()+"part") {
 			parts := strings.Fields(message)
 			channel := target
 			if len(parts) > 1 {
@@ -925,7 +991,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			return
 		}
-		if message == b.prefix+"rehash" {
+		if message == b.pfx()+"rehash" {
 			if err := b.RunRehash(sender); err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("Rehash failed: %v", err))
 			} else {
@@ -936,8 +1002,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			return
 		}
-		if strings.HasPrefix(message, b.prefix+"ignore ") {
-			user := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"ignore "))
+		if strings.HasPrefix(message, b.pfx()+"ignore ") {
+			user := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"ignore "))
 			if user != "" {
 				b.ignoreMu.Lock()
 				b.ignoreList[strings.ToLower(user)] = true
@@ -949,14 +1015,14 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			return
 		}
-		if strings.HasPrefix(message, b.prefix+"stats") {
+		if strings.HasPrefix(message, b.pfx()+"stats") {
 			if b.tracker != nil {
 				b.tracker.LogAdminCommand()
 			}
 			b.sendAdminStats(target, sender)
 			return
 		}
-		if strings.HasPrefix(message, b.prefix+"say ") {
+		if strings.HasPrefix(message, b.pfx()+"say ") {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) >= 3 {
 				ch := parts[1]
@@ -968,8 +1034,8 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			return
 		}
-		if strings.HasPrefix(message, b.prefix+"quit") {
-			reason := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"quit"))
+		if strings.HasPrefix(message, b.pfx()+"quit") {
+			reason := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"quit"))
 			if b.tracker != nil {
 				b.tracker.LogAdminCommand()
 			}
@@ -988,25 +1054,25 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				}
 
 				switch cmd {
-				case b.prefix + "op":
+				case b.pfx() + "op":
 					b.conn.Send("MODE", target, "+o", targetNick)
 					if b.tracker != nil {
 						b.tracker.LogAdminCommand()
 					}
 					return
-				case b.prefix + "deop":
+				case b.pfx() + "deop":
 					b.conn.Send("MODE", target, "-o", targetNick)
 					if b.tracker != nil {
 						b.tracker.LogAdminCommand()
 					}
 					return
-				case b.prefix + "voice":
+				case b.pfx() + "voice":
 					b.conn.Send("MODE", target, "+v", targetNick)
 					if b.tracker != nil {
 						b.tracker.LogAdminCommand()
 					}
 					return
-				case b.prefix + "devoice":
+				case b.pfx() + "devoice":
 					b.conn.Send("MODE", target, "-v", targetNick)
 					if b.tracker != nil {
 						b.tracker.LogAdminCommand()
@@ -1017,11 +1083,11 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 	} else if isAdmin {
 		// Log failed attempts to use admin commands without session
-		if strings.HasPrefix(message, b.prefix) {
+		if strings.HasPrefix(message, b.pfx()) {
 			adminCmds := []string{"join", "part", "ignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice"}
 			parts := strings.Fields(message)
 			if len(parts) > 0 {
-				cmd := strings.TrimPrefix(parts[0], b.prefix)
+				cmd := strings.TrimPrefix(parts[0], b.pfx())
 				for _, ac := range adminCmds {
 					if cmd == ac {
 						if b.tracker != nil {
@@ -1043,9 +1109,12 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !uptime command
-	if strings.HasPrefix(message, b.prefix+"uptime") {
+	if strings.HasPrefix(message, b.pfx()+"uptime") {
 		appUptime := time.Since(b.startTime)
-		sessionUptime := time.Since(b.connectionTime)
+		b.statsMu.Lock()
+		ct := b.connectionTime
+		b.statsMu.Unlock()
+		sessionUptime := time.Since(ct)
 
 		appUptimeStr := formatDuration(appUptime)
 		sessionUptimeStr := formatDuration(sessionUptime)
@@ -1055,16 +1124,16 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !time command (world clock, one city per IANA time zone)
-	if strings.TrimSpace(message) == b.prefix+"time" {
+	if strings.TrimSpace(message) == b.pfx()+"time" {
 		b.handleTimeCommand(target)
 		return
 	}
 
 	// Handle !bc command (Calculator)
-	if strings.HasPrefix(message, b.prefix+"bc ") {
-		exprStr := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"bc "))
+	if strings.HasPrefix(message, b.pfx()+"bc ") {
+		exprStr := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"bc "))
 		if exprStr == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbc <expression>, e.g., %sbc 5+5", b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbc <expression>, e.g., %sbc 5+5", b.pfx(), b.pfx()))
 			return
 		}
 
@@ -1081,16 +1150,16 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	// Handle !ping <host> (single probe; rate-limited when enabled)
 	{
 		parts := strings.Fields(message)
-		if len(parts) > 0 && parts[0] == b.prefix+"ping" {
-			if b.rateLimiter != nil && !b.rateLimiter.Allow(sender, target, b.cfg.Bot.RateLimiting.Limit, b.cfg.Bot.RateLimiting.Burst) {
-				if b.cfg.Bot.Debug {
+		if len(parts) > 0 && parts[0] == b.pfx()+"ping" {
+			if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+				if b.getCfg().Bot.Debug {
 					log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
 				}
 				b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 				return
 			}
 			if len(parts) < 2 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sping <host> — e.g. %sping 1.1.1.1", b.prefix, b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sping <host> — e.g. %sping 1.1.1.1", b.pfx(), b.pfx()))
 				return
 			}
 			b.handlePingCommand(target, sender, parts[1])
@@ -1099,28 +1168,35 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !euro command
-	if strings.HasPrefix(message, b.prefix+"euro") {
+	if strings.HasPrefix(message, b.pfx()+"euro") {
 		b.handleEuroCommand(target)
 		return
 	}
 
 	// Handle !peso command
-	if strings.HasPrefix(message, b.prefix+"peso") {
+	if strings.HasPrefix(message, b.pfx()+"peso") {
 		b.handlePesoCommand(target)
 		return
 	}
 
+	// Handle !convert <amount> <from> <to>
+	if strings.HasPrefix(message, b.pfx()+"convert") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"convert"))
+		b.handleConvertCommand(target, sender, rest)
+		return
+	}
+
 	// Handle !crypto command
-	if strings.HasPrefix(message, b.prefix+"crypto") {
+	if strings.HasPrefix(message, b.pfx()+"crypto") {
 		b.handleCryptoCommand(target)
 		return
 	}
 
-	// Handle !flight <IATA> [YYYY-MM-DD] (AirLabs v9; api_key; optional date reserved for future use)
-	if strings.HasPrefix(message, b.prefix+"flight") {
-		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"flight"))
+	// Handle !flight <IATA> [YYYY-MM-DD] (AirLabs v9; api_key; date queries /schedules instead of live /flight)
+	if strings.HasPrefix(message, b.pfx()+"flight") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"flight"))
 		if rest == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100", b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100", b.pfx(), b.pfx()))
 			return
 		}
 		b.handleFlightCommand(target, sender, rest)
@@ -1128,10 +1204,10 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !weather <place> (Open-Meteo; comma in place is OK)
-	if strings.HasPrefix(message, b.prefix+"weather") {
-		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"weather"))
+	if strings.HasPrefix(message, b.pfx()+"weather") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"weather"))
 		if rest == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sweather <place> — e.g. %sweather Barcelona, Spain", b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sweather <place> — e.g. %sweather Barcelona, Spain", b.pfx(), b.pfx()))
 			return
 		}
 		b.handleWeatherCommand(target, sender, rest)
@@ -1139,14 +1215,14 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !movie <title> (OMDb)
-	if strings.HasPrefix(message, b.prefix+"movie") {
-		rest := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"movie"))
+	if strings.HasPrefix(message, b.pfx()+"movie") {
+		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"movie"))
 		b.handleMovieCommand(target, sender, rest)
 		return
 	}
 
 	// Handle !news command
-	if strings.HasPrefix(message, b.prefix+"news") {
+	if strings.HasPrefix(message, b.pfx()+"news") {
 		parts := strings.Fields(message)
 
 		// Persist rss.announce_to_irc (global IRC broadcast on/off)
@@ -1172,22 +1248,22 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				if parts[1] == "on" {
 					found := false
 					b.membersMu.Lock()
-					for _, ch := range b.cfg.RSS.Channels {
+					for _, ch := range b.getCfg().RSS.Channels {
 						if strings.EqualFold(ch, target) {
 							found = true
 							break
 						}
 					}
 					if !found {
-						b.cfg.RSS.Channels = append(b.cfg.RSS.Channels, target)
+						b.getCfg().RSS.Channels = append(b.getCfg().RSS.Channels, target)
 					}
 					b.membersMu.Unlock()
 					b.sendPrivmsg(target, fmt.Sprintf("News enabled for %s (current session only).", target))
 				} else {
 					b.membersMu.Lock()
-					for i, ch := range b.cfg.RSS.Channels {
+					for i, ch := range b.getCfg().RSS.Channels {
 						if strings.EqualFold(ch, target) {
-							b.cfg.RSS.Channels = append(b.cfg.RSS.Channels[:i], b.cfg.RSS.Channels[i+1:]...)
+							b.getCfg().RSS.Channels = append(b.getCfg().RSS.Channels[:i], b.getCfg().RSS.Channels[i+1:]...)
 							break
 						}
 					}
@@ -1203,7 +1279,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		// Check if news enabled for this channel
 		isNewsChannel := false
 		b.membersMu.RLock()
-		for _, ch := range b.cfg.RSS.Channels {
+		for _, ch := range b.getCfg().RSS.Channels {
 			if strings.EqualFold(ch, target) {
 				isNewsChannel = true
 				break
@@ -1254,15 +1330,15 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !bookmark command
-	if strings.HasPrefix(message, b.prefix+"bookmark") {
+	if strings.HasPrefix(message, b.pfx()+"bookmark") {
 		if b.bookmarksDB == nil {
 			b.sendPrivmsg(target, "Bookmarks database not initialized.")
 			return
 		}
 
-		body := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"bookmark"))
+		body := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"bookmark"))
 		if body == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.pfx(), b.pfx()))
 			return
 		}
 		firstSpace := strings.IndexByte(body, ' ')
@@ -1279,7 +1355,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		case "ADD":
 			parts := strings.Fields(rest)
 			if len(parts) < 1 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname]", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname]", b.pfx()))
 				return
 			}
 			urlStr := parts[0]
@@ -1319,7 +1395,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 
 		case "FIND":
 			if strings.TrimSpace(rest) == "" {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark FIND <text>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark FIND <text>", b.pfx()))
 				return
 			}
 			list, err := b.bookmarksDB.FindBookmarksByURLContains(strings.TrimSpace(rest), 10)
@@ -1339,19 +1415,19 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, out)))
 
 		default:
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>", b.pfx(), b.pfx()))
 		}
 		return
 	}
 
-	if strings.HasPrefix(message, b.prefix+"reminder") {
+	if strings.HasPrefix(message, b.pfx()+"reminder") {
 		if b.bookmarksDB == nil {
 			b.sendPrivmsg(target, "Bookmarks database not initialized.")
 			return
 		}
-		body := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+"reminder"))
+		body := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"reminder"))
 		if body == "" {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
 			return
 		}
 		firstSpace := strings.IndexByte(body, ' ')
@@ -1366,19 +1442,41 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		switch strings.ToLower(sub) {
 		case "add":
 			if rest == "" {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <time> <note> — time e.g. 30m, 2h, 3d, or 0 to deliver on next join", b.pfx()))
 				return
 			}
-			id, err := b.bookmarksDB.AddReminder(sender, rest)
+			// Optional leading time token: "0" or no-duration => legacy on-join delivery;
+			// a positive duration schedules one-shot delivery at that time.
+			var dueAt *time.Time
+			note := rest
+			tokSpace := strings.IndexByte(rest, ' ')
+			if tokSpace > 0 {
+				if dur, ok := parseReminderDelay(rest[:tokSpace]); ok {
+					note = strings.TrimSpace(rest[tokSpace+1:])
+					if dur > 0 {
+						due := time.Now().Add(dur)
+						dueAt = &due
+					}
+				}
+			}
+			if note == "" {
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <time> <note>", b.pfx()))
+				return
+			}
+			id, err := b.bookmarksDB.AddReminder(sender, note, dueAt)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error adding reminder: %v", sender, err))
 				return
 			}
-			b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder added (id %s).", sender, id))
+			if dueAt != nil {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder added (id %s), due in %s.", sender, id, humanizeDuration(time.Until(*dueAt))))
+			} else {
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder added (id %s); I'll deliver it when you next join.", sender, id))
+			}
 		case "del":
 			fields := strings.Fields(rest)
 			if len(fields) < 1 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder del <id>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder del <id>", b.pfx()))
 				return
 			}
 			pid := fields[0]
@@ -1394,7 +1492,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: Reminder %s deleted.", sender, pid))
 		case "list":
 			if rest != "" {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder list", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder list", b.pfx()))
 				return
 			}
 			rems, err := b.bookmarksDB.ListReminders(sender)
@@ -1408,12 +1506,16 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			const maxListNoteBytes = 120
 			for _, r := range rems {
 				note := truncateReminderNotice(r.Note, maxListNoteBytes)
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, note))
+				when := "on next join"
+				if r.DueAt != nil {
+					when = "due in " + humanizeDuration(time.Until(*r.DueAt))
+				}
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] (%s) %s", sender, r.PublicID, when, note))
 			}
 		case "read":
 			fields := strings.Fields(rest)
 			if len(fields) < 1 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder read <id>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder read <id>", b.pfx()))
 				return
 			}
 			pid := fields[0]
@@ -1428,20 +1530,32 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, r.Note))
 		default:
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <time> <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
 		}
 		return
 	}
 
+	// !tell <nick> <message> — deliver a message when that nick is next seen
+	if strings.HasPrefix(message, b.pfx()+"tell") {
+		b.handleTellCommand(target, sender, message)
+		return
+	}
+
+	// !seen <nick> — report a nick's last observed activity
+	if strings.HasPrefix(message, b.pfx()+"seen") {
+		b.handleSeenCommand(target, sender, message)
+		return
+	}
+
 	// !todo add | !todo private (admins) | !todo list | !todo del — per-user list/delete; add uses random id like pastes
-	if strings.HasPrefix(message, b.prefix+"todo") {
+	if strings.HasPrefix(message, b.pfx()+"todo") {
 		if b.progtodoDB == nil {
 			b.sendPrivmsg(target, "Programmer TODO system not initialized.")
 			return
 		}
 		parts := strings.Fields(message)
 		if len(parts) < 2 {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
 			return
 		}
 		sub := strings.ToLower(parts[1])
@@ -1456,7 +1570,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		case "add":
 			body := todoBodyAfterSub()
 			if body == "" {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text>", b.pfx()))
 				return
 			}
 			// Public backlog: visible to all web users (non–dashboard-staff see non–staff-only rows).
@@ -1465,15 +1579,15 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
 				return
 			}
-			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s added. Visible on the web TODO list (use %stodo private for staff-only).", sender, id, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s added. Visible on the web TODO list (use %stodo private for staff-only).", sender, id, b.pfx()))
 		case "private", "staff":
 			if !isAdmin {
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: Only config admins can add staff-only TODOs. Use %stodo add <text> for the public backlog.", sender, b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("@%s: Only config admins can add staff-only TODOs. Use %stodo add <text> for the public backlog.", sender, b.pfx()))
 				return
 			}
 			body := todoBodyAfterSub()
 			if body == "" {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo private <text>  (dashboard staff only; alias: %stodo staff <text>)", b.prefix, b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo private <text>  (dashboard staff only; alias: %stodo staff <text>)", b.pfx(), b.pfx()))
 				return
 			}
 			id, err := b.progtodoDB.Add(body, sender, true, "")
@@ -1484,7 +1598,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s added (visible to dashboard staff only).", sender, id))
 		case "list":
 			if len(parts) != 2 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo list", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo list", b.pfx()))
 				return
 			}
 			items, err := b.progtodoDB.ListByAuthor(sender)
@@ -1510,7 +1624,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 		case "del", "delete":
 			if len(parts) < 3 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo del <id>", b.prefix))
+				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo del <id>", b.pfx()))
 				return
 			}
 			pubID := parts[2]
@@ -1525,20 +1639,20 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: TODO %s deleted.", sender, pubID))
 		default:
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.prefix, b.prefix, b.prefix, b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo add <text> | %stodo private <text> (admins) | %stodo list | %stodo del <id>", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
 		}
 		return
 	}
 
 	// Handle !spec command (Restored)
-	if strings.HasPrefix(message, b.prefix+"spec") {
+	if strings.HasPrefix(message, b.pfx()+"spec") {
 		spec := "System Prompt: You are a helpful IRC bot. Keep responses concise and suitable for IRC."
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, spec)))
 		return
 	}
 
 	// Ticket commands (Admin only)
-	if strings.HasPrefix(message, b.prefix+"ticket") {
+	if strings.HasPrefix(message, b.pfx()+"ticket") {
 		if !isAdmin || !isLoggedInAdmin {
 			b.sendPrivmsg(target, fmt.Sprintf("@%s: Authorized admins only.", sender))
 			return
@@ -1549,7 +1663,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		}
 		parts := strings.Fields(message)
 		if len(parts) < 2 {
-			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket pending/approve/cancel [ID]", b.prefix))
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sticket pending/approve/cancel [ID]", b.pfx()))
 			return
 		}
 		cmd := parts[1]
@@ -1591,9 +1705,9 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				return
 			}
 			u, _ := b.uploadsDB.GetUploadByTicketID(ticketID)
-			pubURL := fmt.Sprintf("%s/p/%s", b.cfg.Web.BaseURL, ticketID)
+			pubURL := fmt.Sprintf("%s/p/%s", b.getCfg().Web.BaseURL, ticketID)
 			if u != nil && u.IsFile() {
-				pubURL = fmt.Sprintf("%s/f/%s", b.cfg.Web.BaseURL, ticketID)
+				pubURL = fmt.Sprintf("%s/f/%s", b.getCfg().Web.BaseURL, ticketID)
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s", ticketID, pubURL))
 		} else if cmd == "cancel" {
@@ -1613,7 +1727,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Paste command
-	if strings.HasPrefix(message, b.prefix+"paste") {
+	if strings.HasPrefix(message, b.pfx()+"paste") {
 		if b.uploadsDB == nil {
 			b.sendPrivmsg(target, "Pastes system not initialized.")
 			return
@@ -1624,14 +1738,14 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("Error creating paste session: %v", err))
 			return
 		}
-		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.cfg.Web.BaseURL, token)
+		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.getCfg().Web.BaseURL, token)
 		b.sendPrivmsg(sender, fmt.Sprintf("Paste requested. Fill the form here (expires in 30m): %s", uploadURL))
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the paste link.", sender))
 		return
 	}
 
 	// File upload command
-	if strings.HasPrefix(message, b.prefix+"upload") {
+	if strings.HasPrefix(message, b.pfx()+"upload") {
 		if b.uploadsDB == nil {
 			b.sendPrivmsg(target, "Uploads system not initialized.")
 			return
@@ -1642,13 +1756,13 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			b.sendPrivmsg(target, fmt.Sprintf("Error creating upload session: %v", err))
 			return
 		}
-		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.cfg.Web.BaseURL, token)
+		uploadURL := fmt.Sprintf("%s/upload?token=%s", b.getCfg().Web.BaseURL, token)
 		b.sendPrivmsg(sender, fmt.Sprintf("File upload requested. Upload here (expires in 30m): %s", uploadURL))
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: I've sent you a private message with the upload link.", sender))
 		return
 	}
 
-	downloadCmd := b.prefix + "download"
+	downloadCmd := b.pfx() + "download"
 	if strings.HasPrefix(message, downloadCmd) {
 		suf := strings.TrimPrefix(message, downloadCmd)
 		if suf == "" || strings.HasPrefix(suf, " ") {
@@ -1662,7 +1776,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 			if len(parts) > 1 {
 				n, err := strconv.Atoi(parts[1])
 				if err != nil || n <= 0 {
-					b.sendPrivmsg(target, fmt.Sprintf("Usage: %sdownload [N] — list your approved file uploads (newest first); N = last N files (max %d).", b.prefix, maxDownloadList))
+					b.sendPrivmsg(target, fmt.Sprintf("Usage: %sdownload [N] — list your approved file uploads (newest first); N = last N files (max %d).", b.pfx(), maxDownloadList))
 					return
 				}
 				if n > maxDownloadList {
@@ -1688,7 +1802,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 				if name == "" {
 					name = u.TicketID
 				}
-				url := fmt.Sprintf("%s/f/%s", b.cfg.Web.BaseURL, u.TicketID)
+				url := fmt.Sprintf("%s/f/%s", b.getCfg().Web.BaseURL, u.TicketID)
 				b.sendPrivmsg(target, fmt.Sprintf("  %s — %s", name, url))
 				time.Sleep(1 * time.Second)
 			}
@@ -1697,27 +1811,28 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 	}
 
 	// Handle !ask command
-	if strings.HasPrefix(message, b.prefix+b.cmdName) {
+	if strings.HasPrefix(message, b.pfx()+b.cmd()) {
 		// Check rate limiting if enabled
-		if b.rateLimiter != nil && !b.rateLimiter.Allow(sender, target, b.cfg.Bot.RateLimiting.Limit, b.cfg.Bot.RateLimiting.Burst) {
-			if b.cfg.Bot.Debug {
+		if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+			if b.getCfg().Bot.Debug {
 				log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
 			}
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 			return
 		}
 
-		if b.cfg.Bot.Debug {
+		if b.getCfg().Bot.Debug {
 			log.Printf("[DEBUG] Command detected - Target: %s, Question: %s, Sender: %s\n", target, message, sender)
 		}
 
-		question := strings.TrimSpace(strings.TrimPrefix(message, b.prefix+b.cmdName))
+		question := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+b.cmd()))
 		if question == "" {
 			return
 		}
 
-		// Use a background context for the AI request
-		ctx := context.Background()
+		// Bound the AI request so a hung LM Studio can't hold this goroutine forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
 
 		// Track request
 		b.statsMu.Lock()
@@ -1730,7 +1845,7 @@ func (b *Bot) handleCommand(target, message, sender, source string) {
 		// Get response from AI
 		response, err := b.aiClient.Ask(ctx, question)
 		if err != nil {
-			if b.cfg.Bot.Debug {
+			if b.getCfg().Bot.Debug {
 				log.Printf("Error contacting AI: %v\n", err)
 			}
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Error contacting AI: %v", err)))
@@ -1761,7 +1876,7 @@ func (b *Bot) handleCTCPRequest(sender, target, content string) {
 
 	command := strings.ToUpper(parts[0])
 
-	if b.cfg.Bot.Debug {
+	if b.getCfg().Bot.Debug {
 		log.Printf("[DEBUG] CTCP Request - Sender: %s, Command: %s", sender, command)
 	}
 
@@ -1833,7 +1948,7 @@ func (b *Bot) SendMessage(target, message string) {
 // sendPrivmsg wraps conn.Privmsg and also logs the bot's own outbound messages
 func (b *Bot) sendPrivmsg(target, message string) {
 	b.conn.Privmsg(target, message)
-	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventMessage, b.cfg.IRC.Nickname, message, "")
+	logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventMessage, b.getCfg().IRC.Nickname, message, "")
 }
 
 // ircTextBudget is the byte cap passed to ircutils.SanitizeText in sanitize()
@@ -1842,6 +1957,10 @@ const ircTextBudget = 450
 // sendPrivmsgMentionedLines sends PRIVMSGs of the form "@sender: " + each chunk of
 // the given logical message parts, splitting long parts on word boundaries to stay
 // within ircTextBudget.
+// ponytail: no inter-line pacing here (unlike Broadcast's 200ms/line sleep) — replies
+// are a handful of lines at most, and bulkier paths (!news, !download, !ticket pending)
+// already sleep between lines. If flood-kicks ever show up on this path, add
+// time.Sleep(300 * time.Millisecond) between sendPrivmsg calls in the loop below.
 func (b *Bot) sendPrivmsgMentionedLines(target, sender string, parts ...string) {
 	mention := fmt.Sprintf("@%s: ", sender)
 	prefix := len([]byte(mention))
@@ -1961,7 +2080,7 @@ func splitStringByRunesToByteBudget(s string, max int) []string {
 // sendNotice wraps conn.Notice and logs outbound notices (e.g. join reminders).
 func (b *Bot) sendNotice(target, message string) {
 	b.conn.Notice(target, message)
-	logger.LogChannelEvent(b.cfg.IRC.Server, target, logger.EventNotice, b.cfg.IRC.Nickname, message, "")
+	logger.LogChannelEvent(b.getCfg().IRC.Server, target, logger.EventNotice, b.getCfg().IRC.Nickname, message, "")
 }
 
 // notifyLoggedInAdminsPendingApprovals sends each logged-in admin a NOTICE with paste/file queue depth.
@@ -2028,12 +2147,13 @@ func statsIntOrNA(v int) string {
 func (b *Bot) sendAdminStats(target, sender string) {
 	b.statsMu.Lock()
 	aiN := b.aiRequests
+	ct := b.connectionTime
 	b.statsMu.Unlock()
 
 	appU := formatDuration(time.Since(b.startTime))
-	sessU := formatDuration(time.Since(b.connectionTime))
+	sessU := formatDuration(time.Since(ct))
 
-	nCh := len(b.cfg.IRC.Channels)
+	nCh := len(b.getCfg().IRC.Channels)
 	nGo := runtime.NumGoroutine()
 
 	b.ignoreMu.RLock()
@@ -2095,7 +2215,7 @@ func (b *Bot) sendAdminStats(target, sender string) {
 		}
 	}
 	line3 := fmt.Sprintf("RSS=%s, retain=%d, announce=%s, newsDB=%s rows",
-		statsOnOff(b.cfg.RSS.Enabled), b.cfg.RSS.RetentionCount, statsOnOff(b.cfg.RSS.AnnounceToIRCEnabled()), newsDB)
+		statsOnOff(b.getCfg().RSS.Enabled), b.getCfg().RSS.RetentionCount, statsOnOff(b.getCfg().RSS.AnnounceToIRCEnabled()), newsDB)
 
 	host := sysinfo.Collect(400 * time.Millisecond)
 	ramPart := "RAM=n/a"

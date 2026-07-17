@@ -36,7 +36,7 @@ func NewClient(baseURL string, model string) *Client {
 func (c *Client) UpdateConfig(baseURL, model string) {
 	conf := openai.DefaultConfig(baseURL)
 	conf.BaseURL = baseURL
-	conf.HTTPClient = &http.Client{}
+	conf.HTTPClient = &http.Client{Timeout: lmStudioTimeout}
 	c.mu.Lock()
 	c.apiClient = openai.NewClientWithConfig(conf)
 	c.model = model
