@@ -98,7 +98,7 @@ func (f *Fetcher) FetchAndSave() error {
 				log.Printf("Failed to save market history for %s: %v", m.ID, err)
 			}
 		}
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 	}
 
 	// Cleanup old data (keep last 90 days)
