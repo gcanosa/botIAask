@@ -351,6 +351,14 @@ func (f *Fetcher) Backfill(limit int) int {
 	return totalAdded
 }
 
+// shortenerServices lists the shorteners offered in the web UI. Each one
+// must respond to a plain unauthenticated GET with a bare short URL in the
+// response body (no JS challenge, no auth) since doShorten does nothing more
+// than that. Verified working 2026-08-31; dropped from an earlier list of 8:
+// shorturl.at (Cloudflare bot-challenge blocks scripted GETs), turl.at and
+// po.st (domains dead/discontinued), bc.vc (302 redirect instead of a plain
+// short URL, and historically known for injecting ads into destination pages).
+// da.gd added afterward: same operator/API shape as is.gd/v.gd, verified working.
 var shortenerServices = []struct {
 	name string
 	fn   func(string) (string, error)
@@ -358,11 +366,8 @@ var shortenerServices = []struct {
 	{"is.gd", shortenWithIsGd},
 	{"tinyurl", shortenWithTinyURL},
 	{"v.gd", shortenWithVGd},
-	{"shorturl.at", shortenWithShortUrlAt},
 	{"clck.ru", shortenWithClckRu},
-	{"turl.at", shortenWithTurlAt},
-	{"bc.vc", shortenWithBcVc},
-	{"po.st", shortenWithPost},
+	{"da.gd", shortenWithDaGd},
 }
 
 // parseShortURL reads a plain-text shortener response and validates it looks like a URL.
@@ -405,31 +410,19 @@ func shortenWithIsGd(longURL string) (string, error) {
 }
 
 func shortenWithTinyURL(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://tinyurl.com/api/create.php?url=%s", url.QueryEscape(longURL)))
+	return doShorten(fmt.Sprintf("https://tinyurl.com/api-create.php?url=%s", url.QueryEscape(longURL)))
 }
 
 func shortenWithVGd(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://v.gd/?url=%s", url.QueryEscape(longURL)))
-}
-
-func shortenWithShortUrlAt(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://shorturl.at/api/links/shorten?url=%s", url.QueryEscape(longURL)))
+	return doShorten(fmt.Sprintf("https://v.gd/create.php?format=simple&url=%s", url.QueryEscape(longURL)))
 }
 
 func shortenWithClckRu(longURL string) (string, error) {
 	return doShorten(fmt.Sprintf("https://clck.ru/--?url=%s", url.QueryEscape(longURL)))
 }
 
-func shortenWithTurlAt(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://turl.at/new?url=%s", url.QueryEscape(longURL)))
-}
-
-func shortenWithBcVc(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://bc.vc/shorten?url=%s", url.QueryEscape(longURL)))
-}
-
-func shortenWithPost(longURL string) (string, error) {
-	return doShorten(fmt.Sprintf("https://po.st/shorten?url=%s", url.QueryEscape(longURL)))
+func shortenWithDaGd(longURL string) (string, error) {
+	return doShorten(fmt.Sprintf("https://da.gd/shorten?url=%s", url.QueryEscape(longURL)))
 }
 
 // ShortenURL shortens a URL using the configured service with automatic fallback.

@@ -60,11 +60,8 @@ func TestAllShortenerServicesAvailable(t *testing.T) {
 		"is.gd",
 		"tinyurl",
 		"v.gd",
-		"shorturl.at",
 		"clck.ru",
-		"turl.at",
-		"bc.vc",
-		"po.st",
+		"da.gd",
 	}
 
 	shorteners := AvailableShorteners()
