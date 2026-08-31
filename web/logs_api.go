@@ -170,8 +170,19 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		allKeys[k] = struct{}{}
 	}
 
+	// Private-message logs are written under the bare network name (no channel
+	// segment) by logger.ChannelFileKey. They aren't channels, so keep them out
+	// of the channel browser instead of showing them as bogus "#NetworkName" rows.
+	networkNames := make(map[string]struct{})
+	for _, net := range cfg.IRC.Networks {
+		networkNames[net.Name] = struct{}{}
+	}
+
 	keysSorted := make([]string, 0, len(allKeys))
 	for k := range allKeys {
+		if _, isNetworkName := networkNames[k]; isNetworkName {
+			continue
+		}
 		keysSorted = append(keysSorted, k)
 	}
 	sort.Strings(keysSorted)

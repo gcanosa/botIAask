@@ -1,3 +1,32 @@
+// CSRF: the backend requires an X-CSRF-Token header on every mutating
+// request. Wrapping fetch here means every existing POST/PUT/PATCH/DELETE
+// call site gets the header for free, with no per-callsite changes.
+let csrfToken = null;
+async function ensureCSRFToken() {
+    if (csrfToken) return csrfToken;
+    try {
+        const res = await fetch('/api/csrf-token');
+        if (res.ok) csrfToken = (await res.json()).csrf_token;
+    } catch (e) { /* not logged in yet */ }
+    return csrfToken;
+}
+(function installCSRFFetch() {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async function (input, init) {
+        init = init || {};
+        const method = (init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+            const token = await ensureCSRFToken();
+            if (token) {
+                init.headers = Object.assign({}, init.headers, { 'X-CSRF-Token': token });
+            }
+        }
+        const res = await nativeFetch(input, init);
+        if (res.status === 401) csrfToken = null; // stale/expired, refetch next attempt
+        return res;
+    };
+})();
+
 let logCatalog = null;
 let logState = {
     channelLabel: null,
@@ -754,7 +783,7 @@ function renderLogChannelList() {
     const q = (document.getElementById('logs-channel-filter')?.value || '').trim().toLowerCase();
     const joined = logCatalog.channels.filter((c) => c.joined && (!q || c.label.toLowerCase().includes(q)));
     const other = logCatalog.channels.filter((c) => !c.joined && (!q || c.label.toLowerCase().includes(q)));
-    const multiNet = (lastIRCNetworks || []).length > 1;
+    const multiNet = new Set(logCatalog.channels.map((c) => c.network).filter(Boolean)).size > 1;
 
     const mkRow = (c) => {
         const row = document.createElement('button');
