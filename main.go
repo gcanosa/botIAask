@@ -135,7 +135,9 @@ func main() {
 
 	if cfg.Bot.Debug && *mode == "" && !*daemon {
 		fmt.Printf("Starting Bot with config from: %s\n", configPath)
-		fmt.Printf("IRC Server: %s:%d (SSL: %v)\n", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
+		for _, n := range cfg.IRC.Networks {
+			fmt.Printf("IRC Network %q: %s:%d (SSL: %v)\n", n.Name, n.Server, n.Port, n.UseSSL)
+		}
 		fmt.Printf("Endpoint: %s\n", cfg.AI.LMStudioURL)
 		if cfg.RSS.Enabled {
 			fmt.Printf("RSS-Fetcher: ENABLED (Source: %s, Interval: %d min)\n", "https://news.ycombinator.com/rss", cfg.RSS.IntervalMinutes)

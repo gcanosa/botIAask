@@ -13,43 +13,50 @@ import (
 
 // --- pending !tell cache (avoids a DB hit on every channel line) ---
 
-func (b *Bot) hasPendingTell(nick string) bool {
+// hasPendingTell/markPendingTell/clearPendingTell/tellPending are keyed by
+// adminSessionKey(network, nick) so a nick's pending-tell cache doesn't bleed across
+// networks (the underlying tells are stored per-network too, see bookmarks.Tell).
+func (b *Bot) hasPendingTell(network, nick string) bool {
 	b.tellMu.RLock()
 	defer b.tellMu.RUnlock()
-	_, ok := b.tellPending[bookmarks.IRCCaseFoldNick(nick)]
+	_, ok := b.tellPending[adminSessionKey(network, nick)]
 	return ok
 }
 
-func (b *Bot) markPendingTell(nick string) {
+func (b *Bot) markPendingTell(network, nick string) {
 	b.tellMu.Lock()
-	b.tellPending[bookmarks.IRCCaseFoldNick(nick)] = struct{}{}
+	b.tellPending[adminSessionKey(network, nick)] = struct{}{}
 	b.tellMu.Unlock()
 }
 
-func (b *Bot) clearPendingTell(nick string) {
+func (b *Bot) clearPendingTell(network, nick string) {
 	b.tellMu.Lock()
-	delete(b.tellPending, bookmarks.IRCCaseFoldNick(nick))
+	delete(b.tellPending, adminSessionKey(network, nick))
 	b.tellMu.Unlock()
 }
 
+// loadPendingTells primes the pending-tell cache for every configured network at
+// startup (called once from Bot.Start(), before any network may be connected yet).
 func (b *Bot) loadPendingTells() {
 	if b.bookmarksDB == nil {
 		return
 	}
-	folds, err := b.bookmarksDB.PendingTellFolds()
-	if err != nil {
-		log.Printf("tell: load pending: %v", err)
-		return
-	}
 	b.tellMu.Lock()
-	for _, f := range folds {
-		b.tellPending[f] = struct{}{}
+	defer b.tellMu.Unlock()
+	for _, netCfg := range b.getCfg().IRC.Networks {
+		folds, err := b.bookmarksDB.PendingTellFolds(netCfg.Name)
+		if err != nil {
+			log.Printf("tell: load pending for %s: %v", netCfg.Name, err)
+			continue
+		}
+		for _, f := range folds {
+			b.tellPending[netCfg.Name+"\x00"+f] = struct{}{}
+		}
 	}
-	b.tellMu.Unlock()
 }
 
-// isUserOnline reports whether nick is currently in any channel the bot tracks.
-func (b *Bot) isUserOnline(nick string) bool {
+// isUserOnline reports whether nick is currently in any channel on this network.
+func (b *ircNetwork) isUserOnline(nick string) bool {
 	fold := bookmarks.IRCCaseFoldNick(nick)
 	b.membersMu.RLock()
 	defer b.membersMu.RUnlock()
@@ -76,32 +83,32 @@ func seenTargets(target, sender string) (channel, reply string) {
 
 // recordSeen updates the last-seen record for nick; never blocks command flow on error.
 // ponytail: one UPSERT per channel line; fine at IRC volume. Batch only if write load ever shows up.
-func (b *Bot) recordSeen(nick, channel, action, message string) {
+func (b *ircNetwork) recordSeen(nick, channel, action, message string) {
 	if b.bookmarksDB == nil || nick == "" {
 		return
 	}
-	if bookmarks.IRCCaseFoldNick(nick) == bookmarks.IRCCaseFoldNick(b.getCfg().IRC.Nickname) {
+	if bookmarks.IRCCaseFoldNick(nick) == bookmarks.IRCCaseFoldNick(b.netCfg().Nickname) {
 		return // don't track the bot itself
 	}
-	if err := b.bookmarksDB.RecordSeen(nick, channel, action, message); err != nil && b.getCfg().Bot.Debug {
+	if err := b.bookmarksDB.RecordSeen(b.name, nick, channel, action, message); err != nil && b.getCfg().Bot.Debug {
 		log.Printf("[DEBUG] recordSeen: %v", err)
 	}
 }
 
 // --- !tell delivery ---
 
-// deliverTells flushes any pending !tell messages for nick to replyTarget (the
-// channel they spoke/joined in, or their nick for a PM).
-func (b *Bot) deliverTells(nick, replyTarget string) {
-	if b.bookmarksDB == nil || !b.hasPendingTell(nick) {
+// deliverTells flushes any pending !tell messages for nick (on this network) to
+// replyTarget (the channel they spoke/joined in, or their nick for a PM).
+func (b *ircNetwork) deliverTells(nick, replyTarget string) {
+	if b.bookmarksDB == nil || !b.hasPendingTell(b.name, nick) {
 		return
 	}
-	tells, err := b.bookmarksDB.TakeTells(nick)
+	tells, err := b.bookmarksDB.TakeTells(b.name, nick)
 	if err != nil {
 		log.Printf("tell: take for %s: %v", nick, err)
 		return
 	}
-	b.clearPendingTell(nick)
+	b.clearPendingTell(b.name, nick)
 	for _, t := range tells {
 		b.sendPrivmsg(replyTarget, fmt.Sprintf("%s: %s left a message %s ago: %s",
 			nick, t.FromNick, humanizeSince(t.CreatedAt), t.Message))
@@ -111,7 +118,7 @@ func (b *Bot) deliverTells(nick, replyTarget string) {
 // --- command handlers ---
 
 // handleTellCommand: !tell <nick> <message> — store a message delivered when <nick> is next seen.
-func (b *Bot) handleTellCommand(target, sender, message string) {
+func (b *ircNetwork) handleTellCommand(target, sender, message string) {
 	if b.bookmarksDB == nil {
 		b.sendPrivmsg(target, "Bookmarks database not initialized.")
 		return
@@ -125,7 +132,7 @@ func (b *Bot) handleTellCommand(target, sender, message string) {
 	toNick := strings.TrimSpace(fields[0])
 	note := strings.TrimSpace(fields[1])
 
-	if bookmarks.IRCCaseFoldNick(toNick) == bookmarks.IRCCaseFoldNick(b.getCfg().IRC.Nickname) {
+	if bookmarks.IRCCaseFoldNick(toNick) == bookmarks.IRCCaseFoldNick(b.netCfg().Nickname) {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: I'm right here.", sender))
 		return
 	}
@@ -134,16 +141,16 @@ func (b *Bot) handleTellCommand(target, sender, message string) {
 		return
 	}
 
-	if _, err := b.bookmarksDB.AddTell(sender, toNick, note); err != nil {
+	if _, err := b.bookmarksDB.AddTell(b.name, sender, toNick, note); err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: Error storing message: %v", sender, err))
 		return
 	}
-	b.markPendingTell(toNick)
+	b.markPendingTell(b.name, toNick)
 	b.sendPrivmsg(target, fmt.Sprintf("@%s: I'll tell %s when they're next around.", sender, toNick))
 }
 
-// handleSeenCommand: !seen <nick> — report when a nick was last observed.
-func (b *Bot) handleSeenCommand(target, sender, message string) {
+// handleSeenCommand: !seen <nick> — report when a nick was last observed on this network.
+func (b *ircNetwork) handleSeenCommand(target, sender, message string) {
 	if b.bookmarksDB == nil {
 		b.sendPrivmsg(target, "Bookmarks database not initialized.")
 		return
@@ -157,7 +164,7 @@ func (b *Bot) handleSeenCommand(target, sender, message string) {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: You're right here.", sender))
 		return
 	}
-	s, ok, err := b.bookmarksDB.GetSeen(nick)
+	s, ok, err := b.bookmarksDB.GetSeen(b.name, nick)
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: Error: %v", sender, err))
 		return
@@ -182,8 +189,9 @@ func (b *Bot) handleSeenCommand(target, sender, message string) {
 
 // --- timed-reminder scheduler ---
 
-// startReminderScheduler fires timed reminders that have come due. Runs for the
-// life of the process; reuses the persistent connection across reconnects.
+// startReminderScheduler fires timed reminders that have come due, delivered on
+// whichever network the reminder was created on. Runs for the life of the process;
+// reuses each network's persistent connection across reconnects.
 func (b *Bot) startReminderScheduler() {
 	b.loadPendingTells()
 	guard.Go("reminder scheduler", func() {
@@ -199,13 +207,14 @@ func (b *Bot) startReminderScheduler() {
 				continue
 			}
 			for _, r := range due {
-				if b.isUserOnline(r.OwnerNick) {
-					b.sendNotice(r.OwnerNick, fmt.Sprintf("[Reminder %s] %s", r.PublicID, truncateReminderNotice(r.Note, 380)))
-					if _, err := b.bookmarksDB.DeleteReminder(r.OwnerNick, r.PublicID); err != nil {
+				net := b.network(r.Network)
+				if net != nil && net.isUserOnline(r.OwnerNick) {
+					net.sendNotice(r.OwnerNick, fmt.Sprintf("[Reminder %s] %s", r.PublicID, truncateReminderNotice(r.Note, 380)))
+					if _, err := b.bookmarksDB.DeleteReminder(r.Network, r.OwnerNick, r.PublicID); err != nil {
 						log.Printf("reminder scheduler: delete %s: %v", r.PublicID, err)
 					}
 				} else {
-					// Owner offline: demote to on-join so it isn't lost.
+					// Owner offline (or network not live): demote to on-join so it isn't lost.
 					if err := b.bookmarksDB.ClearReminderDue(r.PublicID); err != nil {
 						log.Printf("reminder scheduler: demote %s: %v", r.PublicID, err)
 					}

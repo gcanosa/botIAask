@@ -66,9 +66,11 @@ func printDaemonParentReport(w io.Writer, cfg *config.Config, configPath string,
 	printRow(w, "PID file", cfg.Daemon.PIDFile, "")
 
 	fmt.Fprintf(w, "\n%s\n", dim("── Core ──"))
-	ircTarget := fmt.Sprintf("%s:%d (SSL %v)", cfg.IRC.Server, cfg.IRC.Port, cfg.IRC.UseSSL)
-	printRow(w, "IRC server", ircTarget, "")
-	printRow(w, "IRC nickname", cfg.IRC.Nickname, "")
+	for _, n := range cfg.IRC.Networks {
+		ircTarget := fmt.Sprintf("%s:%d (SSL %v)", n.Server, n.Port, n.UseSSL)
+		printRow(w, fmt.Sprintf("IRC network %q", n.Name), ircTarget, "")
+		printRow(w, "  nickname", n.Nickname, "")
+	}
 	printRow(w, "IRC bot", "", good("OK"))
 	fmt.Fprintf(w, "  %-*s %s\n", colService, "LM Studio URL", cfg.AI.LMStudioURL)
 	fmt.Fprintf(w, "  %-*s %s\n", colService, "AI model", cfg.AI.Model)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,8 +40,47 @@ func FetchRates(base string) (*ExchangeRates, error) {
 	return &rates, nil
 }
 
-func (b *Bot) handleEuroCommand(target string) {
-	rates, err := FetchRates("EUR")
+// ratesCacheTTL bounds how long a cachedFetchRates result is reused. Exchange rates
+// don't move fast, and api.exchangerate-api.com's free tier saturates easily if every
+// !euro/!peso/!convert message triggers a live call.
+const ratesCacheTTL = 10 * time.Minute
+
+var (
+	ratesCacheMu sync.Mutex
+	ratesCache   = map[string]struct {
+		rates   *ExchangeRates
+		fetched time.Time
+	}{}
+)
+
+// cachedFetchRates serves FetchRates(base) from an in-memory cache when fresh, so a
+// burst of currency commands (there are only ever two bases in practice: EUR, USD)
+// makes at most one live request per ratesCacheTTL. A failed fetch is never cached, so
+// a transient error doesn't lock in a failure for the TTL.
+func cachedFetchRates(base string) (*ExchangeRates, error) {
+	ratesCacheMu.Lock()
+	if entry, ok := ratesCache[base]; ok && time.Since(entry.fetched) < ratesCacheTTL {
+		ratesCacheMu.Unlock()
+		return entry.rates, nil
+	}
+	ratesCacheMu.Unlock()
+
+	rates, err := FetchRates(base)
+	if err != nil {
+		return nil, err
+	}
+
+	ratesCacheMu.Lock()
+	ratesCache[base] = struct {
+		rates   *ExchangeRates
+		fetched time.Time
+	}{rates: rates, fetched: time.Now()}
+	ratesCacheMu.Unlock()
+	return rates, nil
+}
+
+func (b *ircNetwork) handleEuroCommand(target string) {
+	rates, err := cachedFetchRates("EUR")
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("Error fetching Euro rates: %v", err))
 		return
@@ -55,9 +95,9 @@ func (b *Bot) handleEuroCommand(target string) {
 	b.sendPrivmsg(target, fmt.Sprintf("\x0303,01[CURRENCY]\x03 1 EUR = %.4f USD", usdRate))
 }
 
-func (b *Bot) handlePesoCommand(target string) {
+func (b *ircNetwork) handlePesoCommand(target string) {
 	// Fetching USD as base to get USD/ARS and USD/EUR
-	rates, err := FetchRates("USD")
+	rates, err := cachedFetchRates("USD")
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("Error fetching currency rates: %v", err))
 		return
@@ -103,14 +143,14 @@ func formatConvertReply(sender string, amount float64, from string, converted fl
 }
 
 // handleConvertCommand: !convert <amount> <from> <to> — e.g. !convert 100 USD ARS.
-func (b *Bot) handleConvertCommand(target, sender, rest string) {
+func (b *ircNetwork) handleConvertCommand(target, sender, rest string) {
 	amount, from, to, err := parseConvertArgs(rest)
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sconvert <amount> <from> <to> — e.g. %sconvert 100 USD ARS", b.pfx(), b.pfx()))
 		return
 	}
 
-	rates, err := FetchRates(from)
+	rates, err := cachedFetchRates(from)
 	if err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: error fetching rates: %v", sender, err))
 		return
@@ -123,7 +163,7 @@ func (b *Bot) handleConvertCommand(target, sender, rest string) {
 	b.sendPrivmsg(target, formatConvertReply(sender, amount, from, amount*rate, to))
 }
 
-func (b *Bot) handleCryptoCommand(target string) {
+func (b *ircNetwork) handleCryptoCommand(target string) {
 	if b.cryptoDB == nil {
 		b.sendPrivmsg(target, "Crypto database not initialized.")
 		return

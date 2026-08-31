@@ -45,19 +45,20 @@ var templatesFS embed.FS
 
 // Server handles the web dashboard
 type Server struct {
-	cfgMu        sync.RWMutex
-	cfg          *config.Config
-	bot          *irc.Bot
-	rssFetcher   *rss.Fetcher
-	statsTracker *stats.Tracker
-	bookmarksDB  *bookmarks.Database
-	authDB       *AuthDatabase
-	uploadsDB    *uploads.Database
-	cryptoDB     *crypto.Database
-	progtodoDB   *progtodo.Database
-	templates    *template.Template
-	forexCache   map[string]float64
-	forexUpdate  time.Time
+	cfgMu            sync.RWMutex
+	cfg              *config.Config
+	bot              *irc.Bot
+	rssFetcher       *rss.Fetcher
+	statsTracker     *stats.Tracker
+	bookmarksDB      *bookmarks.Database
+	authDB           *AuthDatabase
+	uploadsDB        *uploads.Database
+	cryptoDB         *crypto.Database
+	progtodoDB       *progtodo.Database
+	templates        *template.Template
+	forexCache       map[string]float64
+	forexUpdate      time.Time
+	forexLastAttempt time.Time // set on every fetch attempt, even a failed one, to cool down retries
 
 	cryptoChartCache map[string]cryptoChartCacheEntry
 	cryptoChartMu    sync.Mutex
@@ -147,18 +148,18 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 	}
 
 	return &Server{
-		cfg:          cfg,
-		bot:          bot,
-		rssFetcher:   rssFetcher,
-		statsTracker: statsTracker,
-		bookmarksDB:  bookmarksDB,
-		authDB:       authDB,
-		uploadsDB:    uploadsDB,
-		cryptoDB:     cryptoDB,
-		progtodoDB:   progtodoDB,
-		aiClient:     aiClient,
-		templates:    tmpl,
-		rehashExt:    rehashExt,
+		cfg:              cfg,
+		bot:              bot,
+		rssFetcher:       rssFetcher,
+		statsTracker:     statsTracker,
+		bookmarksDB:      bookmarksDB,
+		authDB:           authDB,
+		uploadsDB:        uploadsDB,
+		cryptoDB:         cryptoDB,
+		progtodoDB:       progtodoDB,
+		aiClient:         aiClient,
+		templates:        tmpl,
+		rehashExt:        rehashExt,
 		loginRateLimiter: NewLoginRateLimiter(15*time.Minute, 5),
 		weatherClient: &http.Client{
 			Timeout: 22 * time.Second,
@@ -186,6 +187,8 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/irc/channels/autojoin", s.handleIRCChannelAutojoin)
 	mux.HandleFunc("/api/irc/channels/session", s.handleIRCChannelSession)
 	mux.HandleFunc("/api/irc/channels", s.handleIRCChannels)
+	mux.HandleFunc("/api/irc/networks/edit", s.handleIRCNetworkEdit)
+	mux.HandleFunc("/api/irc/networks", s.handleIRCNetworks)
 	mux.HandleFunc("/api/config/irc-admins", s.handleConfigIRCAdmins)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
@@ -283,8 +286,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := map[string]interface{}{
-		"status": "healthy",
-		"version": meta.Version,
+		"status":         "healthy",
+		"version":        meta.Version,
 		"uptime_seconds": int(time.Since(s.bot.GetStartTime()).Seconds()),
 	}
 
@@ -338,9 +341,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"version":                 meta.Version,
 		"uptime":                  s.bot.GetUptime(),
 		"connected":               s.bot.IsConnected(),
-		"server":                  s.getConfig().IRC.Server,
-		"nickname":                s.getConfig().IRC.Nickname,
-		"channels":                s.getConfig().IRC.Channels,
+		"networks":                s.bot.NetworkStatuses(),
 		"ai_model":                s.getConfig().AI.Model,
 		"ai_status":               "Online",
 		"ai_requests":             s.bot.GetAIRequestCount(),
@@ -914,6 +915,12 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Channel is required", http.StatusBadRequest)
 		return
 	}
+	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	if network == "" {
+		if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
+			network = nets[0].Name
+		}
+	}
 
 	date := strings.TrimSpace(r.URL.Query().Get("date"))
 	localToday := time.Now().Format("2006-01-02")
@@ -940,7 +947,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := logger.ChannelFileKey(channel, s.getConfig().IRC.Server)
+	key := logger.ChannelFileKey(channel, network)
 	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
 
 	var file *os.File
@@ -1190,6 +1197,18 @@ type ircSessionRow struct {
 	HasPassword bool   `json:"has_password"`
 }
 
+type ircNetworkRow struct {
+	Name          string `json:"name"`
+	Server        string `json:"server"`
+	Port          int    `json:"port"`
+	UseSSL        bool   `json:"use_ssl"`
+	Nickname      string `json:"nickname"`
+	SASLEnabled   bool   `json:"sasl_enabled"`
+	ChannelCount  int    `json:"channel_count"`
+	Connected     bool   `json:"connected"`
+	Authenticated bool   `json:"authenticated"`
+}
+
 func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
@@ -1279,37 +1298,57 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// resolveWebNetwork returns name trimmed, or the first configured network's name if
+// name is empty (back-compat default for single-network callers/UI).
+func (s *Server) resolveWebNetwork(name string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		return name
+	}
+	if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
+		return nets[0].Name
+	}
+	return ""
+}
+
 func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	cfg := s.getConfig()
 	switch r.Method {
 	case http.MethodGet:
-		rows := make([]ircChannelRow, 0, len(cfg.IRC.Channels))
-		for _, ch := range cfg.IRC.Channels {
+		cfg := s.getConfig()
+		network := s.resolveWebNetwork(r.URL.Query().Get("network"))
+		netCfg, ok := config.FindIRCNetworkByName(cfg.IRC.Networks, network)
+		if !ok {
+			http.Error(w, "Unknown network", http.StatusNotFound)
+			return
+		}
+		rows := make([]ircChannelRow, 0, len(netCfg.Channels))
+		for _, ch := range netCfg.Channels {
 			rows = append(rows, ircChannelRow{
 				Name:        ch.Name,
 				HasPassword: ch.Password != "",
-				AnnounceRSS: config.RSSChannelContainsFold(cfg.RSS.Channels, ch.Name),
+				AnnounceRSS: config.RSSChannelContainsFold(cfg.RSS.Channels, config.JoinNetworkChannel(network, ch.Name)),
 				AutoJoin:    ch.AutoJoinEnabled(),
 			})
 		}
 		sessRows := make([]ircSessionRow, 0)
 		if s.bot != nil {
-			sess := s.bot.ListSessionChannels()
+			sess := s.bot.ListSessionChannels(network)
 			for _, ch := range sess {
 				sessRows = append(sessRows, ircSessionRow{Name: ch.Name, HasPassword: ch.Password != ""})
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"channels": rows, "session_channels": sessRows})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"network": network, "channels": rows, "session_channels": sessRows})
 		return
 
 	case http.MethodPost:
 		var req struct {
+			Network     string `json:"network"`
 			Name        string `json:"name"`
 			Password    string `json:"password"`
 			AutoJoin    *bool  `json:"auto_join"`
@@ -1319,6 +1358,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		network := s.resolveWebNetwork(req.Network)
 		name := strings.TrimSpace(req.Name)
 		if !ircWebChannelNameOK(name) {
 			http.Error(w, "Invalid channel name (use #chan or &chan)", http.StatusBadRequest)
@@ -1329,7 +1369,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Bot unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			if err := s.bot.JoinChannelSession(config.IRChannel{Name: name, Password: req.Password}); err != nil {
+			if err := s.bot.JoinChannelSession(network, config.IRChannel{Name: name, Password: req.Password}); err != nil {
 				if strings.Contains(err.Error(), "already") {
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
@@ -1342,7 +1382,19 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Lock()
-		for _, ex := range s.cfg.IRC.Channels {
+		ni := -1
+		for i, n := range s.cfg.IRC.Networks {
+			if strings.EqualFold(n.Name, network) {
+				ni = i
+				break
+			}
+		}
+		if ni < 0 {
+			s.cfgMu.Unlock()
+			http.Error(w, "Unknown network", http.StatusNotFound)
+			return
+		}
+		for _, ex := range s.cfg.IRC.Networks[ni].Channels {
 			if strings.EqualFold(ex.Name, name) {
 				s.cfgMu.Unlock()
 				http.Error(w, "Channel already in autoinjoin list", http.StatusConflict)
@@ -1350,7 +1402,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entry := config.IRChannel{Name: name, Password: req.Password, AutoJoin: req.AutoJoin}
-		s.cfg.IRC.Channels = append(s.cfg.IRC.Channels, entry)
+		s.cfg.IRC.Networks[ni].Channels = append(s.cfg.IRC.Networks[ni].Channels, entry)
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -1366,6 +1418,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case http.MethodDelete:
+		network := s.resolveWebNetwork(r.URL.Query().Get("network"))
 		name := strings.TrimSpace(r.URL.Query().Get("name"))
 		if d, err := url.QueryUnescape(name); err == nil && d != "" {
 			name = strings.TrimSpace(d)
@@ -1375,21 +1428,33 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfgMu.Lock()
-		canon, ok := config.FindIRChannelByName(s.cfg.IRC.Channels, name)
+		ni := -1
+		for i, n := range s.cfg.IRC.Networks {
+			if strings.EqualFold(n.Name, network) {
+				ni = i
+				break
+			}
+		}
+		if ni < 0 {
+			s.cfgMu.Unlock()
+			http.Error(w, "Unknown network", http.StatusNotFound)
+			return
+		}
+		canon, ok := config.FindIRChannelByName(s.cfg.IRC.Networks[ni].Channels, name)
 		if !ok {
 			s.cfgMu.Unlock()
 			http.Error(w, "Channel not found", http.StatusNotFound)
 			return
 		}
 		var out []config.IRChannel
-		for _, ex := range s.cfg.IRC.Channels {
+		for _, ex := range s.cfg.IRC.Networks[ni].Channels {
 			if strings.EqualFold(ex.Name, name) {
 				continue
 			}
 			out = append(out, ex)
 		}
-		s.cfg.IRC.Channels = out
-		s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, canon.Name, false, "")
+		s.cfg.IRC.Networks[ni].Channels = out
+		s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, config.JoinNetworkChannel(network, canon.Name), false, "")
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -1420,24 +1485,27 @@ func (s *Server) handleIRCChannelReveal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Network string `json:"network"`
+		Name    string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
+	network := s.resolveWebNetwork(req.Network)
 	name := strings.TrimSpace(req.Name)
 	if !ircWebChannelNameOK(name) {
 		http.Error(w, "Invalid channel name", http.StatusBadRequest)
 		return
 	}
-	if ch, ok := config.FindIRChannelByName(s.getConfig().IRC.Channels, name); ok {
+	netCfg, _ := config.FindIRCNetworkByName(s.getConfig().IRC.Networks, network)
+	if ch, ok := config.FindIRChannelByName(netCfg.Channels, name); ok {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"password": ch.Password})
 		return
 	}
 	if s.bot != nil {
-		for _, ch := range s.bot.ListSessionChannels() {
+		for _, ch := range s.bot.ListSessionChannels(network) {
 			if strings.EqualFold(ch.Name, name) {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]string{"password": ch.Password})
@@ -1459,6 +1527,7 @@ func (s *Server) handleIRCChannelAnnounce(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
+		Network  string `json:"network"`
 		Name     string `json:"name"`
 		Announce *bool  `json:"announce"`
 	}
@@ -1466,20 +1535,27 @@ func (s *Server) handleIRCChannelAnnounce(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
+	network := s.resolveWebNetwork(req.Network)
 	name := strings.TrimSpace(req.Name)
 	if !ircWebChannelNameOK(name) {
 		http.Error(w, "Invalid channel name", http.StatusBadRequest)
 		return
 	}
 	s.cfgMu.Lock()
-	entry, ok := config.FindIRChannelByName(s.cfg.IRC.Channels, name)
+	netCfg, ok := config.FindIRCNetworkByName(s.cfg.IRC.Networks, network)
+	if !ok {
+		s.cfgMu.Unlock()
+		http.Error(w, "Unknown network", http.StatusNotFound)
+		return
+	}
+	entry, ok := config.FindIRChannelByName(netCfg.Channels, name)
 	if !ok {
 		s.cfgMu.Unlock()
 		http.Error(w, "Channel not in autoinjoin list", http.StatusNotFound)
 		return
 	}
-	canon := entry.Name
-	s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, name, *req.Announce, canon)
+	canon := config.JoinNetworkChannel(network, entry.Name)
+	s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, canon, *req.Announce, canon)
 	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 		s.cfgMu.Unlock()
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -1504,6 +1580,7 @@ func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
+		Network  string `json:"network"`
 		Name     string `json:"name"`
 		AutoJoin *bool  `json:"auto_join"`
 	}
@@ -1511,16 +1588,29 @@ func (s *Server) handleIRCChannelAutojoin(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
+	network := s.resolveWebNetwork(req.Network)
 	name := strings.TrimSpace(req.Name)
 	if !ircWebChannelNameOK(name) {
 		http.Error(w, "Invalid channel name", http.StatusBadRequest)
 		return
 	}
 	s.cfgMu.Lock()
+	ni := -1
+	for i, n := range s.cfg.IRC.Networks {
+		if strings.EqualFold(n.Name, network) {
+			ni = i
+			break
+		}
+	}
+	if ni < 0 {
+		s.cfgMu.Unlock()
+		http.Error(w, "Unknown network", http.StatusNotFound)
+		return
+	}
 	updated := false
-	for i, ex := range s.cfg.IRC.Channels {
+	for i, ex := range s.cfg.IRC.Networks[ni].Channels {
 		if strings.EqualFold(ex.Name, name) {
-			s.cfg.IRC.Channels[i].AutoJoin = req.AutoJoin
+			s.cfg.IRC.Networks[ni].Channels[i].AutoJoin = req.AutoJoin
 			updated = true
 			break
 		}
@@ -1557,6 +1647,7 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 	switch r.Method {
 	case http.MethodPost:
 		var req struct {
+			Network  string `json:"network"`
 			Name     string `json:"name"`
 			Password string `json:"password"`
 		}
@@ -1564,12 +1655,13 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		network := s.resolveWebNetwork(req.Network)
 		name := strings.TrimSpace(req.Name)
 		if !ircWebChannelNameOK(name) {
 			http.Error(w, "Invalid channel name (use #chan or &chan)", http.StatusBadRequest)
 			return
 		}
-		if err := s.bot.JoinChannelSession(config.IRChannel{Name: name, Password: req.Password}); err != nil {
+		if err := s.bot.JoinChannelSession(network, config.IRChannel{Name: name, Password: req.Password}); err != nil {
 			if strings.Contains(err.Error(), "already") {
 				http.Error(w, err.Error(), http.StatusConflict)
 				return
@@ -1581,6 +1673,7 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		return
 	case http.MethodDelete:
+		network := s.resolveWebNetwork(r.URL.Query().Get("network"))
 		name := strings.TrimSpace(r.URL.Query().Get("name"))
 		if d, err := url.QueryUnescape(name); err == nil && d != "" {
 			name = strings.TrimSpace(d)
@@ -1589,7 +1682,7 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Invalid or missing name query", http.StatusBadRequest)
 			return
 		}
-		if err := s.bot.PartChannelSession(name); err != nil {
+		if err := s.bot.PartChannelSession(network, name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1601,6 +1694,224 @@ func (s *Server) handleIRCChannelSession(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// handleIRCNetworks: GET lists configured networks (joined with live status), POST adds
+// one, DELETE removes one by ?name=. Mirrors handleIRCChannels' persist-then-rehash flow.
+func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.requireAdminCSRF(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.getConfig()
+		statuses := map[string]irc.NetworkStatus{}
+		if s.bot != nil {
+			for _, st := range s.bot.NetworkStatuses() {
+				statuses[strings.ToLower(st.Name)] = st
+			}
+		}
+		rows := make([]ircNetworkRow, 0, len(cfg.IRC.Networks))
+		for _, n := range cfg.IRC.Networks {
+			row := ircNetworkRow{
+				Name:         n.Name,
+				Server:       n.Server,
+				Port:         n.Port,
+				UseSSL:       n.UseSSL,
+				Nickname:     n.Nickname,
+				SASLEnabled:  n.Services.Enabled,
+				ChannelCount: len(n.Channels),
+			}
+			if st, ok := statuses[strings.ToLower(n.Name)]; ok {
+				row.Connected = st.Connected
+				row.Authenticated = st.Authenticated
+			}
+			rows = append(rows, row)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"networks": rows})
+		return
+
+	case http.MethodPost:
+		var req struct {
+			Name        string `json:"name"`
+			Server      string `json:"server"`
+			Port        int    `json:"port"`
+			UseSSL      bool   `json:"use_ssl"`
+			Nickname    string `json:"nickname"`
+			QuitMessage string `json:"quit_message"`
+			SASL        *struct {
+				Enabled  bool   `json:"enabled"`
+				Username string `json:"username"`
+				Password string `json:"password"`
+			} `json:"sasl"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(req.Name)
+		server := strings.TrimSpace(req.Server)
+		nickname := strings.TrimSpace(req.Nickname)
+		if name == "" || strings.Contains(name, ":") {
+			http.Error(w, "Invalid network name (required, no ':')", http.StatusBadRequest)
+			return
+		}
+		if server == "" || req.Port <= 0 || req.Port > 65535 || nickname == "" {
+			http.Error(w, "server, port and nickname are required", http.StatusBadRequest)
+			return
+		}
+		entry := config.IRCNetworkConfig{
+			Name: name, Server: server, Port: req.Port, UseSSL: req.UseSSL,
+			Nickname: nickname, QuitMessage: strings.TrimSpace(req.QuitMessage),
+		}
+		if req.SASL != nil {
+			entry.Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password}
+		}
+		s.cfgMu.Lock()
+		if _, exists := config.FindIRCNetworkByName(s.cfg.IRC.Networks, name); exists {
+			s.cfgMu.Unlock()
+			http.Error(w, "Network already exists", http.StatusConflict)
+			return
+		}
+		newNets := append(append([]config.IRCNetworkConfig(nil), s.cfg.IRC.Networks...), entry)
+		if err := config.ValidateConfig(&config.Config{IRC: config.IRCConfig{Networks: newNets}}); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.IRC.Networks = newNets
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.runFullRehashFromWeb("web (irc networks add)"); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+
+	case http.MethodDelete:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if d, err := url.QueryUnescape(name); err == nil && d != "" {
+			name = strings.TrimSpace(d)
+		}
+		if name == "" {
+			http.Error(w, "Missing name query", http.StatusBadRequest)
+			return
+		}
+		s.cfgMu.Lock()
+		if _, ok := config.FindIRCNetworkByName(s.cfg.IRC.Networks, name); !ok {
+			s.cfgMu.Unlock()
+			http.Error(w, "Network not found", http.StatusNotFound)
+			return
+		}
+		var out []config.IRCNetworkConfig
+		for _, n := range s.cfg.IRC.Networks {
+			if !strings.EqualFold(n.Name, name) {
+				out = append(out, n)
+			}
+		}
+		if err := config.ValidateConfig(&config.Config{IRC: config.IRCConfig{Networks: out}}); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Cannot remove: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfg.IRC.Networks = out
+		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+			s.cfgMu.Unlock()
+			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.cfgMu.Unlock()
+		if err := s.runFullRehashFromWeb("web (irc networks remove)"); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleIRCNetworkEdit updates an existing network's connection fields (server/port/
+// ssl/nickname/quit_message/sasl); the name itself is immutable here (rename = remove+add).
+func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isAdmin, _ := s.requireAdminCSRF(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Server      string `json:"server"`
+		Port        int    `json:"port"`
+		UseSSL      bool   `json:"use_ssl"`
+		Nickname    string `json:"nickname"`
+		QuitMessage string `json:"quit_message"`
+		SASL        *struct {
+			Enabled  bool   `json:"enabled"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+		} `json:"sasl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	server := strings.TrimSpace(req.Server)
+	nickname := strings.TrimSpace(req.Nickname)
+	if name == "" || server == "" || req.Port <= 0 || req.Port > 65535 || nickname == "" {
+		http.Error(w, "name, server, port and nickname are required", http.StatusBadRequest)
+		return
+	}
+	s.cfgMu.Lock()
+	ni := -1
+	for i, n := range s.cfg.IRC.Networks {
+		if strings.EqualFold(n.Name, name) {
+			ni = i
+			break
+		}
+	}
+	if ni < 0 {
+		s.cfgMu.Unlock()
+		http.Error(w, "Network not found", http.StatusNotFound)
+		return
+	}
+	s.cfg.IRC.Networks[ni].Server = server
+	s.cfg.IRC.Networks[ni].Port = req.Port
+	s.cfg.IRC.Networks[ni].UseSSL = req.UseSSL
+	s.cfg.IRC.Networks[ni].Nickname = nickname
+	s.cfg.IRC.Networks[ni].QuitMessage = strings.TrimSpace(req.QuitMessage)
+	if req.SASL != nil {
+		s.cfg.IRC.Networks[ni].Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password}
+	}
+	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+		s.cfgMu.Unlock()
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfgMu.Unlock()
+	if err := s.runFullRehashFromWeb("web (irc networks edit)"); err != nil {
+		http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
@@ -1610,12 +1921,12 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		response := map[string]interface{}{
-			"interval_minutes":      s.getConfig().RSS.IntervalMinutes,
-			"retention_count":       s.getConfig().RSS.RetentionCount,
-			"feed_urls":             s.getConfig().RSS.FeedURLs,
-			"announce_to_irc":       s.getConfig().RSS.AnnounceToIRCEnabled(),
-			"url_shortener":         s.getConfig().RSS.URLShortener,
-			"available_shorteners":  rss.AvailableShorteners(),
+			"interval_minutes":     s.getConfig().RSS.IntervalMinutes,
+			"retention_count":      s.getConfig().RSS.RetentionCount,
+			"feed_urls":            s.getConfig().RSS.FeedURLs,
+			"announce_to_irc":      s.getConfig().RSS.AnnounceToIRCEnabled(),
+			"url_shortener":        s.getConfig().RSS.URLShortener,
+			"available_shorteners": rss.AvailableShorteners(),
 		}
 		if s.rssFetcher != nil {
 			response["feed_status"] = s.rssFetcher.FeedStatuses()
@@ -1988,9 +2299,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
+		"success":               true,
 		"needs_password_change": needsChange,
-		"csrf_token": csrfToken,
+		"csrf_token":            csrfToken,
 	})
 }
 
@@ -2275,7 +2586,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New ticket pending approval: %s (by %s)", ticketID, upload.Username))
+		s.bot.SendMessage(upload.Network, upload.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New ticket pending approval: %s (by %s)", ticketID, upload.Username))
 		s.bot.NotifyAdmins(fmt.Sprintf("\x0307[TICKET]\x03 New pending approval: %s. Use !ticket approve %s to publish.", ticketID, ticketID))
 
 		w.Header().Set("Content-Type", "text/html")
@@ -2296,14 +2607,14 @@ func isAllowedFileType(filename, contentType string) bool {
 	}
 
 	blockedMimes := map[string]bool{
-		"application/x-executable": true,
-		"application/x-msdownload": true,
+		"application/x-executable":    true,
+		"application/x-msdownload":    true,
 		"application/x-msdos-program": true,
-		"application/x-sh": true,
-		"application/x-shellscript": true,
-		"application/x-perl": true,
-		"application/x-python": true,
-		"application/x-ruby": true,
+		"application/x-sh":            true,
+		"application/x-shellscript":   true,
+		"application/x-perl":          true,
+		"application/x-python":        true,
+		"application/x-ruby":          true,
 	}
 
 	ext := strings.ToLower(filepath.Ext(filename))
@@ -2431,7 +2742,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 		return
 	}
 
-	s.bot.SendMessage(sess.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New file pending approval: %s (by %s)", ticketID, sess.Username))
+	s.bot.SendMessage(sess.Network, sess.Channel, fmt.Sprintf("\x0307[UPLOAD]\x03 New file pending approval: %s (by %s)", ticketID, sess.Username))
 	s.bot.NotifyAdmins(fmt.Sprintf("\x0307[TICKET]\x03 New file pending approval: %s. Use !ticket approve %s to publish.", ticketID, ticketID))
 
 	w.Header().Set("Content-Type", "text/html")
@@ -2452,12 +2763,12 @@ func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimSpace(r.FormValue("token"))
-	username, channel, err := s.uploadsDB.CancelUploadByToken(token)
+	username, channel, network, err := s.uploadsDB.CancelUploadByToken(token)
 	if err != nil {
 		http.Error(w, "Error cancelling", http.StatusInternalServerError)
 		return
 	}
-	s.bot.SendMessage(channel, fmt.Sprintf("\x0304[CANCEL]\x03 User %s cancelled their upload session.", username))
+	s.bot.SendMessage(network, channel, fmt.Sprintf("\x0304[CANCEL]\x03 User %s cancelled their upload session.", username))
 
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>")
@@ -2672,7 +2983,7 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 		if upload.IsFile() {
 			pubURL = fmt.Sprintf("%s/f/%s", s.getConfig().Web.BaseURL, ticketID)
 		}
-		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s", ticketID, pubURL))
+		s.bot.SendMessage(upload.Network, upload.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s", ticketID, pubURL))
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -2708,7 +3019,7 @@ func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
 	// Notify IRC
 	upload, err := s.uploadsDB.GetUploadByTicketID(ticketID)
 	if err == nil {
-		s.bot.SendMessage(upload.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
+		s.bot.SendMessage(upload.Network, upload.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -2729,8 +3040,11 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 	data["crypto_last_update"] = cryptoLastUpdate.Format(time.RFC3339)
 
 	// Get Forex Rates with simple server-side caching (1 hour).
-	// If cache is empty, retry on every request until at least one rate is fetched.
-	if s.forexCache == nil || len(s.forexCache) == 0 || time.Since(s.forexUpdate) > 1*time.Hour {
+	// If cache is empty, retry — but only once per minute, so a persistently failing/
+	// rate-limited upstream doesn't turn every dashboard page load into a fresh API hit.
+	cacheEmpty := s.forexCache == nil || len(s.forexCache) == 0
+	if (cacheEmpty && time.Since(s.forexLastAttempt) > 1*time.Minute) || time.Since(s.forexUpdate) > 1*time.Hour {
+		s.forexLastAttempt = time.Now()
 		forex := map[string]float64{}
 
 		// EUR to USD

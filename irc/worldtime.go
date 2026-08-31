@@ -30,7 +30,7 @@ var worldTimeCities = []struct {
 }
 
 // handleTimeCommand shows current local times for major world cities, one per IANA zone.
-func (b *Bot) handleTimeCommand(target string) {
+func (b *ircNetwork) handleTimeCommand(target string) {
 	now := time.Now()
 	seen := make(map[string]struct{})
 	var parts []string

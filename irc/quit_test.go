@@ -14,12 +14,24 @@ func newTestBot(cfg *config.Config) *Bot {
 	return b
 }
 
+// newTestNetwork builds a *Bot plus a detached (never-connected) *ircNetwork for the
+// first configured network, for unit tests that exercise ircNetwork-receiver methods
+// without a live IRC connection.
+func newTestNetwork(cfg *config.Config) *ircNetwork {
+	b := newTestBot(cfg)
+	name := "test"
+	if len(cfg.IRC.Networks) > 0 {
+		name = cfg.IRC.Networks[0].Name
+	}
+	return &ircNetwork{Bot: b, name: name, channelMembers: make(map[string]map[string]struct{})}
+}
+
 func TestFormatQuitMessage_default(t *testing.T) {
-	b := newTestBot(&config.Config{
-		IRC: config.IRCConfig{Nickname: "TestBot"},
+	n := newTestNetwork(&config.Config{
+		IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "test", Nickname: "TestBot"}}},
 	})
-	b.startTime = time.Now().Add(-30 * time.Minute)
-	s := b.FormatQuitMessage("")
+	n.startTime = time.Now().Add(-30 * time.Minute)
+	s := n.FormatQuitMessage("")
 	if !strings.Contains(s, meta.Name) || !strings.Contains(s, meta.Version) {
 		t.Fatalf("default quit message: %q", s)
 	}
@@ -29,22 +41,25 @@ func TestFormatQuitMessage_default(t *testing.T) {
 }
 
 func TestFormatQuitMessage_template(t *testing.T) {
-	b := newTestBot(&config.Config{
-		IRC: config.IRCConfig{
+	n := newTestNetwork(&config.Config{
+		IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{
+			Name:        "test",
 			Nickname:    "N",
 			QuitMessage: "{nickname} | {name} {version} | {uptime}",
-		},
+		}}},
 	})
-	b.startTime = time.Now().Add(-time.Second)
-	s := b.FormatQuitMessage("")
+	n.startTime = time.Now().Add(-time.Second)
+	s := n.FormatQuitMessage("")
 	if !strings.Contains(s, "N") || !strings.Contains(s, meta.Name) {
 		t.Fatalf("template quit message: %q", s)
 	}
 }
 
 func TestFormatQuitMessage_override(t *testing.T) {
-	b := newTestBot(&config.Config{IRC: config.IRCConfig{QuitMessage: "ignore me"}})
-	if got := b.FormatQuitMessage("  bye  "); got != "bye" {
+	n := newTestNetwork(&config.Config{
+		IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "test", QuitMessage: "ignore me"}}},
+	})
+	if got := n.FormatQuitMessage("  bye  "); got != "bye" {
 		t.Fatalf("override: %q", got)
 	}
 }

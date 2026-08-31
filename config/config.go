@@ -94,19 +94,6 @@ type UploadsConfig struct {
 	DBPath    string `yaml:"db_path,omitempty"`       // optional; relative paths resolve from project root (parent of config/); absolute path if multiple instances or odd cwd
 }
 
-// IRCConfig holds settings for the IRC connection.
-type IRCConfig struct {
-	Server      string         `yaml:"server"`
-	Port        int            `yaml:"port"`
-	UseSSL      bool           `yaml:"use_ssl"`
-	Nickname    string         `yaml:"nickname"`
-	Channels    []IRChannel    `yaml:"channels"`
-	// QuitMessage: optional QUIT reason. Empty uses default: "<app name> <version> Uptime: <uptime>".
-	// If set, expand placeholders: {name}, {version}, {uptime}, {nickname}.
-	QuitMessage string         `yaml:"quit_message,omitempty"`
-	Services    ServicesConfig `yaml:"services"`
-}
-
 // ServicesConfig holds settings for IRC services authentication (SASL).
 type ServicesConfig struct {
 	Enabled  bool   `yaml:"enabled"`
@@ -230,6 +217,10 @@ func LoadConfig(path string) (*Config, error) {
 	applyWebDefaults(&cfg)
 	applyFlightDefaults(&cfg)
 	applyOMDBDefaults(&cfg)
+
+	if err := ValidateConfig(&cfg); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
 }

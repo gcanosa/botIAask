@@ -744,10 +744,57 @@
                     </div>
                     <p id="irc-config-admins-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
                 </div>
+                <div id="irc-networks-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">IRC networks</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">The bot connects to every network below simultaneously. Adding, editing, or removing a network takes effect live — no restart needed. Saved to <span class="mono">config/config.yaml</span> under <span class="mono">irc.networks</span>.</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Name</label>
+                            <input type="text" id="irc-net-name" class="btn btn-ghost" style="min-width: 7rem; text-align: left; cursor: text; margin: 0;" placeholder="libera" autocomplete="off" aria-label="Network name">
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Server</label>
+                            <input type="text" id="irc-net-server" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="irc.libera.chat" autocomplete="off" aria-label="Server hostname">
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Port</label>
+                            <input type="number" id="irc-net-port" class="btn btn-ghost" style="min-width: 5rem; text-align: left; cursor: text; margin: 0;" placeholder="6697" value="6697" autocomplete="off" aria-label="Port">
+                        </div>
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
+                            <input type="checkbox" id="irc-net-ssl" checked> SSL
+                        </label>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Nickname</label>
+                            <input type="text" id="irc-net-nick" class="btn btn-ghost" style="min-width: 8rem; text-align: left; cursor: text; margin: 0;" placeholder="Nickname" autocomplete="off" aria-label="Nickname">
+                        </div>
+                        <button type="button" onclick="ircNetworkAdd()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add network</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Name</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Server</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">SSL</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Nickname</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">Status</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">Channels</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-networks-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-networks-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
                 <div id="irc-autojoin-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">IRC autoinjoin channels</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Saved entries live in <span class="mono">config/config.yaml</span> under <span class="mono">irc.channels</span>. <strong>Autoinjoin on connect</strong> controls whether the bot joins the channel on startup and after rehash (you can keep a +k entry without auto-joining). <strong>Session only</strong> joins IRC now and does not write YAML (rejoined in-process if the server reconnects, lost on bot restart). RSS <strong>announce</strong> per row still requires RSS + global <span class="mono">announce_to_irc</span> on the News card.</p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Saved entries live in <span class="mono">config/config.yaml</span> under the selected network's <span class="mono">channels</span> list. <strong>Autoinjoin on connect</strong> controls whether the bot joins the channel on startup and after rehash (you can keep a +k entry without auto-joining). <strong>Session only</strong> joins IRC now and does not write YAML (rejoined in-process if the server reconnects, lost on bot restart). RSS <strong>announce</strong> per row still requires RSS + global <span class="mono">announce_to_irc</span> on the News card.</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
+                            <select id="irc-autojoin-network" class="btn btn-ghost" style="min-width: 8rem; margin: 0;" onchange="ircAutojoinNetworkChange()" aria-label="Network"></select>
+                        </div>
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Channel</label>
                             <input type="text" id="irc-autojoin-name" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="#channel" autocomplete="off" aria-label="New channel name">

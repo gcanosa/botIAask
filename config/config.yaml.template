@@ -1,22 +1,44 @@
 irc:
-    server: irc.libera.chat
-    port: 6697
-    use_ssl: true
-    nickname: Nickname
-    # Channels: plain strings, or a mapping for +k. Optional: auto_join: false (default true) to store the row without auto-joining.
-    #   - name: '##locked'
-    #     password: 'channel-key-here'
-    #   - { name: '##nope', auto_join: false }
-    channels:
-        - '#channel1'
-        - '#channel2'
-    # QUIT message: omit (or use "") for default: "<app name> <version> Uptime: <uptime>".
-    # Or a custom string; use {name} {version} {uptime} {nickname} for dynamic parts.
-    # quit_message: '{name} v{version} | Up: {uptime}'
-    services:
-        enabled: true
-        username: registered_nickname
-        password: services_password
+    # Multiple networks are supported: add another '- name: ...' entry to connect to more
+    # than one IRC server/network at the same time. (A legacy flat single-network shape —
+    # server:/port:/... directly under `irc:`, no `networks:` list — is still accepted on
+    # read for old config files, but is always rewritten to this shape on save.)
+    networks:
+        - name: libera
+          server: irc.libera.chat
+          port: 6697
+          use_ssl: true
+          # Skip TLS certificate verification (self-signed cert, or connecting by bare IP
+          # with no matching SAN). Only relevant when use_ssl is true. Leave off/false when
+          # the server has a proper cert.
+          # tls_skip_verify: true
+          nickname: Nickname
+          # Channels: plain strings, or a mapping for +k. Optional: auto_join: false (default true) to store the row without auto-joining.
+          #   - name: '##locked'
+          #     password: 'channel-key-here'
+          #   - { name: '##nope', auto_join: false }
+          channels:
+              - '#channel1'
+              - '#channel2'
+          # QUIT message: omit (or use "") for default: "<app name> <version> Uptime: <uptime>".
+          # Or a custom string; use {name} {version} {uptime} {nickname} for dynamic parts.
+          # quit_message: '{name} v{version} | Up: {uptime}'
+          services:
+              enabled: true
+              username: registered_nickname
+              password: services_password
+        # Second network example (delete or uncomment/edit as needed):
+        # - name: OtherNet
+        #   server: irc.example.org
+        #   port: 6697
+        #   use_ssl: true
+        #   # Needed when connecting by bare IP or to a self-signed cert (no matching SAN):
+        #   tls_skip_verify: true
+        #   nickname: Nickname
+        #   channels:
+        #       - '#otherchannel'
+        #   services:
+        #       enabled: false
 ai:
     lm_studio_url: http://localhost:1234/v1
     model: meta-Llama-3.1-8B-instruct
@@ -54,8 +76,12 @@ logger:
 rss:
     enabled: true
     interval_minutes: 30
+    # Each entry is "network:#channel" to target a specific network, or a bare "#channel"
+    # to fall back to the first network in irc.networks (back-compat, single-network configs).
+    # Mix networks freely to fan the same feeds out to channels on different networks.
     channels:
-        - '##yerba'
+        - 'libera:##yerba'
+        # - 'OtherNet:#otherchannel'
     # Max rows kept per feed source in the news DB (not a single global cap across all feeds).
     retention_count: 50
     # Each feed URL is labeled in IRC and on the web from the site (e.g. arstechnica.com → [ARSTECHNICA]).

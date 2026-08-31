@@ -12,9 +12,12 @@ import (
 // while ApplyLiveConfig repeatedly swaps the config pointer. Run with -race:
 // the atomic.Pointer swap in ApplyLiveConfig must make every read safe even
 // though the bot is never connected (so the channel-sync path returns early).
+// The network's Name/Server/Port/Nickname/UseSSL/Services are kept identical across
+// every swap on purpose: a real endpoint change makes ApplyLiveConfig spawn a live
+// reconnect goroutine (see network.go), which this test must not trigger.
 func TestApplyLiveConfigRace(t *testing.T) {
 	b := newTestBot(&config.Config{
-		IRC:   config.IRCConfig{Nickname: "TestBot"},
+		IRC:   config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "test", Nickname: "TestBot"}}},
 		Bot:   config.BotConfig{CommandPrefix: "!", CommandName: "ask"},
 		Admin: config.AdminConfig{Admins: []string{"admin!user@host"}},
 	})
@@ -43,8 +46,8 @@ func TestApplyLiveConfigRace(t *testing.T) {
 
 	for i := 0; i < 200; i++ {
 		b.ApplyLiveConfig(&config.Config{
-			IRC:   config.IRCConfig{Nickname: fmt.Sprintf("Bot%d", i)},
-			Bot:   config.BotConfig{CommandPrefix: "!", CommandName: "ask"},
+			IRC:   config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "test", Nickname: "TestBot"}}},
+			Bot:   config.BotConfig{CommandPrefix: "!", CommandName: fmt.Sprintf("ask%d", i)},
 			Admin: config.AdminConfig{Admins: []string{"admin!user@host"}},
 		})
 	}

@@ -12,10 +12,13 @@ import (
 func TestPrintDaemonParentReport_plainNoColor(t *testing.T) {
 	cfg := &config.Config{
 		IRC: config.IRCConfig{
-			Server:   "irc.example.net",
-			Port:     6697,
-			UseSSL:   true,
-			Nickname: "testbot",
+			Networks: []config.IRCNetworkConfig{{
+				Name:     "example",
+				Server:   "irc.example.net",
+				Port:     6697,
+				UseSSL:   true,
+				Nickname: "testbot",
+			}},
 		},
 		AI: config.AIConfig{
 			LMStudioURL: "http://127.0.0.1:1234",

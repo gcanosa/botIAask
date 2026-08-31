@@ -16,7 +16,7 @@ var (
 	flightYMD     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
 
-func (b *Bot) handleFlightCommand(target, sender, rest string) {
+func (b *ircNetwork) handleFlightCommand(target, sender, rest string) {
 	parts := strings.Fields(rest)
 	if len(parts) < 1 {
 		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100 (AirLabs v9; set flight.api_key or AIRLABS_API_KEY; paid = higher daily quota; date optional)", b.pfx(), b.pfx()))
