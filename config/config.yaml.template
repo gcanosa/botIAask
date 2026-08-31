@@ -88,6 +88,10 @@ rss:
     feed_urls:
         - https://news.ycombinator.com/rss
     announce_to_irc: true
+    # url_shortener: preferred service. Available options:
+    # is.gd, tinyurl, v.gd, clck.ru, da.gd
+    # Defaults to is.gd with automatic fallback chain if preferred service fails.
+    url_shortener: is.gd
 stats:
     enabled: true
     interval: 60
