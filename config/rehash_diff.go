@@ -31,15 +31,25 @@ func CloneConfig(cfg *Config) (*Config, error) {
 	return &out, nil
 }
 
-// IRCEndpointChanged returns true if connection identity changed (reconnect required for new values to apply).
-func IRCEndpointChanged(before, after *Config) bool {
+// IRCEndpointChangedNetworks returns the names of networks present in both before and after
+// whose connection identity (server/port/nick/TLS/SASL) changed and so must be reconnected.
+func IRCEndpointChangedNetworks(before, after *Config) []string {
 	if before == nil || after == nil {
-		return false
+		return nil
 	}
-	return before.IRC.Server != after.IRC.Server ||
-		before.IRC.Port != after.IRC.Port ||
-		before.IRC.Nickname != after.IRC.Nickname ||
-		before.IRC.UseSSL != after.IRC.UseSSL
+	var out []string
+	for _, a := range after.IRC.Networks {
+		b, ok := FindIRCNetworkByName(before.IRC.Networks, a.Name)
+		if !ok {
+			continue // handled as "added" below
+		}
+		if b.Server != a.Server || b.Port != a.Port || b.Nickname != a.Nickname || b.UseSSL != a.UseSSL ||
+			b.Services != a.Services {
+			out = append(out, a.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RehashDiff returns human-readable lines describing what differs between two configs
@@ -59,20 +69,38 @@ func RehashDiff(before, after *Config) []string {
 	}
 	var lines []string
 
-	if IRCEndpointChanged(b, a) {
-		lines = append(lines, "IRC: server/port/nick/TLS changed (reconnect required; not hot-applied)")
-	}
-
-	bNames := append([]string(nil), IRChannelNamesAutoJoin(b.IRC.Channels)...)
-	aNames := append([]string(nil), IRChannelNamesAutoJoin(a.IRC.Channels)...)
-	sort.Strings(bNames)
-	sort.Strings(aNames)
-	if added, removed := stringSliceDiff(bNames, aNames); len(added) > 0 || len(removed) > 0 {
+	bNetNames := append([]string(nil), IRCNetworkNames(b.IRC.Networks)...)
+	aNetNames := append([]string(nil), IRCNetworkNames(a.IRC.Networks)...)
+	sort.Strings(bNetNames)
+	sort.Strings(aNetNames)
+	if added, removed := stringSliceDiff(bNetNames, aNetNames); len(added) > 0 || len(removed) > 0 {
 		if len(added) > 0 {
-			lines = append(lines, "IRC autoin: added "+strings.Join(added, ", "))
+			lines = append(lines, "IRC: network added "+strings.Join(added, ", "))
 		}
 		if len(removed) > 0 {
-			lines = append(lines, "IRC autoin: removed "+strings.Join(removed, ", "))
+			lines = append(lines, "IRC: network removed "+strings.Join(removed, ", "))
+		}
+	}
+	if changed := IRCEndpointChangedNetworks(b, a); len(changed) > 0 {
+		lines = append(lines, "IRC: server/port/nick/TLS/SASL changed for "+strings.Join(changed, ", ")+" (reconnecting)")
+	}
+
+	for _, netB := range b.IRC.Networks {
+		netA, ok := FindIRCNetworkByName(a.IRC.Networks, netB.Name)
+		if !ok {
+			continue // network removed, already reported above
+		}
+		bNames := append([]string(nil), IRChannelNamesAutoJoin(netB.Channels)...)
+		aNames := append([]string(nil), IRChannelNamesAutoJoin(netA.Channels)...)
+		sort.Strings(bNames)
+		sort.Strings(aNames)
+		if added, removed := stringSliceDiff(bNames, aNames); len(added) > 0 || len(removed) > 0 {
+			if len(added) > 0 {
+				lines = append(lines, fmt.Sprintf("IRC[%s] autoin: added %s", netB.Name, strings.Join(added, ", ")))
+			}
+			if len(removed) > 0 {
+				lines = append(lines, fmt.Sprintf("IRC[%s] autoin: removed %s", netB.Name, strings.Join(removed, ", ")))
+			}
 		}
 	}
 

@@ -27,10 +27,11 @@ type Tracker struct {
 	failedAuth int
 	users      map[string]struct{}
 
-	// Global Admin Nicknames & Presence
-	adminNicks []string
-	chanAdmins map[string][]string
-	adminMu    sync.RWMutex
+	// Admin Nicknames & Presence, keyed by IRC network so a multi-network bot doesn't
+	// have one network's JOIN/PART/NICK event overwrite another's (see GetAdmins).
+	adminNicksByNet map[string][]string
+	chanAdminsByNet map[string]map[string][]string
+	adminMu         sync.RWMutex
 
 	// Broadcaster
 	subscribers map[chan StatEntry]bool
@@ -47,11 +48,13 @@ type Tracker struct {
 // NewTracker initializes a new statistics tracker.
 func NewTracker(cfg *config.Config, db *Database) *Tracker {
 	return &Tracker{
-		cfg:         cfg,
-		db:          db,
-		users:       make(map[string]struct{}),
-		subscribers: make(map[chan StatEntry]bool),
-		enabled:     cfg.Stats.Enabled,
+		cfg:             cfg,
+		db:              db,
+		users:           make(map[string]struct{}),
+		subscribers:     make(map[chan StatEntry]bool),
+		enabled:         cfg.Stats.Enabled,
+		adminNicksByNet: make(map[string][]string),
+		chanAdminsByNet: make(map[string]map[string][]string),
 	}
 }
 
@@ -193,19 +196,43 @@ func (t *Tracker) LogFailedAuth() {
 	t.failedAuth++
 }
 
-// UpdateAdminData updates the list of currently logged-in admin nicknames and their channel presence.
-func (t *Tracker) UpdateAdminData(nicknames []string, channelAdmins map[string][]string) {
+// UpdateAdminData updates the logged-in admin nicknames and channel presence for one
+// IRC network, leaving other networks' data untouched.
+func (t *Tracker) UpdateAdminData(network string, nicknames []string, channelAdmins map[string][]string) {
 	t.adminMu.Lock()
 	defer t.adminMu.Unlock()
-	t.adminNicks = nicknames
-	t.chanAdmins = channelAdmins
+	t.adminNicksByNet[network] = nicknames
+	t.chanAdminsByNet[network] = channelAdmins
 }
 
-// GetAdmins returns the current logged-in admins and their channel presence.
+// GetAdmins returns the logged-in admins and channel presence merged across all
+// networks: nicknames deduplicated, channel presence keyed "<network>:<channel>"
+// (config.JoinNetworkChannel) so the same channel name on two networks doesn't collide.
 func (t *Tracker) GetAdmins() ([]string, map[string][]string) {
 	t.adminMu.RLock()
 	defer t.adminMu.RUnlock()
-	return t.adminNicks, t.chanAdmins
+	return t.adminSnapshotLocked()
+}
+
+// adminSnapshotLocked merges the per-network admin state. Caller must hold adminMu.
+func (t *Tracker) adminSnapshotLocked() ([]string, map[string][]string) {
+	seen := make(map[string]bool)
+	var nicks []string
+	for _, list := range t.adminNicksByNet {
+		for _, n := range list {
+			if !seen[n] {
+				seen[n] = true
+				nicks = append(nicks, n)
+			}
+		}
+	}
+	chans := make(map[string][]string)
+	for network, cm := range t.chanAdminsByNet {
+		for ch, admins := range cm {
+			chans[config.JoinNetworkChannel(network, ch)] = admins
+		}
+	}
+	return nicks, chans
 }
 
 func (t *Tracker) snapshot() {
@@ -222,10 +249,9 @@ func (t *Tracker) snapshot() {
 
 	// Get current admins for real-time broadcast
 	t.adminMu.RLock()
-	entry.AdminNicknames = t.adminNicks
-	entry.ChannelAdmins = t.chanAdmins
+	entry.AdminNicknames, entry.ChannelAdmins = t.adminSnapshotLocked()
 	entry.AdminCommands = t.adminCmds
-	entry.LoggedInAdmins = len(t.adminNicks)
+	entry.LoggedInAdmins = len(entry.AdminNicknames)
 	entry.FailedAuths = t.failedAuth
 	t.adminMu.RUnlock()
 

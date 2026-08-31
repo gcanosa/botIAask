@@ -33,6 +33,7 @@ type Upload struct {
 	ExpiresInDays    int          `json:"expires_in_days"`
 	Status           string       `json:"status"` // pending_form, pending_approval, approved, cancelled, expired
 	Channel          string       `json:"channel"`
+	Network          string       `json:"network"` // IRC network the ticket's channel belongs to
 	CreatedAt        time.Time    `json:"created_at"`
 	ApprovedAt       sql.NullTime `json:"approved_at"`
 	UploadType       string       `json:"upload_type"`
@@ -149,6 +150,9 @@ func migrateUploadsSchema(db *sql.DB) error {
 		return err
 	}
 	if err := add("paste_kind", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := add("network", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil
@@ -283,37 +287,37 @@ func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-func (d *Database) CreateUploadSession(token, username, channel string) error {
+func (d *Database) CreateUploadSession(token, username, channel, network string) error {
 	ref, err := NewPublicRef()
 	if err != nil {
 		return err
 	}
-	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type, public_ref, is_public) VALUES (?, ?, ?, 'pending_form', ?, ?, ?, 1)`
-	_, err = d.db.Exec(q, token, username, channel, time.Now(), TypePaste, ref)
+	q := `INSERT INTO uploads (token, username, channel, network, status, created_at, upload_type, public_ref, is_public) VALUES (?, ?, ?, ?, 'pending_form', ?, ?, ?, 1)`
+	_, err = d.db.Exec(q, token, username, channel, network, time.Now(), TypePaste, ref)
 	return err
 }
 
-func (d *Database) CreateFileUploadSession(token, username, channel string) error {
+func (d *Database) CreateFileUploadSession(token, username, channel, network string) error {
 	ref, err := NewPublicRef()
 	if err != nil {
 		return err
 	}
-	q := `INSERT INTO uploads (token, username, channel, status, created_at, upload_type, public_ref, is_public) VALUES (?, ?, ?, 'pending_form', ?, ?, ?, 0)`
-	_, err = d.db.Exec(q, token, username, channel, time.Now(), TypeFile, ref)
+	q := `INSERT INTO uploads (token, username, channel, network, status, created_at, upload_type, public_ref, is_public) VALUES (?, ?, ?, ?, 'pending_form', ?, ?, ?, 0)`
+	_, err = d.db.Exec(q, token, username, channel, network, time.Now(), TypeFile, ref)
 	return err
 }
 
 func (d *Database) GetUploadByToken(token string) (*Upload, error) {
 	row := d.db.QueryRow(`
 		SELECT id, COALESCE(ticket_id,''), token,
-		       COALESCE(username,''), COALESCE(channel,''), COALESCE(status,''), created_at,
+		       COALESCE(username,''), COALESCE(channel,''), COALESCE(network,''), COALESCE(status,''), created_at,
 		       COALESCE(upload_type, 'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
 		FROM uploads WHERE token = ?`, token)
 	var u Upload
 	var ipub int
-	err := row.Scan(&u.ID, &u.TicketID, &u.Token, &u.Username, &u.Channel, &u.Status, &u.CreatedAt,
+	err := row.Scan(&u.ID, &u.TicketID, &u.Token, &u.Username, &u.Channel, &u.Network, &u.Status, &u.CreatedAt,
 		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
 		&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
 	if err != nil {
@@ -347,14 +351,13 @@ func (d *Database) SubmitFileUpload(token, ticketID, title, description string, 
 	return err
 }
 
-func (d *Database) CancelUploadByToken(token string) (string, string, error) {
-	var username, channel string
-	err := d.db.QueryRow("SELECT username, channel FROM uploads WHERE token = ?", token).Scan(&username, &channel)
+func (d *Database) CancelUploadByToken(token string) (username, channel, network string, err error) {
+	err = d.db.QueryRow("SELECT username, channel, COALESCE(network,'') FROM uploads WHERE token = ?", token).Scan(&username, &channel, &network)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	_, err = d.db.Exec(`UPDATE uploads SET status = 'cancelled' WHERE token = ?`, token)
-	return username, channel, err
+	return username, channel, network, err
 }
 
 func (d *Database) ApproveTicket(ticketID string) error {
@@ -376,14 +379,14 @@ func (d *Database) CancelTicket(ticketID string) error {
 
 func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
 	row := d.db.QueryRow(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
+		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, COALESCE(network,''), approved_at,
 		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
 		FROM uploads WHERE ticket_id = ?`, ticketID)
 	var u Upload
 	var ipub int
-	err := row.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
+	err := row.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.Network, &u.ApprovedAt,
 		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
 		&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
 	if err != nil {

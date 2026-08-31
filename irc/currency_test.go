@@ -1,6 +1,36 @@
 package irc
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+// TestCachedFetchRatesServesFreshCacheWithoutNetwork verifies the cache-hit path never
+// touches the network: a base with a live in-TTL entry returns straight from the map.
+func TestCachedFetchRatesServesFreshCacheWithoutNetwork(t *testing.T) {
+	const base = "TESTBASE"
+	want := &ExchangeRates{Base: base, Rates: map[string]float64{"XYZ": 42}}
+
+	ratesCacheMu.Lock()
+	ratesCache[base] = struct {
+		rates   *ExchangeRates
+		fetched time.Time
+	}{rates: want, fetched: time.Now()}
+	ratesCacheMu.Unlock()
+	t.Cleanup(func() {
+		ratesCacheMu.Lock()
+		delete(ratesCache, base)
+		ratesCacheMu.Unlock()
+	})
+
+	got, err := cachedFetchRates(base)
+	if err != nil {
+		t.Fatalf("cachedFetchRates: unexpected error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("cachedFetchRates returned %+v, want the cached entry %+v (should not have re-fetched)", got, want)
+	}
+}
 
 func TestParseConvertArgs(t *testing.T) {
 	cases := []struct {

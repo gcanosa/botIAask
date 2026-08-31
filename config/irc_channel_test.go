@@ -25,14 +25,18 @@ func TestIRChannelYAMLRoundTrip(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(in), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(cfg.IRC.Channels); got != 2 {
+	if len(cfg.IRC.Networks) != 1 {
+		t.Fatalf("networks: got %d want 1", len(cfg.IRC.Networks))
+	}
+	chans := cfg.IRC.Networks[0].Channels
+	if got := len(chans); got != 2 {
 		t.Fatalf("channels: got %d want 2", got)
 	}
-	if cfg.IRC.Channels[0].Name != "#public" || cfg.IRC.Channels[0].Password != "" {
-		t.Fatalf("public: %+v", cfg.IRC.Channels[0])
+	if chans[0].Name != "#public" || chans[0].Password != "" {
+		t.Fatalf("public: %+v", chans[0])
 	}
-	if cfg.IRC.Channels[1].Name != "##private" || cfg.IRC.Channels[1].Password != "sekrit" {
-		t.Fatalf("private: %+v", cfg.IRC.Channels[1])
+	if chans[1].Name != "##private" || chans[1].Password != "sekrit" {
+		t.Fatalf("private: %+v", chans[1])
 	}
 	out, err := yaml.Marshal(&cfg.IRC)
 	if err != nil {
@@ -76,10 +80,14 @@ func TestIRChannelUnmarshalAutoJoin(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(in), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(cfg.IRC.Channels); got != 1 {
+	if len(cfg.IRC.Networks) != 1 {
+		t.Fatalf("networks: %d", len(cfg.IRC.Networks))
+	}
+	chans := cfg.IRC.Networks[0].Channels
+	if got := len(chans); got != 1 {
 		t.Fatalf("channels: %d", got)
 	}
-	if cfg.IRC.Channels[0].AutoJoinEnabled() {
+	if chans[0].AutoJoinEnabled() {
 		t.Fatal("expected auto_join false")
 	}
 }
@@ -90,7 +98,10 @@ func TestLoadConfigTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.IRC.Channels) < 1 {
-		t.Fatalf("expected at least one irc channel in template, got %d", len(cfg.IRC.Channels))
+	if len(cfg.IRC.Networks) < 1 {
+		t.Fatalf("expected at least one irc network in template, got %d", len(cfg.IRC.Networks))
+	}
+	if len(cfg.IRC.Networks[0].Channels) < 1 {
+		t.Fatalf("expected at least one irc channel in template, got %d", len(cfg.IRC.Networks[0].Channels))
 	}
 }

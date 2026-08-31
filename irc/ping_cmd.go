@@ -56,7 +56,7 @@ func isICMPNotPermitted(err error) bool {
 }
 
 // handlePingCommand runs a single unprivileged "ping" (UDP mode on pro-bing; same as many OS ping -n).
-func (b *Bot) handlePingCommand(target, sender, host string) {
+func (b *ircNetwork) handlePingCommand(target, sender, host string) {
 	if !validPingHost(host) {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: invalid host", sender)))
 		return

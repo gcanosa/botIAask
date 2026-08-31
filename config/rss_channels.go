@@ -43,3 +43,18 @@ func SetRSSChannelAnnounce(list []string, name string, on bool, canonical string
 	}
 	return out
 }
+
+// SplitNetworkChannel parses "network:#chan" into (network, "#chan"). A bare "#chan"
+// (no ':' before the leading '#'/'&') returns (defaultNetwork, raw) for back-compat
+// with configs from before multi-network support.
+func SplitNetworkChannel(raw, defaultNetwork string) (network, channel string) {
+	if i := strings.Index(raw, ":"); i > 0 && !strings.ContainsAny(raw[:i], "#&") {
+		return raw[:i], raw[i+1:]
+	}
+	return defaultNetwork, raw
+}
+
+// JoinNetworkChannel builds the "network:#chan" storage form used in RSSConfig.Channels.
+func JoinNetworkChannel(network, channel string) string {
+	return network + ":" + channel
+}

@@ -12,7 +12,7 @@ import (
 
 var movieHTTP = &http.Client{Timeout: 22 * time.Second}
 
-func (b *Bot) handleMovieCommand(target, sender, title string) {
+func (b *ircNetwork) handleMovieCommand(target, sender, title string) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		b.sendPrivmsg(target, fmt.Sprintf("Usage: %smovie <title> — e.g. %smovie Inception (OMDb; set omdb.api_key or OMDB_API_KEY)", b.pfx(), b.pfx()))

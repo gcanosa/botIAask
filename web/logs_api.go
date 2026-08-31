@@ -30,7 +30,8 @@ type logCalendarMeta struct {
 }
 
 type logChannelEntry struct {
-	Label         string   `json:"label"`
+	Label         string   `json:"label"`   // plain channel name, e.g. "#chan" (pass back as ?channel=)
+	Network       string   `json:"network"` // network this entry belongs to (pass back as ?network=)
 	FileKey       string   `json:"file_key"`
 	Joined        bool     `json:"joined"`
 	DatesWithLogs []string `json:"dates_with_logs"`
@@ -138,10 +139,27 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	joinedByKey := make(map[string]string)
-	for _, ch := range cfg.IRC.Channels {
-		k := logger.ChannelFileKey(ch.Name, cfg.IRC.Server)
-		joinedByKey[k] = ch.Name
+	// joinedByKey maps the current (network-prefixed) file key to its plain channel name
+	// and network. legacyKeyOf maps the pre-multi-network bare-channel key to its
+	// new-format key, so dates logged before this change still show up under the
+	// channel's current label.
+	type joinedInfo struct{ label, network string }
+	joinedByKey := make(map[string]joinedInfo)
+	legacyKeyOf := make(map[string]string)
+	for _, net := range cfg.IRC.Networks {
+		for _, ch := range net.Channels {
+			newKey := logger.ChannelFileKey(ch.Name, net.Name)
+			joinedByKey[newKey] = joinedInfo{label: ch.Name, network: net.Name}
+			legacyKeyOf[logger.ChannelFileKey(ch.Name, "")] = newKey
+		}
+	}
+	for legacyKey, newKey := range legacyKeyOf {
+		if dates, ok := diskDates[legacyKey]; ok {
+			for d := range dates {
+				addDate(newKey, d)
+			}
+			delete(diskDates, legacyKey)
+		}
 	}
 
 	allKeys := make(map[string]struct{})
@@ -160,9 +178,17 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 
 	channels := make([]logChannelEntry, 0, len(keysSorted))
 	for _, fileKey := range keysSorted {
-		label, joined := joinedByKey[fileKey]
+		info, joined := joinedByKey[fileKey]
 		if !joined {
-			label = "#" + fileKey
+			// Best-effort recovery of (channel, network) for a log file whose config
+			// entry no longer exists: match the fileKey's network-name prefix.
+			info = joinedInfo{label: "#" + fileKey}
+			for _, net := range cfg.IRC.Networks {
+				if prefix := net.Name + "_"; strings.HasPrefix(fileKey, prefix) {
+					info = joinedInfo{label: "#" + strings.TrimPrefix(fileKey, prefix), network: net.Name}
+					break
+				}
+			}
 		}
 		dateSet := diskDates[fileKey]
 		dates := make([]string, 0, len(dateSet))
@@ -171,7 +197,8 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(dates)
 		channels = append(channels, logChannelEntry{
-			Label:         label,
+			Label:         info.label,
+			Network:       info.network,
 			FileKey:       fileKey,
 			Joined:        joined,
 			DatesWithLogs: dates,
@@ -211,30 +238,43 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channel and date are required", http.StatusBadRequest)
 		return
 	}
+	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	if network == "" {
+		if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
+			network = nets[0].Name
+		}
+	}
 
 	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
 		http.Error(w, "invalid date", http.StatusBadRequest)
 		return
 	}
 
-	key := logger.ChannelFileKey(channel, s.getConfig().IRC.Server)
-	activePath := filepath.Join(logsDir, fmt.Sprintf("%s_%s.log", key, date))
-	archivePath := filepath.Join(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
+	// Try the current network-prefixed key first, falling back to the legacy bare-channel
+	// key so dates logged before multi-network support stay viewable.
+	keys := []string{logger.ChannelFileKey(channel, network), logger.ChannelFileKey(channel, "")}
 
 	var reader io.ReadCloser
 	archived := false
-	if f, err := os.Open(activePath); err == nil {
-		reader = f
-	} else if f, err := os.Open(archivePath); err == nil {
-		gz, err := gzip.NewReader(f)
-		if err != nil {
-			f.Close()
-			http.Error(w, "bad archive", http.StatusInternalServerError)
-			return
+	for _, key := range keys {
+		activePath := filepath.Join(logsDir, fmt.Sprintf("%s_%s.log", key, date))
+		archivePath := filepath.Join(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
+		if f, err := os.Open(activePath); err == nil {
+			reader = f
+			break
+		} else if f, err := os.Open(archivePath); err == nil {
+			gz, err := gzip.NewReader(f)
+			if err != nil {
+				f.Close()
+				http.Error(w, "bad archive", http.StatusInternalServerError)
+				return
+			}
+			reader = &readCloserPair{rc: gz, closeUnderlying: f}
+			archived = true
+			break
 		}
-		reader = &readCloserPair{rc: gz, closeUnderlying: f}
-		archived = true
-	} else {
+	}
+	if reader == nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(logHistoryResponse{Lines: []string{}, Date: date, Archived: false})
 		return

@@ -1,6 +1,7 @@
 let logCatalog = null;
 let logState = {
     channelLabel: null,
+    channelNetwork: null,
     joined: false,
     selectedDate: null,
     eventSource: null,
@@ -362,7 +363,7 @@ function showPanel(panelId) {
     if (panelId === 'news') fetchNews(1);
     if (panelId === 'admin') {
         fetchUsers();
-        fetchIRCAutojoin();
+        fetchIRCNetworks();
         fetchIRCConfigAdmins();
         fetchWeatherSettings();
         fetchLoggerSettings();
@@ -516,7 +517,13 @@ async function fetchStatus() {
             appVersionEl.textContent = 'v' + String(data.version);
         }
         document.getElementById('uptime').textContent = data.uptime;
-        document.getElementById('server').textContent = (data.nickname || 'Bot') + ' @ ' + data.server;
+        const nets = data.networks || [];
+        const serverEl = document.getElementById('server');
+        if (serverEl) {
+            serverEl.textContent = nets.length
+                ? nets.map((n) => (n.nickname || 'Bot') + ' @ ' + n.name + (n.connected ? '' : ' (offline)')).join(', ')
+                : 'Bot';
+        }
         document.getElementById('ai_requests').textContent = data.ai_requests || 0;
         document.getElementById('ai_model').textContent = data.ai_model || 'Unknown';
         
@@ -610,6 +617,7 @@ function updateAdminView(isAdmin) {
         if (pendingSec) pendingSec.classList.toggle('hidden', !lastStaffAdmin);
         if (pendingFilesSec) pendingFilesSec.classList.toggle('hidden', !lastStaffAdmin);
         if (uploadSettingsCard) uploadSettingsCard.classList.toggle('hidden', !lastStaffAdmin);
+        document.getElementById('irc-networks-wrap')?.classList.remove('hidden');
         document.getElementById('irc-autojoin-wrap')?.classList.remove('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
@@ -617,7 +625,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('news-admin-header')?.classList.remove('hidden');
         document.getElementById('bookmarks-admin-header')?.classList.remove('hidden');
         if (window.location.hash === '#admin') {
-            fetchIRCAutojoin();
+            fetchIRCNetworks();
             fetchIRCConfigAdmins();
             fetchWeatherSettings();
             fetchLoggerSettings();
@@ -631,6 +639,7 @@ function updateAdminView(isAdmin) {
         if (pendingSec) pendingSec.classList.add('hidden');
         if (pendingFilesSec) pendingFilesSec.classList.add('hidden');
         if (uploadSettingsCard) uploadSettingsCard.classList.add('hidden');
+        document.getElementById('irc-networks-wrap')?.classList.add('hidden');
         document.getElementById('irc-autojoin-wrap')?.classList.add('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
@@ -734,9 +743,9 @@ async function fetchLogCatalog() {
     }
 }
 
-function getLogChannelEntry(label) {
+function getLogChannelEntry(label, network) {
     if (!logCatalog?.channels) return null;
-    return logCatalog.channels.find((c) => c.label === label) || null;
+    return logCatalog.channels.find((c) => c.label === label && c.network === network) || null;
 }
 
 function renderLogChannelList() {
@@ -745,17 +754,20 @@ function renderLogChannelList() {
     const q = (document.getElementById('logs-channel-filter')?.value || '').trim().toLowerCase();
     const joined = logCatalog.channels.filter((c) => c.joined && (!q || c.label.toLowerCase().includes(q)));
     const other = logCatalog.channels.filter((c) => !c.joined && (!q || c.label.toLowerCase().includes(q)));
+    const multiNet = (lastIRCNetworks || []).length > 1;
 
     const mkRow = (c) => {
         const row = document.createElement('button');
         row.type = 'button';
-        row.className = 'logs-channel-row mono' + (logState.channelLabel === c.label ? ' active' : '');
-        row.innerHTML = `<span>${financeEscapeHtml(c.label)}</span><span class="logs-channel-meta">${
+        const active = logState.channelLabel === c.label && logState.channelNetwork === c.network;
+        row.className = 'logs-channel-row mono' + (active ? ' active' : '');
+        const netSuffix = multiNet && c.network ? ` <span class="logs-channel-meta">(${financeEscapeHtml(c.network)})</span>` : '';
+        row.innerHTML = `<span>${financeEscapeHtml(c.label)}${netSuffix}</span><span class="logs-channel-meta">${
             c.joined
                 ? '<span class="log-badge log-badge-live"><span class="dot pulse"></span>Live</span>'
                 : '<span class="log-badge log-badge-disk">Disk</span>'
         }</span>`;
-        row.addEventListener('click', () => selectLogChannel(c.label, c.joined));
+        row.addEventListener('click', () => selectLogChannel(c.label, c.network, c.joined));
         return row;
     };
 
@@ -777,8 +789,9 @@ function renderLogChannelList() {
     }
 }
 
-function selectLogChannel(label, joined) {
+function selectLogChannel(label, network, joined) {
     logState.channelLabel = label;
+    logState.channelNetwork = network;
     logState.joined = joined;
     if (logCatalog?.calendar?.server_local_today) {
         logState.selectedDate = logCatalog.calendar.server_local_today;
@@ -822,6 +835,7 @@ function updateLogDateLabel() {
 function closeLogsView() {
     teardownLogStream();
     logState.channelLabel = null;
+    logState.channelNetwork = null;
     logState.joined = false;
     logState.selectedDate = null;
     logState.stickToBottom = true;
@@ -874,7 +888,7 @@ function reloadLogsForSelection() {
     updateLogToolbarBadges();
 
     if (logState.selectedDate === today) {
-        const url = `/api/logs/stream?channel=${encodeURIComponent(logState.channelLabel)}&date=${encodeURIComponent(logState.selectedDate)}`;
+        const url = `/api/logs/stream?${new URLSearchParams({ channel: logState.channelLabel, network: logState.channelNetwork || '', date: logState.selectedDate })}`;
         const source = new EventSource(url);
         logState.eventSource = source;
         source.onmessage = (e) => {
@@ -887,7 +901,7 @@ function reloadLogsForSelection() {
         (async () => {
             try {
                 const res = await fetch(
-                    `/api/logs/history?channel=${encodeURIComponent(logState.channelLabel)}&date=${encodeURIComponent(logState.selectedDate)}`
+                    `/api/logs/history?${new URLSearchParams({ channel: logState.channelLabel, network: logState.channelNetwork || '', date: logState.selectedDate })}`
                 );
                 if (!res.ok) {
                     appendLogLine('[ERROR] Failed to load history');
@@ -955,7 +969,7 @@ function renderLogCalendar() {
         next.disabled = !!(maxD && nextFirst > new Date(maxD.getFullYear(), maxD.getMonth(), maxD.getDate()));
     }
 
-    const entry = getLogChannelEntry(logState.channelLabel);
+    const entry = getLogChannelEntry(logState.channelLabel, logState.channelNetwork);
     const hasLogSet = new Set(entry?.dates_with_logs || []);
 
     const grid = document.getElementById('log-cal-grid');
@@ -2408,6 +2422,170 @@ let lastIrcSessionChannels = [];
 /** @type {Map<string, { revealed: boolean, password: string }>} */
 const ircAutojoinKeyState = new Map();
 
+/** @type {{ name: string, server: string, port: number, use_ssl: boolean, nickname: string, sasl_enabled: boolean, channel_count: number, connected: boolean, authenticated: boolean }[]} */
+let lastIRCNetworks = [];
+let selectedIRCNetwork = '';
+let editingIRCNetwork = null;
+
+function ircNetworksSetStatus(msg, isError) {
+    const el = document.getElementById('irc-networks-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--error, #f87171)' : 'var(--text-muted)';
+}
+
+async function fetchIRCNetworks() {
+    if (!lastIsAdmin) return;
+    ircNetworksSetStatus('');
+    try {
+        const res = await fetch('/api/irc/networks', { credentials: 'same-origin' });
+        if (res.status === 401) return;
+        if (!res.ok) {
+            ircNetworksSetStatus((await res.text()) || res.statusText, true);
+            return;
+        }
+        const data = await res.json();
+        lastIRCNetworks = data.networks || [];
+        if (!selectedIRCNetwork || !lastIRCNetworks.some((n) => n.name === selectedIRCNetwork)) {
+            selectedIRCNetwork = lastIRCNetworks.length ? lastIRCNetworks[0].name : '';
+        }
+        ircNetworksRender();
+        await fetchIRCAutojoin();
+    } catch (e) {
+        ircNetworksSetStatus(String(e), true);
+        console.error('fetchIRCNetworks', e);
+    }
+}
+
+function ircNetworksRender() {
+    const sel = document.getElementById('irc-autojoin-network');
+    if (sel) {
+        sel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === selectedIRCNetwork ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
+    }
+    const tbody = document.getElementById('irc-networks-list');
+    if (!tbody) return;
+    if (!lastIRCNetworks.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.75rem; color: var(--text-muted);">No networks configured.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = lastIRCNetworks.map((n) => {
+        const nameE = encodeURIComponent(n.name);
+        const status = n.connected ? (n.authenticated ? 'connected (SASL)' : 'connected') : 'offline';
+        const statusColor = n.connected ? 'var(--success, #34d399)' : 'var(--text-muted)';
+        const canRemove = lastIRCNetworks.length > 1;
+        return `<tr style="border-bottom: 1px solid var(--glass-border);">
+            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.name)}</td>
+            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.server)}:${n.port}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.use_ssl ? '✓' : '—'}</td>
+            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.nickname)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center; color: ${statusColor};">${status}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.channel_count}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right;">
+                <button type="button" class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-netedit="${nameE}">Edit</button>
+                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-netrm="${nameE}" ${canRemove ? '' : 'disabled title="At least one network is required"'}>Remove</button>
+            </td>
+        </tr>`;
+    }).join('');
+    tbody.querySelectorAll('button[data-netedit]').forEach((btn) => {
+        const name = decodeURIComponent(btn.getAttribute('data-netedit') || '');
+        btn.addEventListener('click', () => ircNetworkEditStart(name));
+    });
+    tbody.querySelectorAll('button[data-netrm]').forEach((btn) => {
+        const name = decodeURIComponent(btn.getAttribute('data-netrm') || '');
+        btn.addEventListener('click', () => ircNetworkRemove(name));
+    });
+}
+
+function ircAutojoinNetworkChange() {
+    const sel = document.getElementById('irc-autojoin-network');
+    selectedIRCNetwork = sel ? sel.value : '';
+    fetchIRCAutojoin();
+}
+
+function ircNetworkEditStart(name) {
+    const n = lastIRCNetworks.find((x) => x.name === name);
+    if (!n) return;
+    editingIRCNetwork = name;
+    const nameEl = document.getElementById('irc-net-name');
+    if (nameEl) { nameEl.value = n.name; nameEl.disabled = true; }
+    const serverEl = document.getElementById('irc-net-server');
+    if (serverEl) serverEl.value = n.server;
+    const portEl = document.getElementById('irc-net-port');
+    if (portEl) portEl.value = String(n.port);
+    const sslEl = document.getElementById('irc-net-ssl');
+    if (sslEl) sslEl.checked = !!n.use_ssl;
+    const nickEl = document.getElementById('irc-net-nick');
+    if (nickEl) nickEl.value = n.nickname;
+    ircNetworksSetStatus('Editing "' + name + '" — change fields and click Save changes.');
+}
+
+function ircNetworkEditCancel() {
+    editingIRCNetwork = null;
+    const nameEl = document.getElementById('irc-net-name');
+    if (nameEl) { nameEl.value = ''; nameEl.disabled = false; }
+    ircNetworksSetStatus('');
+}
+
+async function ircNetworkAdd() {
+    const nameEl = document.getElementById('irc-net-name');
+    const serverEl = document.getElementById('irc-net-server');
+    const portEl = document.getElementById('irc-net-port');
+    const sslEl = document.getElementById('irc-net-ssl');
+    const nickEl = document.getElementById('irc-net-nick');
+    if (!nameEl || !serverEl || !portEl || !nickEl) return;
+    const body = {
+        name: nameEl.value.trim(),
+        server: serverEl.value.trim(),
+        port: parseInt(portEl.value, 10) || 0,
+        use_ssl: sslEl ? sslEl.checked : true,
+        nickname: nickEl.value.trim(),
+    };
+    ircNetworksSetStatus('');
+    try {
+        const editing = editingIRCNetwork;
+        const res = await fetch(editing ? '/api/irc/networks/edit' : '/api/irc/networks', {
+            method: editing ? 'PUT' : 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (res.status === 409) {
+            ircNetworksSetStatus('A network with that name already exists.', true);
+            return;
+        }
+        if (!res.ok) {
+            ircNetworksSetStatus((await res.text()) || 'Save failed', true);
+            return;
+        }
+        ircNetworkEditCancel();
+        serverEl.value = '';
+        portEl.value = '6697';
+        if (sslEl) sslEl.checked = true;
+        nickEl.value = '';
+        await fetchIRCNetworks();
+    } catch (e) {
+        ircNetworksSetStatus(String(e), true);
+    }
+}
+
+async function ircNetworkRemove(name) {
+    ircNetworksSetStatus('');
+    try {
+        const res = await fetch('/api/irc/networks?' + new URLSearchParams({ name }), {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        if (!res.ok) {
+            ircNetworksSetStatus((await res.text()) || 'Remove failed', true);
+            return;
+        }
+        if (selectedIRCNetwork === name) selectedIRCNetwork = '';
+        await fetchIRCNetworks();
+    } catch (e) {
+        ircNetworksSetStatus(String(e), true);
+    }
+}
+
 function ircAutojoinPersistToggled() {
     const p = document.getElementById('irc-autojoin-persist');
     const aj = document.getElementById('irc-autojoin-aj');
@@ -2434,7 +2612,7 @@ async function fetchIRCAutojoin() {
     if (!lastIsAdmin) return;
     ircAutojoinSetStatus('');
     try {
-        const res = await fetch('/api/irc/channels', { credentials: 'same-origin' });
+        const res = await fetch('/api/irc/channels?' + new URLSearchParams({ network: selectedIRCNetwork }), { credentials: 'same-origin' });
         if (res.status === 401) return;
         if (!res.ok) {
             ircAutojoinSetStatus(await res.text() || res.statusText, true);
@@ -2565,7 +2743,7 @@ async function ircAutojoinOnAutojoinChange(ev) {
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, auto_join: want }),
+            body: JSON.stringify({ network: selectedIRCNetwork, name, auto_join: want }),
         });
         if (!res.ok) {
             el.checked = !want;
@@ -2587,7 +2765,7 @@ async function ircAutojoinRevealKey(name) {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ network: selectedIRCNetwork, name }),
         });
         if (!res.ok) {
             ircAutojoinSetStatus((await res.text()) || 'Reveal failed', true);
@@ -2608,7 +2786,7 @@ async function ircAutojoinRevealSessionKey(name) {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ network: selectedIRCNetwork, name }),
         });
         if (!res.ok) {
             ircAutojoinSetStatus((await res.text()) || 'Reveal failed', true);
@@ -2632,7 +2810,7 @@ async function ircAutojoinOnAnnounceChange(ev) {
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, announce: want }),
+            body: JSON.stringify({ network: selectedIRCNetwork, name, announce: want }),
         });
         if (!res.ok) {
             el.checked = !want;
@@ -2650,7 +2828,7 @@ async function ircAutojoinOnAnnounceChange(ev) {
 async function ircAutojoinRemove(name) {
     ircAutojoinSetStatus('');
     try {
-        const res = await fetch('/api/irc/channels?' + new URLSearchParams({ name }), {
+        const res = await fetch('/api/irc/channels?' + new URLSearchParams({ network: selectedIRCNetwork, name }), {
             method: 'DELETE',
             credentials: 'same-origin',
         });
@@ -2668,7 +2846,7 @@ async function ircAutojoinRemove(name) {
 async function ircAutojoinRemoveSession(name) {
     ircAutojoinSetStatus('');
     try {
-        const res = await fetch('/api/irc/channels/session?' + new URLSearchParams({ name }), {
+        const res = await fetch('/api/irc/channels/session?' + new URLSearchParams({ network: selectedIRCNetwork, name }), {
             method: 'DELETE',
             credentials: 'same-origin',
         });
@@ -2692,7 +2870,7 @@ async function ircAutojoinAdd() {
     const persist = document.getElementById('irc-autojoin-persist') ? document.getElementById('irc-autojoin-persist').checked : true;
     const autoJoin = document.getElementById('irc-autojoin-aj') ? document.getElementById('irc-autojoin-aj').checked : true;
     ircAutojoinSetStatus('');
-    const body = { name, password: password || '' };
+    const body = { network: selectedIRCNetwork, name, password: password || '' };
     if (!persist) {
         body.session_only = true;
     } else {
@@ -2914,6 +3092,8 @@ window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
 window.updatePassword = updatePassword;
 window.ircAutojoinAdd = ircAutojoinAdd;
+window.ircAutojoinNetworkChange = ircAutojoinNetworkChange;
+window.ircNetworkAdd = ircNetworkAdd;
 window.addIRCConfigAdmin = addIRCConfigAdmin;
 window.removeIRCConfigAdmin = removeIRCConfigAdmin;
 async function deletePaste(id) {

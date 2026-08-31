@@ -111,7 +111,7 @@ func tempBar(tempC, minC, maxC float64) string {
 }
 
 // handleWeatherCommand fetches a forecast for query (e.g. "Barcelona, Spain") via Open-Meteo.
-func (b *Bot) handleWeatherCommand(target, sender, query string) {
+func (b *ircNetwork) handleWeatherCommand(target, sender, query string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	snap, err := weather.FetchSnapshot(ctx, weatherHTTP, query)
