@@ -196,6 +196,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/bookmarks", s.handleBookmarks)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/logout", s.handleLogout)
+	mux.HandleFunc("/api/csrf-token", s.handleCSRFToken)
 	mux.HandleFunc("/api/me/ui-theme", s.handleUITheme)
 	mux.HandleFunc("/api/users", s.handleUsers)
 	mux.HandleFunc("/api/users/password", s.handlePasswordUpdate)
@@ -954,12 +955,12 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	var reader *bufio.Reader
 	var err error
 	file, err = os.Open(logFile)
-	if err != nil {
-		fmt.Fprintf(w, "data: Error opening log file: %v\n\n", err)
-		flusher.Flush()
-	} else {
+	if err == nil {
 		reader = bufio.NewReader(file)
 	}
+	// A missing file just means nothing has been logged for this channel yet today;
+	// the poll loop below opens it as soon as the first event lands, so don't scare
+	// the user with a raw OS error here.
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -2174,6 +2175,28 @@ func (s *Server) checkAuth(r *http.Request) (bool, bool) {
 	}
 	_, needsChange, err := s.authDB.ValidateSession(cookie.Value)
 	return err == nil, needsChange
+}
+
+// handleCSRFToken issues a fresh CSRF token for the caller's existing admin
+// session, so the frontend can pick one up without re-authenticating (the
+// token minted at login expires after 1h, well before the 24h session).
+func (s *Server) handleCSRFToken(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("admin_session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if _, _, err := s.authDB.ValidateSession(cookie.Value); err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	csrfToken, err := s.authDB.GenerateCSRFToken(cookie.Value)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"csrf_token": csrfToken})
 }
 
 // requireAdminCSRF checks session validity and, for mutating methods
