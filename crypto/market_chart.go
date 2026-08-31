@@ -2,9 +2,11 @@ package crypto
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,6 +36,9 @@ func FetchMarketChart(client *http.Client, geckoID, days string) ([][2]float64, 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, &rateLimitError{status: resp.Status, retryAfter: retryAfterDuration(resp.Header.Get("Retry-After"))}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("coingecko market_chart %s: %s", geckoID, resp.Status)
 	}
@@ -47,6 +52,24 @@ func FetchMarketChart(client *http.Client, geckoID, days string) ([][2]float64, 
 	return body.Prices, nil
 }
 
+// rateLimitError carries the server-requested backoff for a 429 response.
+type rateLimitError struct {
+	status     string
+	retryAfter time.Duration
+}
+
+func (e *rateLimitError) Error() string {
+	return fmt.Sprintf("429 Too Many Requests: %s", e.status)
+}
+
+// retryAfterDuration parses a Retry-After header (seconds), defaulting to 10s if absent/invalid.
+func retryAfterDuration(header string) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 10 * time.Second
+}
+
 // FetchMarketChartWithRetry fetches market_chart with small backoff on rate limits and empty payloads.
 func FetchMarketChartWithRetry(client *http.Client, geckoID, days string) ([][2]float64, error) {
 	const maxAttempts = 4
@@ -54,8 +77,9 @@ func FetchMarketChartWithRetry(client *http.Client, geckoID, days string) ([][2]
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			d := time.Duration(attempt*750) * time.Millisecond
-			if lastErr != nil && strings.Contains(lastErr.Error(), "429") {
-				d = time.Duration(attempt*2) * time.Second
+			var rle *rateLimitError
+			if errors.As(lastErr, &rle) {
+				d = rle.retryAfter
 			}
 			time.Sleep(d)
 		}
