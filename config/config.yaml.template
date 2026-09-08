@@ -5,6 +5,10 @@ irc:
     # read for old config files, but is always rewritten to this shape on save.)
     networks:
         - name: libera
+          # Optional: connect to this network at startup/rehash (default true). Set to
+          # false to keep the network block (channels, admins, etc.) without connecting —
+          # handy for temporarily disabling a network without deleting its config.
+          # enabled: true
           server: irc.libera.chat
           port: 6697
           use_ssl: true
@@ -27,8 +31,13 @@ irc:
               enabled: true
               username: registered_nickname
               password: services_password
+          # Optional: hostmasks granted admin only on this network, on top of the global
+          # admin.admins list below (which grants admin on every network).
+          # admins:
+          #     - ~othernick@user/host-ip
         # Second network example (delete or uncomment/edit as needed):
         # - name: OtherNet
+        #   enabled: false
         #   server: irc.example.org
         #   port: 6697
         #   use_ssl: true
@@ -39,6 +48,8 @@ irc:
         #       - '#otherchannel'
         #   services:
         #       enabled: false
+        #   admins:
+        #       - ~othernick@user/host-ip
 ai:
     lm_studio_url: http://localhost:1234/v1
     model: meta-Llama-3.1-8B-instruct

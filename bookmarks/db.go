@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	
 )
 
 type Bookmark struct {
@@ -60,7 +58,7 @@ type Seen struct {
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	sqldb, err := db.OpenDatabase( dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open bookmarks database: %w", err)
 	}
@@ -337,8 +335,11 @@ func (d *Database) GetBookmarks(limit, offset int, query string) ([]Bookmark, er
 	return bookmarks, nil
 }
 
-// FindBookmarksByURLContains returns bookmarks whose URL contains pattern (substring match, newest first).
-func (d *Database) FindBookmarksByURLContains(pattern string, limit int) ([]Bookmark, error) {
+// FindBookmarksByURLContains returns network's bookmarks whose URL contains pattern
+// (substring match, newest first). Scoped to network so !bookmark find on one IRC network
+// doesn't surface another network's bookmarks (a channel's bookmarks are network-local, same
+// as its UNIQUE(network, url) storage key).
+func (d *Database) FindBookmarksByURLContains(network, pattern string, limit int) ([]Bookmark, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -348,8 +349,8 @@ func (d *Database) FindBookmarksByURLContains(pattern string, limit int) ([]Book
 	pat := bookmarkURLLikePattern(pattern)
 	rows, err := d.db.Query(`
 		SELECT id, url, nickname, hostname, timestamp FROM bookmarks
-		WHERE url LIKE ? ESCAPE '\'
-		ORDER BY timestamp DESC LIMIT ?`, pat, limit)
+		WHERE url LIKE ? ESCAPE '\' AND network = ?
+		ORDER BY timestamp DESC LIMIT ?`, pat, network, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -366,10 +367,13 @@ func (d *Database) FindBookmarksByURLContains(pattern string, limit int) ([]Book
 	return out, rows.Err()
 }
 
-func (d *Database) CountUserBookmarksSince(nickname string, since time.Time) (int, error) {
+// CountUserBookmarksSince is used for the !bookmark add rate limit; scoped to network so an
+// active nick on one IRC network doesn't spuriously exhaust the same-named nick's quota on
+// another network.
+func (d *Database) CountUserBookmarksSince(network, nickname string, since time.Time) (int, error) {
 	var count int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE nickname = ? AND timestamp > ?", 
-		nickname, since).Scan(&count)
+	err := d.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE network = ? AND nickname = ? AND timestamp > ?",
+		network, nickname, since).Scan(&count)
 	return count, err
 }
 
@@ -720,6 +724,56 @@ func (d *Database) GetSeen(network, nick string) (Seen, bool, error) {
 	}
 	s.Channel, s.Action, s.Message = channel.String, action.String, message.String
 	return s, true, nil
+}
+
+// BackfillLegacyNetwork attributes rows left with network = ” (bookmarks/seen/reminders/
+// tells created before multi-network support, or by the schema-rebuild migrations that
+// necessarily copied them in with an empty network) to defaultNetwork. Callers must only
+// invoke this when the resolved default is unambiguous — i.e. exactly one IRC network is
+// configured — since guessing wrong would misattribute another network's history; main.go
+// enforces that gate.
+//
+// bookmarks and seen carry UNIQUE/PRIMARY KEY constraints on (network, ...), so a legacy row
+// can collide with one already recorded under the real network name (e.g. activity that
+// happened after upgrading to multi-network but before this backfill shipped). In that case
+// the newer, already-correctly-attributed row wins and the orphaned legacy duplicate is
+// dropped, rather than erroring out or clobbering fresher data.
+func (d *Database) BackfillLegacyNetwork(defaultNetwork string) error {
+	defaultNetwork = strings.TrimSpace(defaultNetwork)
+	if defaultNetwork == "" {
+		return fmt.Errorf("bookmarks: BackfillLegacyNetwork: empty defaultNetwork")
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// tells/reminders have no per-network uniqueness constraint — a plain update is safe.
+	if _, err := tx.Exec(`UPDATE tells SET network = ? WHERE network = ''`, defaultNetwork); err != nil {
+		return fmt.Errorf("backfill tells: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE reminders SET network = ? WHERE network = ''`, defaultNetwork); err != nil {
+		return fmt.Errorf("backfill reminders: %w", err)
+	}
+	// bookmarks: UNIQUE(network, url). Skip (leave at '') any legacy row whose URL is
+	// already bookmarked under the real network, then drop the resulting orphans.
+	if _, err := tx.Exec(`UPDATE OR IGNORE bookmarks SET network = ? WHERE network = ''`, defaultNetwork); err != nil {
+		return fmt.Errorf("backfill bookmarks: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM bookmarks WHERE network = ''`); err != nil {
+		return fmt.Errorf("backfill bookmarks (drop orphans): %w", err)
+	}
+	// seen: PRIMARY KEY (network, nick_fold). Same skip-then-drop treatment; the surviving
+	// row is whichever was already recorded under the real network (necessarily the more
+	// recent one, since it can only exist from post-upgrade activity).
+	if _, err := tx.Exec(`UPDATE OR IGNORE seen SET network = ? WHERE network = ''`, defaultNetwork); err != nil {
+		return fmt.Errorf("backfill seen: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM seen WHERE network = ''`); err != nil {
+		return fmt.Errorf("backfill seen (drop orphans): %w", err)
+	}
+	return tx.Commit()
 }
 
 func (d *Database) Close() error {

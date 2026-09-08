@@ -207,7 +207,10 @@ func (b *Bot) startReminderScheduler() {
 				continue
 			}
 			for _, r := range due {
-				net := b.network(r.Network)
+				// networkOrDefault (not network): legacy rows predating multi-network
+				// support carry Network == "" and must still resolve to a live network
+				// instead of being silently demoted to on-join forever.
+				net := b.networkOrDefault(r.Network)
 				if net != nil && net.isUserOnline(r.OwnerNick) {
 					net.sendNotice(r.OwnerNick, fmt.Sprintf("[Reminder %s] %s", r.PublicID, truncateReminderNotice(r.Note, 380)))
 					if _, err := b.bookmarksDB.DeleteReminder(r.Network, r.OwnerNick, r.PublicID); err != nil {
