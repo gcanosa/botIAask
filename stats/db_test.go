@@ -81,7 +81,7 @@ func TestGetRecentStats_chronologicalOrder(t *testing.T) {
 		}
 	}
 
-	entries, err := sdb.GetRecentStats(5)
+	entries, err := sdb.GetRecentStats(5, "")
 	if err != nil {
 		t.Fatalf("GetRecentStats: %v", err)
 	}

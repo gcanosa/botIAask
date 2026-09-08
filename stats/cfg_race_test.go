@@ -25,7 +25,7 @@ func TestApplyConfigRace(t *testing.T) {
 					return
 				default:
 				}
-				tr.LogMessage("nick")
+				tr.LogMessage("net", "nick")
 				_ = tr.IsEnabled()
 			}
 		}()

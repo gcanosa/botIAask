@@ -805,6 +805,8 @@ html[data-theme="mono"] .news-source-badge--txt {
 }
 
 .badge-online { color: var(--primary); border-color: rgba(56, 189, 248, 0.2); }
+/* Some (not all) configured IRC networks connected — distinct from fully offline. */
+.badge-warning { color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
 .badge-admin { color: var(--accent); border-color: rgba(192, 132, 252, 0.2); }
 
 /* Active admins: IRC vs web dashboard (colored themes = hue difference; mono = light vs dark gray) */

@@ -13,8 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	
 )
 
 const (
@@ -60,7 +58,7 @@ type Database struct {
 }
 
 func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
-	sqldb, err := db.OpenDatabase( dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +404,7 @@ func (d *Database) GetApprovedPastes(limit, offset int, now time.Time, excludePu
 		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
-		FROM uploads WHERE `+where+` ORDER BY approved_at DESC`)
+		FROM uploads WHERE ` + where + ` ORDER BY approved_at DESC`)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -486,7 +484,10 @@ func (d *Database) SetFileIsPublic(ticketID string, public bool) error {
 
 // ListApprovedFilesByUser returns approved file uploads for username, newest first (same rows as the web file list).
 // limit must be positive.
-func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Upload, error) {
+// ListApprovedFilesByUser lists username's approved file uploads on network. network scopes
+// the match so the same nick on two IRC networks can't list (and thereby discover the URLs
+// of) each other's uploads; pass "" only for legacy rows predating multi-network support.
+func (d *Database) ListApprovedFilesByUser(username, network string, limit int) ([]*Upload, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("limit must be positive")
 	}
@@ -501,9 +502,9 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
-			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?)
+			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?) AND COALESCE(network,'') = ?
 		ORDER BY approved_at DESC LIMIT ?`
-	rows, err := d.db.Query(q, uname, limit)
+	rows, err := d.db.Query(q, uname, network, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -521,8 +522,8 @@ func (d *Database) ListApprovedFilesByUser(username string, limit int) ([]*Uploa
 		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
-		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
-		ORDER BY approved_at DESC`)
+		FROM uploads WHERE status = 'approved' AND upload_type = 'file' AND COALESCE(network,'') = ?
+		ORDER BY approved_at DESC`, network)
 	if err != nil {
 		return nil, err
 	}
@@ -830,6 +831,20 @@ func NewPublicRef() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// BackfillLegacyNetwork attributes upload rows left with network = ” (created before
+// multi-network support) to defaultNetwork. Callers must only invoke this when the resolved
+// default is unambiguous — i.e. exactly one IRC network is configured; main.go enforces that
+// gate. Unlike bookmarks/seen, uploads has no per-network uniqueness constraint (ticket_id
+// and token are globally unique), so a plain update is sufficient — no conflict handling.
+func (d *Database) BackfillLegacyNetwork(defaultNetwork string) error {
+	defaultNetwork = strings.TrimSpace(defaultNetwork)
+	if defaultNetwork == "" {
+		return fmt.Errorf("uploads: BackfillLegacyNetwork: empty defaultNetwork")
+	}
+	_, err := d.db.Exec(`UPDATE uploads SET network = ? WHERE COALESCE(network, '') = ''`, defaultNetwork)
+	return err
 }
 
 func (d *Database) Close() error {
