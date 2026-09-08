@@ -16,19 +16,33 @@ type IRCConfig struct {
 type IRCNetworkConfig struct {
 	// Name is a short unique label (e.g. "libera") used in logs, admin sessions, and the
 	// web dashboard. Defaults to Server when omitted.
-	Name        string         `yaml:"name"`
-	Server      string         `yaml:"server"`
-	Port        int            `yaml:"port"`
-	UseSSL      bool           `yaml:"use_ssl"`
+	Name string `yaml:"name"`
+	// Enabled: nil or true = connect to this network at startup/rehash. False = keep the
+	// network block in config (channels, admins, etc. preserved) without connecting to it.
+	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Server  string `yaml:"server"`
+	Port    int    `yaml:"port"`
+	UseSSL  bool   `yaml:"use_ssl"`
 	// TLSSkipVerify disables TLS certificate verification (self-signed certs, bare-IP
 	// servers without matching SANs). Only takes effect when UseSSL is true.
-	TLSSkipVerify bool         `yaml:"tls_skip_verify,omitempty"`
-	Nickname    string         `yaml:"nickname"`
-	Channels    []IRChannel    `yaml:"channels"`
+	TLSSkipVerify bool        `yaml:"tls_skip_verify,omitempty"`
+	Nickname      string      `yaml:"nickname"`
+	Channels      []IRChannel `yaml:"channels"`
 	// QuitMessage: optional QUIT reason. Empty uses default: "<app name> <version> Uptime: <uptime>".
 	// If set, expand placeholders: {name}, {version}, {uptime}, {nickname}.
 	QuitMessage string         `yaml:"quit_message,omitempty"`
 	Services    ServicesConfig `yaml:"services"`
+	// Admins are extra hostmask fragments granted admin only on this network, on top of
+	// the global admin.admins list (which applies to every network).
+	Admins []string `yaml:"admins,omitempty"`
+}
+
+// IsEnabled reports whether this network should be connected (default: true if unset).
+func (n IRCNetworkConfig) IsEnabled() bool {
+	if n.Enabled == nil {
+		return true
+	}
+	return *n.Enabled
 }
 
 // UnmarshalYAML accepts either the legacy flat single-network shape (server/port/... directly

@@ -36,15 +36,22 @@ import (
 // limiter, DB handles, and admin/ignore session state. Per-connection state (the actual
 // *ircevent.Connection, channel membership, session joins) lives on ircNetwork instead.
 type Bot struct {
-	cfg          atomic.Pointer[config.Config]
-	aiClient     *ai.Client
-	adminEnabled bool
-	startTime    time.Time
+	cfg       atomic.Pointer[config.Config]
+	aiClient  *ai.Client
+	startTime time.Time
 
 	// networks holds one ircNetwork per configured/connected IRC network, keyed by
 	// config.IRCNetworkConfig.Name. Populated by Start()/ApplyLiveConfig.
 	networks   map[string]*ircNetwork
 	networksMu sync.RWMutex
+
+	// pending holds networks currently retrying their initial connect (connectWithRetry) —
+	// constructed but not yet live/registered in networks. disconnectNetwork consults this
+	// so removing/disabling a network still backing off actually cancels it (see
+	// ircNetwork.quit) instead of leaking a goroutine that re-registers itself once the
+	// server comes back despite no longer being in config.
+	pending   map[string]*ircNetwork
+	pendingMu sync.RWMutex
 
 	// Rate limiting fields; swapped in ApplyLiveConfig under rateLimiterMu, read via limiter().
 	rateLimiter   *RateLimiter
@@ -108,6 +115,7 @@ func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 		aiClient:       aiClient,
 		startTime:      time.Now(),
 		networks:       make(map[string]*ircNetwork),
+		pending:        make(map[string]*ircNetwork),
 		version:        meta.Version,
 		ignoreList:     make(map[string]bool),
 		loggedInAdmins: make(map[string]bool),
@@ -530,7 +538,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.notifyLoggedInAdminsPendingApprovals(recipients)
 			} else {
 				if b.tracker != nil {
-					b.tracker.LogFailedAuth()
+					b.tracker.LogFailedAuth(b.name)
 				}
 				b.sendPrivmsg(target, fmt.Sprintf("%s not authorized.", sender))
 			}
@@ -555,7 +563,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Joined %s but failed to save config: %v", chName, err))
 			}
 			if b.tracker != nil {
-				b.tracker.LogAdminCommand()
+				b.tracker.LogAdminCommand(b.name)
 			}
 			if chKey != "" {
 				b.sendPrivmsg(target, fmt.Sprintf("Joining %s (channel key stored in config)...", chName))
@@ -578,7 +586,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				}
 			}
 			if b.tracker != nil {
-				b.tracker.LogAdminCommand()
+				b.tracker.LogAdminCommand(b.name)
 			}
 			return
 		}
@@ -589,7 +597,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, "Config reloaded from disk.")
 			}
 			if b.tracker != nil {
-				b.tracker.LogAdminCommand()
+				b.tracker.LogAdminCommand(b.name)
 			}
 			return
 		}
@@ -597,18 +605,37 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 			user := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"ignore "))
 			if user != "" {
 				b.ignoreMu.Lock()
-				b.ignoreList[strings.ToLower(user)] = true
+				b.ignoreList[adminSessionKey(b.name, user)] = true
 				b.ignoreMu.Unlock()
 				if b.tracker != nil {
-					b.tracker.LogAdminCommand()
+					b.tracker.LogAdminCommand(b.name)
 				}
 				b.sendPrivmsg(target, fmt.Sprintf("Now ignoring %s", user))
 			}
 			return
 		}
+		if strings.HasPrefix(message, b.pfx()+"unignore ") {
+			user := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"unignore "))
+			if user != "" {
+				b.ignoreMu.Lock()
+				key := adminSessionKey(b.name, user)
+				_, wasIgnored := b.ignoreList[key]
+				delete(b.ignoreList, key)
+				b.ignoreMu.Unlock()
+				if b.tracker != nil {
+					b.tracker.LogAdminCommand(b.name)
+				}
+				if wasIgnored {
+					b.sendPrivmsg(target, fmt.Sprintf("No longer ignoring %s", user))
+				} else {
+					b.sendPrivmsg(target, fmt.Sprintf("%s was not ignored", user))
+				}
+			}
+			return
+		}
 		if strings.HasPrefix(message, b.pfx()+"stats") {
 			if b.tracker != nil {
-				b.tracker.LogAdminCommand()
+				b.tracker.LogAdminCommand(b.name)
 			}
 			b.sendAdminStats(target, sender)
 			return
@@ -620,7 +647,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				msg := parts[2]
 				b.sendPrivmsg(ch, msg)
 				if b.tracker != nil {
-					b.tracker.LogAdminCommand()
+					b.tracker.LogAdminCommand(b.name)
 				}
 			}
 			return
@@ -628,7 +655,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		if strings.HasPrefix(message, b.pfx()+"quit") {
 			reason := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"quit"))
 			if b.tracker != nil {
-				b.tracker.LogAdminCommand()
+				b.tracker.LogAdminCommand(b.name)
 			}
 			b.RequestQuit(reason)
 			return
@@ -648,25 +675,25 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				case b.pfx() + "op":
 					b.conn.Send("MODE", target, "+o", targetNick)
 					if b.tracker != nil {
-						b.tracker.LogAdminCommand()
+						b.tracker.LogAdminCommand(b.name)
 					}
 					return
 				case b.pfx() + "deop":
 					b.conn.Send("MODE", target, "-o", targetNick)
 					if b.tracker != nil {
-						b.tracker.LogAdminCommand()
+						b.tracker.LogAdminCommand(b.name)
 					}
 					return
 				case b.pfx() + "voice":
 					b.conn.Send("MODE", target, "+v", targetNick)
 					if b.tracker != nil {
-						b.tracker.LogAdminCommand()
+						b.tracker.LogAdminCommand(b.name)
 					}
 					return
 				case b.pfx() + "devoice":
 					b.conn.Send("MODE", target, "-v", targetNick)
 					if b.tracker != nil {
-						b.tracker.LogAdminCommand()
+						b.tracker.LogAdminCommand(b.name)
 					}
 					return
 				}
@@ -675,14 +702,14 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 	} else if isAdmin {
 		// Log failed attempts to use admin commands without session
 		if strings.HasPrefix(message, b.pfx()) {
-			adminCmds := []string{"join", "part", "ignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice"}
+			adminCmds := []string{"join", "part", "ignore", "unignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice"}
 			parts := strings.Fields(message)
 			if len(parts) > 0 {
 				cmd := strings.TrimPrefix(parts[0], b.pfx())
 				for _, ac := range adminCmds {
 					if cmd == ac {
 						if b.tracker != nil {
-							b.tracker.LogFailedAuth()
+							b.tracker.LogFailedAuth(b.name)
 						}
 						break
 					}
@@ -691,9 +718,9 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		}
 	}
 
-	// Check if user is ignored
+	// Check if user is ignored (per-network: adminSessionKey(network, nick))
 	b.ignoreMu.RLock()
-	ignored := b.ignoreList[strings.ToLower(sender)]
+	ignored := b.ignoreList[adminSessionKey(b.name, sender)]
 	b.ignoreMu.RUnlock()
 	if ignored {
 		return
@@ -742,7 +769,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 	{
 		parts := strings.Fields(message)
 		if len(parts) > 0 && parts[0] == b.pfx()+"ping" {
-			if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+			if b.limiter() != nil && !b.limiter().Allow(b.name, sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
 				if b.getCfg().Bot.Debug {
 					log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
 				}
@@ -760,7 +787,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !euro command (rate-limited: FetchRates hits a live, saturation-prone API)
 	if strings.HasPrefix(message, b.pfx()+"euro") {
-		if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+		if b.limiter() != nil && !b.limiter().Allow(b.name, sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 			return
 		}
@@ -770,7 +797,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !peso command (rate-limited: see !euro)
 	if strings.HasPrefix(message, b.pfx()+"peso") {
-		if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+		if b.limiter() != nil && !b.limiter().Allow(b.name, sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 			return
 		}
@@ -780,7 +807,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !convert <amount> <from> <to> (rate-limited: see !euro)
 	if strings.HasPrefix(message, b.pfx()+"convert") {
-		if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+		if b.limiter() != nil && !b.limiter().Allow(b.name, sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
 			return
 		}
@@ -852,10 +879,10 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		// RSS.Channels is a single slice shared by every network's goroutine.
 		if len(parts) > 1 && (parts[1] == "on" || parts[1] == "off") {
 			if isAdmin && isLoggedInAdmin {
-				key := config.JoinNetworkChannel(b.name, target)
 				on := parts[1] == "on"
 				b.rssChannelsMu.Lock()
-				b.getCfg().RSS.Channels = config.SetRSSChannelAnnounce(b.getCfg().RSS.Channels, key, on, key)
+				defaultNet := config.DefaultRSSNetwork(b.getCfg().IRC.Networks)
+				b.getCfg().RSS.Channels = config.SetRSSChannelAnnounce(b.getCfg().RSS.Channels, b.name, target, on, defaultNet)
 				b.rssChannelsMu.Unlock()
 				if on {
 					b.sendPrivmsg(target, fmt.Sprintf("News enabled for %s (current session only).", target))
@@ -870,7 +897,8 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 		// Check if news enabled for this channel
 		b.rssChannelsMu.Lock()
-		isNewsChannel := config.RSSChannelContainsFold(b.getCfg().RSS.Channels, config.JoinNetworkChannel(b.name, target))
+		defaultNet := config.DefaultRSSNetwork(b.getCfg().IRC.Networks)
+		isNewsChannel := config.RSSChannelContainsFold(b.getCfg().RSS.Channels, b.name, target, defaultNet)
 		b.rssChannelsMu.Unlock()
 
 		if !isNewsChannel && !(isAdmin && isLoggedInAdmin) {
@@ -955,7 +983,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 			}
 			if !isAdmin {
 				tenMinutesAgo := time.Now().Add(-10 * time.Minute)
-				count, err := b.bookmarksDB.CountUserBookmarksSince(sender, tenMinutesAgo)
+				count, err := b.bookmarksDB.CountUserBookmarksSince(b.name, sender, tenMinutesAgo)
 				if err != nil {
 					log.Printf("Error checking bookmark rate limit: %v", err)
 				} else if count >= 3 {
@@ -984,7 +1012,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sbookmark FIND <text>", b.pfx()))
 				return
 			}
-			list, err := b.bookmarksDB.FindBookmarksByURLContains(strings.TrimSpace(rest), 10)
+			list, err := b.bookmarksDB.FindBookmarksByURLContains(b.name, strings.TrimSpace(rest), 10)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error searching bookmarks: %v", sender, err))
 				return
@@ -1160,7 +1188,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				return
 			}
 			// Public backlog: visible to all web users (non–dashboard-staff see non–staff-only rows).
-			id, err := b.progtodoDB.Add(body, sender, false, "")
+			id, err := b.progtodoDB.Add(body, sender, b.name, false, "")
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
 				return
@@ -1176,7 +1204,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo private <text>  (dashboard staff only; alias: %stodo staff <text>)", b.pfx(), b.pfx()))
 				return
 			}
-			id, err := b.progtodoDB.Add(body, sender, true, "")
+			id, err := b.progtodoDB.Add(body, sender, b.name, true, "")
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error saving TODO: %v", sender, err))
 				return
@@ -1187,7 +1215,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("Usage: %stodo list", b.pfx()))
 				return
 			}
-			items, err := b.progtodoDB.ListByAuthor(sender)
+			items, err := b.progtodoDB.ListByAuthor(sender, b.name)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error listing TODOs: %v", sender, err))
 				return
@@ -1214,7 +1242,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				return
 			}
 			pubID := parts[2]
-			ok, err := b.progtodoDB.DeleteByAuthor(sender, pubID)
+			ok, err := b.progtodoDB.DeleteByAuthor(sender, b.name, pubID)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error deleting: %v", sender, err))
 				return
@@ -1296,18 +1324,28 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				pubURL = fmt.Sprintf("%s/f/%s", b.getCfg().Web.BaseURL, ticketID)
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s approved. View at: %s", ticketID, pubURL))
+			// Also notify the requester's own channel/network — it may differ from the
+			// approving admin's, and the web approval path already does this (server.go
+			// handlePasteApprove/handleUploadApprove).
+			if u != nil && (u.Network != b.name || u.Channel != target) {
+				b.SendMessage(u.Network, u.Channel, fmt.Sprintf("\x0303[APPROVED]\x03 Ticket %s has been approved and published: %s", ticketID, pubURL))
+			}
 		} else if cmd == "cancel" {
 			if len(parts) < 3 {
 				b.sendPrivmsg(target, "Usage: !ticket cancel <ID>")
 				return
 			}
 			ticketID := parts[2]
+			u, _ := b.uploadsDB.GetUploadByTicketID(ticketID)
 			err := b.uploadsDB.CancelTicket(ticketID)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("Error cancelling ticket: %v", err))
 				return
 			}
 			b.sendPrivmsg(target, fmt.Sprintf("Ticket %s cancelled.", ticketID))
+			if u != nil && (u.Network != b.name || u.Channel != target) {
+				b.SendMessage(u.Network, u.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
+			}
 		}
 		return
 	}
@@ -1370,7 +1408,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				}
 				limit = n
 			}
-			files, err := b.uploadsDB.ListApprovedFilesByUser(sender, limit)
+			files, err := b.uploadsDB.ListApprovedFilesByUser(sender, b.name, limit)
 			if err != nil {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: Error listing uploads: %v", sender, err))
 				return
@@ -1399,7 +1437,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 	// Handle !ask command
 	if strings.HasPrefix(message, b.pfx()+b.cmd()) {
 		// Check rate limiting if enabled
-		if b.limiter() != nil && !b.limiter().Allow(sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
+		if b.limiter() != nil && !b.limiter().Allow(b.name, sender, target, b.getCfg().Bot.RateLimiting.Limit, b.getCfg().Bot.RateLimiting.Burst) {
 			if b.getCfg().Bot.Debug {
 				log.Printf("[DEBUG] Rate limited - Sender: %s, Target: %s", sender, target)
 			}
@@ -1420,12 +1458,14 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		// Track request
-		b.statsMu.Lock()
+		// Track request. b.aiRequests is a *Bot field; must lock Bot.statsMu explicitly
+		// (b.statsMu here would resolve to ircNetwork.statsMu, an unrelated per-connection
+		// mutex — see GetAIRequestCount/sendAdminStats for the same field's correct lock).
+		b.Bot.statsMu.Lock()
 		b.aiRequests++
-		b.statsMu.Unlock()
+		b.Bot.statsMu.Unlock()
 		if b.tracker != nil {
-			b.tracker.LogAIRequest()
+			b.tracker.LogAIRequest(b.name)
 		}
 
 		// Get response from AI
@@ -1695,7 +1735,12 @@ func (b *ircNetwork) sendAdminStats(target, sender string) {
 	nGo := runtime.NumGoroutine()
 
 	b.ignoreMu.RLock()
-	nIgn := len(b.ignoreList)
+	nIgn := 0
+	for key := range b.ignoreList {
+		if netName, _, ok := splitAdminSessionKey(key); ok && netName == b.name {
+			nIgn++
+		}
+	}
 	b.ignoreMu.RUnlock()
 
 	b.loginsMu.RLock()
@@ -1821,9 +1866,10 @@ func (b *ircNetwork) updateTrackerAdmins() {
 
 // RateLimiter implements rate limiting for IRC commands
 type RateLimiter struct {
-	mu     sync.RWMutex
-	limits map[string]*UserRateLimit
-	window time.Duration
+	mu        sync.RWMutex
+	limits    map[string]*UserRateLimit
+	window    time.Duration
+	lastSweep time.Time // throttles evictStaleLocked to at most once per window
 }
 
 // UserRateLimit tracks rate limits for a specific user in a specific channel
@@ -1840,12 +1886,18 @@ func NewRateLimiter(window time.Duration) *RateLimiter {
 	}
 }
 
-// Allow checks if a command is allowed under rate limiting rules
-func (rl *RateLimiter) Allow(sender, target string, limit, burst int) bool {
+// Allow checks if a command is allowed under rate limiting rules. network scopes the key so
+// the same sender+target on two IRC networks don't share one budget — most commonly PMs,
+// where target is the bot's own nickname and can be identical across networks, but a channel
+// name collision is possible too (only forbidden by config.validateNoCrossNetworkChannelOverlap
+// for configured channels, not runtime !join or arbitrary PM targets).
+func (rl *RateLimiter) Allow(network, sender, target string, limit, burst int) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	key := fmt.Sprintf("%s:%s", sender, target)
+	rl.evictStaleLocked()
+
+	key := network + "\x00" + sender + "\x00" + target
 	now := time.Now()
 
 	userLimit, exists := rl.limits[key]
@@ -1864,6 +1916,24 @@ func (rl *RateLimiter) Allow(sender, target string, limit, burst int) bool {
 
 	userLimit.counts[target]++
 	return userLimit.counts[target] <= burst
+}
+
+// evictStaleLocked drops entries untouched for 10x the window, so a long-lived process's
+// rate limiter doesn't grow unboundedly with every sender+target it has ever seen. Runs at
+// most once per window (checked against lastSweep) to keep the cost off the hot Allow() path.
+// Caller must hold rl.mu.
+func (rl *RateLimiter) evictStaleLocked() {
+	now := time.Now()
+	if !rl.lastSweep.IsZero() && now.Sub(rl.lastSweep) < rl.window {
+		return
+	}
+	rl.lastSweep = now
+	staleAfter := rl.window * 10
+	for k, v := range rl.limits {
+		if now.Sub(v.lastReset) > staleAfter {
+			delete(rl.limits, k)
+		}
+	}
 }
 
 func generateToken(n int) string {

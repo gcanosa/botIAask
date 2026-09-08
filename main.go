@@ -260,12 +260,29 @@ func main() {
 	guard.Go("stats tracker", statsTracker.Start)
 	bot.SetStatsTracker(statsTracker)
 
+	// backfillNetwork/canBackfill: pre-multi-network rows (bookmarks/seen/tells/reminders/
+	// uploads/programmer_todos left with network = '') get attributed to the single
+	// configured network only when there IS only one — with several networks configured,
+	// guessing which one owns legacy history would misattribute someone else's data, so
+	// those rows are left as-is (still queryable by an admin directly against the DB file).
+	backfillNetwork, canBackfill := "", false
+	if len(cfg.IRC.Networks) == 1 {
+		backfillNetwork, canBackfill = cfg.IRC.Networks[0].Name, true
+	} else if len(cfg.IRC.Networks) > 1 {
+		log.Printf("Note: %d IRC networks configured; any bookmarks/seen/tells/reminders/uploads/todos rows still attributed to no network (from before multi-network support) were left as-is.", len(cfg.IRC.Networks))
+	}
+
 	// Initialize Bookmarks Database
 	bookmarksDB, err := bookmarks.NewDatabase("data/bookmarks.db")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize bookmarks database: %v", err)
 	} else {
 		defer bookmarksDB.Close()
+		if canBackfill {
+			if err := bookmarksDB.BackfillLegacyNetwork(backfillNetwork); err != nil {
+				log.Printf("Warning: bookmarks legacy network backfill: %v", err)
+			}
+		}
 		bot.SetBookmarksDatabase(bookmarksDB)
 	}
 
@@ -280,6 +297,11 @@ func main() {
 		log.Printf("Warning: Failed to initialize programmer TODO database: %v", err)
 	} else {
 		defer progTodoDB.Close()
+		if canBackfill {
+			if err := progTodoDB.BackfillLegacyNetwork(backfillNetwork); err != nil {
+				log.Printf("Warning: progtodo legacy network backfill: %v", err)
+			}
+		}
 		bot.SetProgtodoDatabase(progTodoDB)
 	}
 
@@ -294,6 +316,11 @@ func main() {
 		log.Printf("Warning: Failed to initialize uploads database: %v", err)
 	} else {
 		defer uploadsDB.Close()
+		if canBackfill {
+			if err := uploadsDB.BackfillLegacyNetwork(backfillNetwork); err != nil {
+				log.Printf("Warning: uploads legacy network backfill: %v", err)
+			}
+		}
 		bot.SetUploadsDatabase(uploadsDB)
 	}
 

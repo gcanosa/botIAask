@@ -301,12 +301,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check IRC connection
-	if !s.bot.IsConnected() {
+	// Check IRC connection. irc_connected/status stay "ANY network up" for existing
+	// consumers; connected_networks/total_networks let a network-aware client (or a human
+	// reading this endpoint) see a partial outage instead of it reading as fully healthy.
+	netStatuses := s.bot.NetworkStatuses()
+	connectedNets := 0
+	for _, st := range netStatuses {
+		if st.Connected {
+			connectedNets++
+		}
+	}
+	status["connected_networks"] = connectedNets
+	status["total_networks"] = len(netStatuses)
+	if connectedNets == 0 {
 		status["status"] = "degraded"
 		status["irc_connected"] = false
 	} else {
 		status["irc_connected"] = true
+		if connectedNets < len(netStatuses) {
+			status["status"] = "degraded"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -338,11 +352,27 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if weatherMin < 1 {
 		weatherMin = 1
 	}
+	// connected_networks/total_networks (and the authenticated pair below) let the
+	// dashboard badges degrade for a partial outage instead of reading fully healthy off
+	// "connected"/"irc_authenticated", which are ANY-network booleans kept for back-compat.
+	netStatuses := s.bot.NetworkStatuses()
+	connectedNets, authenticatedNets := 0, 0
+	for _, st := range netStatuses {
+		if st.Connected {
+			connectedNets++
+		}
+		if st.Authenticated {
+			authenticatedNets++
+		}
+	}
 	status := map[string]interface{}{
 		"version":                 meta.Version,
 		"uptime":                  s.bot.GetUptime(),
 		"connected":               s.bot.IsConnected(),
-		"networks":                s.bot.NetworkStatuses(),
+		"connected_networks":      connectedNets,
+		"total_networks":          len(netStatuses),
+		"authenticated_networks":  authenticatedNets,
+		"networks":                netStatuses,
 		"ai_model":                s.getConfig().AI.Model,
 		"ai_status":               "Online",
 		"ai_requests":             s.bot.GetAIRequestCount(),
@@ -1200,16 +1230,25 @@ type ircSessionRow struct {
 
 type ircNetworkRow struct {
 	Name          string `json:"name"`
+	Enabled       bool   `json:"enabled"`
 	Server        string `json:"server"`
 	Port          int    `json:"port"`
 	UseSSL        bool   `json:"use_ssl"`
+	TLSSkipVerify bool   `json:"tls_skip_verify"`
 	Nickname      string `json:"nickname"`
+	QuitMessage   string `json:"quit_message"`
 	SASLEnabled   bool   `json:"sasl_enabled"`
+	SASLUsername  string `json:"sasl_username"`
 	ChannelCount  int    `json:"channel_count"`
 	Connected     bool   `json:"connected"`
 	Authenticated bool   `json:"authenticated"`
 }
 
+// handleConfigIRCAdmins manages admin hostmasks. An empty/absent "network" scope
+// (query param on GET/DELETE, JSON field on POST) targets the global admin.admins
+// list (bot-wide, every network); a non-empty scope targets that one network's own
+// admins list (config.IRCNetworkConfig.Admins, that network only). Unlike
+// resolveWebNetwork (channels etc.), empty here means "global", not "first network".
 func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 	isAdmin, _ := s.requireAdminCSRF(r)
 	if !isAdmin {
@@ -1218,14 +1257,26 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		network := strings.TrimSpace(r.URL.Query().Get("network"))
 		cfg := s.getConfig()
-		list := append([]string(nil), cfg.Admin.Admins...)
+		var list []string
+		if network == "" {
+			list = append([]string(nil), cfg.Admin.Admins...)
+		} else {
+			netCfg, ok := config.FindIRCNetworkByName(cfg.IRC.Networks, network)
+			if !ok {
+				http.Error(w, "Unknown network", http.StatusNotFound)
+				return
+			}
+			list = append([]string(nil), netCfg.Admins...)
+		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string][]string{"hostmasks": list})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"hostmasks": list, "network": network})
 
 	case http.MethodPost:
 		var req struct {
 			Hostmask string `json:"hostmask"`
+			Network  string `json:"network"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
@@ -1236,17 +1287,50 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "hostmask required", http.StatusBadRequest)
 			return
 		}
+		network := strings.TrimSpace(req.Network)
 		s.cfgMu.Lock()
-		for _, ex := range s.cfg.Admin.Admins {
-			if ex == h {
+		if network == "" {
+			for _, ex := range s.cfg.Admin.Admins {
+				if ex == h {
+					s.cfgMu.Unlock()
+					http.Error(w, "already in list", http.StatusConflict)
+					return
+				}
+			}
+			s.cfg.Admin.Admins = append(s.cfg.Admin.Admins, h)
+		} else {
+			ni := -1
+			for i, n := range s.cfg.IRC.Networks {
+				if strings.EqualFold(n.Name, network) {
+					ni = i
+					break
+				}
+			}
+			if ni < 0 {
 				s.cfgMu.Unlock()
-				http.Error(w, "already in list", http.StatusConflict)
+				http.Error(w, "Unknown network", http.StatusNotFound)
 				return
 			}
+			for _, ex := range s.cfg.IRC.Networks[ni].Admins {
+				if ex == h {
+					s.cfgMu.Unlock()
+					http.Error(w, "already in list", http.StatusConflict)
+					return
+				}
+			}
+			s.cfg.IRC.Networks[ni].Admins = append(s.cfg.IRC.Networks[ni].Admins, h)
 		}
-		s.cfg.Admin.Admins = append(s.cfg.Admin.Admins, h)
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-			s.cfg.Admin.Admins = s.cfg.Admin.Admins[:len(s.cfg.Admin.Admins)-1]
+			if network == "" {
+				s.cfg.Admin.Admins = s.cfg.Admin.Admins[:len(s.cfg.Admin.Admins)-1]
+			} else {
+				for i, n := range s.cfg.IRC.Networks {
+					if strings.EqualFold(n.Name, network) {
+						s.cfg.IRC.Networks[i].Admins = s.cfg.IRC.Networks[i].Admins[:len(s.cfg.IRC.Networks[i].Admins)-1]
+						break
+					}
+				}
+			}
 			s.cfgMu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1268,20 +1352,49 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 		if dec, err := url.QueryUnescape(raw); err == nil && dec != "" {
 			raw = strings.TrimSpace(dec)
 		}
+		network := strings.TrimSpace(r.URL.Query().Get("network"))
 		s.cfgMu.Lock()
-		found := -1
-		for i, ex := range s.cfg.Admin.Admins {
-			if ex == raw {
-				found = i
-				break
+		if network == "" {
+			found := -1
+			for i, ex := range s.cfg.Admin.Admins {
+				if ex == raw {
+					found = i
+					break
+				}
 			}
+			if found < 0 {
+				s.cfgMu.Unlock()
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			s.cfg.Admin.Admins = append(s.cfg.Admin.Admins[:found], s.cfg.Admin.Admins[found+1:]...)
+		} else {
+			ni := -1
+			for i, n := range s.cfg.IRC.Networks {
+				if strings.EqualFold(n.Name, network) {
+					ni = i
+					break
+				}
+			}
+			if ni < 0 {
+				s.cfgMu.Unlock()
+				http.Error(w, "Unknown network", http.StatusNotFound)
+				return
+			}
+			found := -1
+			for i, ex := range s.cfg.IRC.Networks[ni].Admins {
+				if ex == raw {
+					found = i
+					break
+				}
+			}
+			if found < 0 {
+				s.cfgMu.Unlock()
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			s.cfg.IRC.Networks[ni].Admins = append(s.cfg.IRC.Networks[ni].Admins[:found], s.cfg.IRC.Networks[ni].Admins[found+1:]...)
 		}
-		if found < 0 {
-			s.cfgMu.Unlock()
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		s.cfg.Admin.Admins = append(s.cfg.Admin.Admins[:found], s.cfg.Admin.Admins[found+1:]...)
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1327,12 +1440,13 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Unknown network", http.StatusNotFound)
 			return
 		}
+		defaultNet := config.DefaultRSSNetwork(cfg.IRC.Networks)
 		rows := make([]ircChannelRow, 0, len(netCfg.Channels))
 		for _, ch := range netCfg.Channels {
 			rows = append(rows, ircChannelRow{
 				Name:        ch.Name,
 				HasPassword: ch.Password != "",
-				AnnounceRSS: config.RSSChannelContainsFold(cfg.RSS.Channels, config.JoinNetworkChannel(network, ch.Name)),
+				AnnounceRSS: config.RSSChannelContainsFold(cfg.RSS.Channels, network, ch.Name, defaultNet),
 				AutoJoin:    ch.AutoJoinEnabled(),
 			})
 		}
@@ -1455,7 +1569,7 @@ func (s *Server) handleIRCChannels(w http.ResponseWriter, r *http.Request) {
 			out = append(out, ex)
 		}
 		s.cfg.IRC.Networks[ni].Channels = out
-		s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, config.JoinNetworkChannel(network, canon.Name), false, "")
+		s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, network, canon.Name, false, config.DefaultRSSNetwork(s.cfg.IRC.Networks))
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -1499,7 +1613,11 @@ func (s *Server) handleIRCChannelReveal(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid channel name", http.StatusBadRequest)
 		return
 	}
-	netCfg, _ := config.FindIRCNetworkByName(s.getConfig().IRC.Networks, network)
+	netCfg, ok := config.FindIRCNetworkByName(s.getConfig().IRC.Networks, network)
+	if !ok {
+		http.Error(w, "Unknown network", http.StatusNotFound)
+		return
+	}
 	if ch, ok := config.FindIRChannelByName(netCfg.Channels, name); ok {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"password": ch.Password})
@@ -1555,8 +1673,7 @@ func (s *Server) handleIRCChannelAnnounce(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Channel not in autoinjoin list", http.StatusNotFound)
 		return
 	}
-	canon := config.JoinNetworkChannel(network, entry.Name)
-	s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, canon, *req.Announce, canon)
+	s.cfg.RSS.Channels = config.SetRSSChannelAnnounce(s.cfg.RSS.Channels, network, entry.Name, *req.Announce, config.DefaultRSSNetwork(s.cfg.IRC.Networks))
 	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 		s.cfgMu.Unlock()
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -1715,13 +1832,17 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 		rows := make([]ircNetworkRow, 0, len(cfg.IRC.Networks))
 		for _, n := range cfg.IRC.Networks {
 			row := ircNetworkRow{
-				Name:         n.Name,
-				Server:       n.Server,
-				Port:         n.Port,
-				UseSSL:       n.UseSSL,
-				Nickname:     n.Nickname,
-				SASLEnabled:  n.Services.Enabled,
-				ChannelCount: len(n.Channels),
+				Name:          n.Name,
+				Enabled:       n.IsEnabled(),
+				Server:        n.Server,
+				Port:          n.Port,
+				UseSSL:        n.UseSSL,
+				TLSSkipVerify: n.TLSSkipVerify,
+				Nickname:      n.Nickname,
+				QuitMessage:   n.QuitMessage,
+				SASLEnabled:   n.Services.Enabled,
+				SASLUsername:  n.Services.Username,
+				ChannelCount:  len(n.Channels),
 			}
 			if st, ok := statuses[strings.ToLower(n.Name)]; ok {
 				row.Connected = st.Connected
@@ -1735,13 +1856,21 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
-			Name        string `json:"name"`
-			Server      string `json:"server"`
-			Port        int    `json:"port"`
-			UseSSL      bool   `json:"use_ssl"`
-			Nickname    string `json:"nickname"`
-			QuitMessage string `json:"quit_message"`
-			SASL        *struct {
+			Name          string   `json:"name"`
+			Enabled       *bool    `json:"enabled"`
+			Server        string   `json:"server"`
+			Port          int      `json:"port"`
+			UseSSL        bool     `json:"use_ssl"`
+			TLSSkipVerify bool     `json:"tls_skip_verify"`
+			Nickname      string   `json:"nickname"`
+			QuitMessage   string   `json:"quit_message"`
+			Admins        []string `json:"admins"`
+			Channels      []struct {
+				Name     string `json:"name"`
+				Password string `json:"password"`
+				AutoJoin *bool  `json:"auto_join"`
+			} `json:"channels"`
+			SASL *struct {
 				Enabled  bool   `json:"enabled"`
 				Username string `json:"username"`
 				Password string `json:"password"`
@@ -1763,8 +1892,16 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry := config.IRCNetworkConfig{
-			Name: name, Server: server, Port: req.Port, UseSSL: req.UseSSL,
-			Nickname: nickname, QuitMessage: strings.TrimSpace(req.QuitMessage),
+			Name: name, Enabled: req.Enabled, Server: server, Port: req.Port, UseSSL: req.UseSSL,
+			TLSSkipVerify: req.TLSSkipVerify, Nickname: nickname, QuitMessage: strings.TrimSpace(req.QuitMessage),
+			Admins: req.Admins,
+		}
+		for _, ch := range req.Channels {
+			chName := strings.TrimSpace(ch.Name)
+			if chName == "" {
+				continue
+			}
+			entry.Channels = append(entry.Channels, config.IRChannel{Name: chName, Password: ch.Password, AutoJoin: ch.AutoJoin})
 		}
 		if req.SASL != nil {
 			entry.Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password}
@@ -1855,13 +1992,20 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name        string `json:"name"`
-		Server      string `json:"server"`
-		Port        int    `json:"port"`
-		UseSSL      bool   `json:"use_ssl"`
-		Nickname    string `json:"nickname"`
-		QuitMessage string `json:"quit_message"`
-		SASL        *struct {
+		Name    string `json:"name"`
+		Enabled *bool  `json:"enabled"`
+		Server  string `json:"server"`
+		Port    int    `json:"port"`
+		UseSSL  bool   `json:"use_ssl"`
+		// TLSSkipVerify and QuitMessage are pointers, like Enabled and SASL below: a nil
+		// value means "leave as configured", so a client (the dashboard form, or any older
+		// cached JS/script) that omits a field it doesn't know about can't silently wipe it
+		// — this is the fix for a real bug where the dashboard's edit form used to erase
+		// quit_message on every save because it never sent that field at all.
+		TLSSkipVerify *bool   `json:"tls_skip_verify"`
+		Nickname      string  `json:"nickname"`
+		QuitMessage   *string `json:"quit_message"`
+		SASL          *struct {
 			Enabled  bool   `json:"enabled"`
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -1891,13 +2035,28 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Network not found", http.StatusNotFound)
 		return
 	}
+	if req.Enabled != nil {
+		s.cfg.IRC.Networks[ni].Enabled = req.Enabled
+	}
 	s.cfg.IRC.Networks[ni].Server = server
 	s.cfg.IRC.Networks[ni].Port = req.Port
 	s.cfg.IRC.Networks[ni].UseSSL = req.UseSSL
+	if req.TLSSkipVerify != nil {
+		s.cfg.IRC.Networks[ni].TLSSkipVerify = *req.TLSSkipVerify
+	}
 	s.cfg.IRC.Networks[ni].Nickname = nickname
-	s.cfg.IRC.Networks[ni].QuitMessage = strings.TrimSpace(req.QuitMessage)
+	if req.QuitMessage != nil {
+		s.cfg.IRC.Networks[ni].QuitMessage = strings.TrimSpace(*req.QuitMessage)
+	}
 	if req.SASL != nil {
-		s.cfg.IRC.Networks[ni].Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password}
+		// The dashboard never reads the stored password back (write-only, like channel
+		// keys), so an edit that leaves the password field blank means "keep the one
+		// already configured" rather than clearing it.
+		password := req.SASL.Password
+		if password == "" {
+			password = s.cfg.IRC.Networks[ni].Services.Password
+		}
+		s.cfg.IRC.Networks[ni].Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: password}
 	}
 	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 		s.cfgMu.Unlock()
@@ -2015,6 +2174,7 @@ func (s *Server) handleStatsToggle(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 	timeframe := r.URL.Query().Get("timeframe")
+	network := r.URL.Query().Get("network") // "" = aggregate across all networks (default)
 	var since time.Time
 
 	switch timeframe {
@@ -2036,7 +2196,7 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().Add(-1 * time.Hour)
 	}
 
-	history, err := s.statsTracker.GetHistory(since)
+	history, err := s.statsTracker.GetHistory(since, network)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2050,6 +2210,8 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
+	network := r.URL.Query().Get("network") // "" = aggregate across all networks (default)
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -2062,13 +2224,16 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Subscribe to stats updates
+	// Subscribe to stats updates. Every tick, the tracker broadcasts one merged
+	// (Network == "") entry plus one per configured network; keep only the series this
+	// client asked for so a client unaware of the network dimension (network == "") keeps
+	// seeing exactly the single aggregate stream it always has.
 	statsChan := s.statsTracker.Subscribe()
 	defer s.statsTracker.Unsubscribe(statsChan)
 
 	// Replay recent DB rows so the client does not wait for the next snapshot tick
 	since := time.Now().Add(-2 * time.Hour)
-	bootstrap, err := s.statsTracker.GetHistory(since)
+	bootstrap, err := s.statsTracker.GetHistory(since, network)
 	if err == nil {
 		for _, entry := range bootstrap {
 			data, err := json.Marshal(entry)
@@ -2086,6 +2251,9 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case entry := <-statsChan:
+			if entry.Network != network {
+				continue
+			}
 			data, err := json.Marshal(entry)
 			if err != nil {
 				continue

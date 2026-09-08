@@ -566,7 +566,7 @@ async function fetchStatus() {
         
         // State updates
         updateAdminView(data.is_admin);
-        updateIRCAuthStatus(data.irc_authenticated);
+        updateIRCAuthStatus(data.irc_authenticated, data.authenticated_networks, data.total_networks);
         syncThemeSelectFromState(!!data.is_admin, data.ui_theme);
 
         const pendBanner = document.getElementById('pending-approvals-banner');
@@ -594,12 +594,19 @@ async function fetchStatus() {
         
         const statusText = document.getElementById('status-text');
         const statusBadge = document.getElementById('status-badge');
-        if (data.connected) {
+        const connectedNets = data.connected_networks;
+        const totalNets = data.total_networks;
+        statusBadge.classList.remove('badge-online', 'badge-warning');
+        if (typeof totalNets === 'number' && totalNets > 0 && connectedNets < totalNets) {
+            // Partial outage: some but not all configured networks are up — distinct from
+            // both "Operational" and "IRC disconnected" so it isn't reported as fully healthy.
+            statusText.textContent = connectedNets + '/' + totalNets + ' networks connected';
+            statusBadge.classList.add('badge-warning');
+        } else if (data.connected) {
             statusText.textContent = 'Operational';
             statusBadge.classList.add('badge-online');
         } else {
             statusText.textContent = 'IRC disconnected';
-            statusBadge.classList.remove('badge-online');
         }
 
         if (data.needs_password_change && data.is_admin) {
@@ -679,14 +686,20 @@ function updateAdminView(isAdmin) {
     }
 }
 
-function updateIRCAuthStatus(authenticated) {
+function updateIRCAuthStatus(authenticated, authenticatedNets, totalNets) {
     const badge = document.getElementById('irc-auth-badge');
     const text = document.getElementById('irc-auth-text');
-    if (authenticated) {
-        badge.classList.remove('hidden');
-        text.textContent = 'Identified';
-    } else {
+    if (!authenticated) {
         badge.classList.add('hidden');
+        return;
+    }
+    badge.classList.remove('hidden');
+    if (typeof totalNets === 'number' && totalNets > 1 && authenticatedNets < totalNets) {
+        // ANY-network "authenticated" true doesn't mean every network is — show the split
+        // so a stale/partial SASL state doesn't read as fully identified.
+        text.textContent = 'Identified (' + authenticatedNets + '/' + totalNets + ')';
+    } else {
+        text.textContent = 'Identified';
     }
 }
 
@@ -2451,10 +2464,12 @@ let lastIrcSessionChannels = [];
 /** @type {Map<string, { revealed: boolean, password: string }>} */
 const ircAutojoinKeyState = new Map();
 
-/** @type {{ name: string, server: string, port: number, use_ssl: boolean, nickname: string, sasl_enabled: boolean, channel_count: number, connected: boolean, authenticated: boolean }[]} */
+/** @type {{ name: string, enabled: boolean, server: string, port: number, use_ssl: boolean, nickname: string, sasl_enabled: boolean, channel_count: number, connected: boolean, authenticated: boolean }[]} */
 let lastIRCNetworks = [];
 let selectedIRCNetwork = '';
 let editingIRCNetwork = null;
+/** '' = global admin.admins list (every network); otherwise a network name (that network's own admins list). */
+let selectedIRCConfigAdminNetwork = '';
 
 function ircNetworksSetStatus(msg, isError) {
     const el = document.getElementById('irc-networks-status');
@@ -2491,21 +2506,29 @@ function ircNetworksRender() {
     if (sel) {
         sel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === selectedIRCNetwork ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
     }
+    const adminsSel = document.getElementById('irc-config-admins-network');
+    if (adminsSel) {
+        const opts = [`<option value="" ${selectedIRCConfigAdminNetwork === '' ? 'selected' : ''}>(global — all networks)</option>`]
+            .concat(lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === selectedIRCConfigAdminNetwork ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`));
+        adminsSel.innerHTML = opts.join('');
+    }
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
     if (!lastIRCNetworks.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.75rem; color: var(--text-muted);">No networks configured.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="padding: 0.75rem; color: var(--text-muted);">No networks configured.</td></tr>';
         return;
     }
     tbody.innerHTML = lastIRCNetworks.map((n) => {
         const nameE = encodeURIComponent(n.name);
-        const status = n.connected ? (n.authenticated ? 'connected (SASL)' : 'connected') : 'offline';
-        const statusColor = n.connected ? 'var(--success, #34d399)' : 'var(--text-muted)';
+        const status = !n.enabled ? 'disabled' : n.connected ? (n.authenticated ? 'connected (SASL)' : 'connected') : 'offline';
+        const statusColor = !n.enabled ? 'var(--text-muted)' : n.connected ? 'var(--success, #34d399)' : 'var(--text-muted)';
         const canRemove = lastIRCNetworks.length > 1;
         return `<tr style="border-bottom: 1px solid var(--glass-border);">
             <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.name)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.enabled ? '✓' : '—'}</td>
             <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.server)}:${n.port}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.use_ssl ? '✓' : '—'}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;" title="${n.tls_skip_verify ? 'Certificate verification skipped' : ''}">${n.use_ssl ? (n.tls_skip_verify ? '✓ ⚠' : '✓') : '—'}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: center;" title="${n.sasl_username ? ircAutojoinEsc(n.sasl_username) : ''}">${n.sasl_enabled ? '✓' : '—'}</td>
             <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.nickname)}</td>
             <td style="padding: 0.5rem 0.75rem; text-align: center; color: ${statusColor};">${status}</td>
             <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.channel_count}</td>
@@ -2543,15 +2566,37 @@ function ircNetworkEditStart(name) {
     if (portEl) portEl.value = String(n.port);
     const sslEl = document.getElementById('irc-net-ssl');
     if (sslEl) sslEl.checked = !!n.use_ssl;
+    const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
+    if (tlsSkipEl) tlsSkipEl.checked = !!n.tls_skip_verify;
+    const enabledEl = document.getElementById('irc-net-enabled');
+    if (enabledEl) enabledEl.checked = n.enabled !== false;
     const nickEl = document.getElementById('irc-net-nick');
     if (nickEl) nickEl.value = n.nickname;
-    ircNetworksSetStatus('Editing "' + name + '" — change fields and click Save changes.');
+    const quitEl = document.getElementById('irc-net-quit-message');
+    if (quitEl) quitEl.value = n.quit_message || '';
+    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
+    if (saslEnEl) saslEnEl.checked = !!n.sasl_enabled;
+    const saslUserEl = document.getElementById('irc-net-sasl-username');
+    if (saslUserEl) saslUserEl.value = n.sasl_username || '';
+    const saslPassEl = document.getElementById('irc-net-sasl-password');
+    if (saslPassEl) saslPassEl.value = '';
+    ircNetworksSetStatus('Editing "' + name + '" — change fields and click Save changes. SASL password left blank keeps the stored one.');
 }
 
 function ircNetworkEditCancel() {
     editingIRCNetwork = null;
     const nameEl = document.getElementById('irc-net-name');
     if (nameEl) { nameEl.value = ''; nameEl.disabled = false; }
+    const quitEl = document.getElementById('irc-net-quit-message');
+    if (quitEl) quitEl.value = '';
+    const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
+    if (tlsSkipEl) tlsSkipEl.checked = false;
+    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
+    if (saslEnEl) saslEnEl.checked = false;
+    const saslUserEl = document.getElementById('irc-net-sasl-username');
+    if (saslUserEl) saslUserEl.value = '';
+    const saslPassEl = document.getElementById('irc-net-sasl-password');
+    if (saslPassEl) saslPassEl.value = '';
     ircNetworksSetStatus('');
 }
 
@@ -2560,18 +2605,36 @@ async function ircNetworkAdd() {
     const serverEl = document.getElementById('irc-net-server');
     const portEl = document.getElementById('irc-net-port');
     const sslEl = document.getElementById('irc-net-ssl');
+    const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
+    const enabledEl = document.getElementById('irc-net-enabled');
     const nickEl = document.getElementById('irc-net-nick');
+    const quitEl = document.getElementById('irc-net-quit-message');
+    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
+    const saslUserEl = document.getElementById('irc-net-sasl-username');
+    const saslPassEl = document.getElementById('irc-net-sasl-password');
     if (!nameEl || !serverEl || !portEl || !nickEl) return;
+    const editing = editingIRCNetwork;
     const body = {
         name: nameEl.value.trim(),
+        enabled: enabledEl ? enabledEl.checked : true,
         server: serverEl.value.trim(),
         port: parseInt(portEl.value, 10) || 0,
         use_ssl: sslEl ? sslEl.checked : true,
+        tls_skip_verify: tlsSkipEl ? tlsSkipEl.checked : false,
         nickname: nickEl.value.trim(),
+        quit_message: quitEl ? quitEl.value.trim() : '',
     };
+    const saslEnabled = saslEnEl ? saslEnEl.checked : false;
+    const saslPassword = saslPassEl ? saslPassEl.value : '';
+    // On edit, always send sasl so enabling/disabling and username changes persist; a blank
+    // password means "keep the one already stored" (server-side, see handleIRCNetworkEdit) —
+    // the password is never read back so there's nothing to round-trip here. On add there's
+    // no existing password to preserve, so only send it when SASL is actually being set up.
+    if (editing || saslEnabled || saslPassword) {
+        body.sasl = { enabled: saslEnabled, username: saslUserEl ? saslUserEl.value.trim() : '', password: saslPassword };
+    }
     ircNetworksSetStatus('');
     try {
-        const editing = editingIRCNetwork;
         const res = await fetch(editing ? '/api/irc/networks/edit' : '/api/irc/networks', {
             method: editing ? 'PUT' : 'POST',
             credentials: 'same-origin',
@@ -2590,6 +2653,7 @@ async function ircNetworkAdd() {
         serverEl.value = '';
         portEl.value = '6697';
         if (sslEl) sslEl.checked = true;
+        if (enabledEl) enabledEl.checked = true;
         nickEl.value = '';
         await fetchIRCNetworks();
     } catch (e) {
@@ -2967,11 +3031,18 @@ function ircConfigAdminsSetStatus(msg, isErr) {
     el.style.color = isErr ? 'var(--error)' : 'var(--text-muted)';
 }
 
+function ircConfigAdminsNetworkChange() {
+    const sel = document.getElementById('irc-config-admins-network');
+    selectedIRCConfigAdminNetwork = sel ? sel.value : '';
+    fetchIRCConfigAdmins();
+}
+
 async function fetchIRCConfigAdmins() {
     const tbody = document.getElementById('irc-config-admins-list');
     if (!tbody) return;
     try {
-        const res = await fetch('/api/config/irc-admins');
+        const qs = selectedIRCConfigAdminNetwork ? '?network=' + encodeURIComponent(selectedIRCConfigAdminNetwork) : '';
+        const res = await fetch('/api/config/irc-admins' + qs);
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         const masks = data.hostmasks || [];
@@ -3002,7 +3073,7 @@ async function addIRCConfigAdmin() {
         const res = await fetch('/api/config/irc-admins', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hostmask }),
+            body: JSON.stringify({ hostmask, network: selectedIRCConfigAdminNetwork }),
         });
         if (res.status === 409) {
             ircConfigAdminsSetStatus('That hostmask is already listed.', true);
@@ -3029,8 +3100,9 @@ async function removeIRCConfigAdmin(index) {
     }
     const hostmask = masks[index];
     const encodedHostmask = encodeURIComponent(hostmask);
+    const qs = selectedIRCConfigAdminNetwork ? '&network=' + encodeURIComponent(selectedIRCConfigAdminNetwork) : '';
     try {
-        const res = await fetch('/api/config/irc-admins?hostmask=' + encodedHostmask, { method: 'DELETE' });
+        const res = await fetch('/api/config/irc-admins?hostmask=' + encodedHostmask + qs, { method: 'DELETE' });
         if (res.status === 404) {
             ircConfigAdminsSetStatus('Hostmask not found (reload list).', true);
             await fetchIRCConfigAdmins();

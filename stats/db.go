@@ -14,22 +14,27 @@ type Database struct {
 }
 
 type StatEntry struct {
-	Timestamp        time.Time `json:"timestamp"`
-	Messages         int       `json:"messages"`
-	Actions          int       `json:"actions"`
-	AIRequests       int       `json:"ai_requests"`
-	UserCount        int       `json:"user_count"`
-	Joins            int       `json:"joins"`
-	Parts            int       `json:"parts"`
-	AdminCommands    int       `json:"admin_commands"`
-	LoggedInAdmins   int       `json:"logged_in_admins"`
-	FailedAuths      int       `json:"failed_auths"`
-	AdminNicknames   []string  `json:"admin_nicknames,omitempty"`
-	ChannelAdmins    map[string][]string `json:"channel_admins,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	// Network is the IRC network this row's activity happened on. Empty in two cases:
+	// rows predating multi-network stats, and an aggregate row returned by GetRecentStats/
+	// GetStatsSince when called with no network filter (SUMmed across every network sharing
+	// that timestamp) — the default the dashboard's activity chart shows.
+	Network        string              `json:"network,omitempty"`
+	Messages       int                 `json:"messages"`
+	Actions        int                 `json:"actions"`
+	AIRequests     int                 `json:"ai_requests"`
+	UserCount      int                 `json:"user_count"`
+	Joins          int                 `json:"joins"`
+	Parts          int                 `json:"parts"`
+	AdminCommands  int                 `json:"admin_commands"`
+	LoggedInAdmins int                 `json:"logged_in_admins"`
+	FailedAuths    int                 `json:"failed_auths"`
+	AdminNicknames []string            `json:"admin_nicknames,omitempty"`
+	ChannelAdmins  map[string][]string `json:"channel_admins,omitempty"`
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
-	sqldb, err := db.OpenDatabase( dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stats database: %w", err)
 	}
@@ -88,8 +93,12 @@ func migrateStatsSchema(db *sql.DB) error {
 		{`ALTER TABLE bot_stats ADD COLUMN admin_commands INTEGER NOT NULL DEFAULT 0`},
 		{`ALTER TABLE bot_stats ADD COLUMN logged_in_admins INTEGER NOT NULL DEFAULT 0`},
 		{`ALTER TABLE bot_stats ADD COLUMN failed_auths INTEGER NOT NULL DEFAULT 0`},
+		// network: which IRC network this row's activity belongs to, for multi-network
+		// attribution. Existing rows default to '' (pre-multi-network history; treated as
+		// its own bucket, folded into the aggregate view by GetStatsSince/GetRecentStats).
+		{`ALTER TABLE bot_stats ADD COLUMN network TEXT NOT NULL DEFAULT ''`},
 	}
-	labels := []string{"admin_commands", "logged_in_admins", "failed_auths"}
+	labels := []string{"admin_commands", "logged_in_admins", "failed_auths", "network"}
 	for i, a := range adds {
 		if _, ok := have[labels[i]]; ok {
 			continue
@@ -98,24 +107,41 @@ func migrateStatsSchema(db *sql.DB) error {
 			return fmt.Errorf("stats migrate add %s: %w", labels[i], err)
 		}
 	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_stats_network_timestamp ON bot_stats(network, timestamp)`)
 	return nil
 }
 
 func (d *Database) SaveEntry(e StatEntry) error {
 	_, err := d.db.Exec(`
-		INSERT INTO bot_stats (timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, e.Timestamp, e.Messages, e.Actions, e.AIRequests, e.UserCount, e.Joins, e.Parts, e.AdminCommands, e.LoggedInAdmins, e.FailedAuths)
+		INSERT INTO bot_stats (timestamp, network, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, e.Timestamp, e.Network, e.Messages, e.Actions, e.AIRequests, e.UserCount, e.Joins, e.Parts, e.AdminCommands, e.LoggedInAdmins, e.FailedAuths)
 	return err
 }
 
-func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
-	rows, err := d.db.Query(`
-		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
-		FROM bot_stats
-		ORDER BY timestamp DESC
-		LIMIT ?
-	`, limit)
+// GetRecentStats returns the most recent limit rows, chronological order. When network is
+// empty, rows sharing a timestamp are summed across every network (the aggregate the
+// dashboard's activity chart shows by default); pass a network name to see just its history.
+func (d *Database) GetRecentStats(limit int, network string) ([]StatEntry, error) {
+	var rows *sql.Rows
+	var err error
+	if network == "" {
+		rows, err = d.db.Query(`
+			SELECT timestamp, SUM(messages), SUM(actions), SUM(ai_requests), SUM(user_count), SUM(joins), SUM(parts), SUM(admin_commands), SUM(logged_in_admins), SUM(failed_auths)
+			FROM bot_stats
+			GROUP BY timestamp
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, limit)
+	} else {
+		rows, err = d.db.Query(`
+			SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
+			FROM bot_stats
+			WHERE network = ?
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, network, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +153,7 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
+		e.Network = network
 		entries = append(entries, e)
 	}
 	// Query is DESC (newest first); reverse once to return chronological order.
@@ -134,13 +161,28 @@ func (d *Database) GetRecentStats(limit int) ([]StatEntry, error) {
 	return entries, nil
 }
 
-func (d *Database) GetStatsSince(since time.Time) ([]StatEntry, error) {
-	rows, err := d.db.Query(`
-		SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
-		FROM bot_stats
-		WHERE timestamp >= ?
-		ORDER BY timestamp ASC
-	`, since)
+// GetStatsSince returns rows at or after since, chronological order. When network is empty,
+// rows sharing a timestamp are summed across every network (the dashboard's default view);
+// pass a network name to see just its history.
+func (d *Database) GetStatsSince(since time.Time, network string) ([]StatEntry, error) {
+	var rows *sql.Rows
+	var err error
+	if network == "" {
+		rows, err = d.db.Query(`
+			SELECT timestamp, SUM(messages), SUM(actions), SUM(ai_requests), SUM(user_count), SUM(joins), SUM(parts), SUM(admin_commands), SUM(logged_in_admins), SUM(failed_auths)
+			FROM bot_stats
+			WHERE timestamp >= ?
+			GROUP BY timestamp
+			ORDER BY timestamp ASC
+		`, since)
+	} else {
+		rows, err = d.db.Query(`
+			SELECT timestamp, messages, actions, ai_requests, user_count, joins, parts, admin_commands, logged_in_admins, failed_auths
+			FROM bot_stats
+			WHERE timestamp >= ? AND network = ?
+			ORDER BY timestamp ASC
+		`, since, network)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +194,7 @@ func (d *Database) GetStatsSince(since time.Time) ([]StatEntry, error) {
 		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
+		e.Network = network
 		entries = append(entries, e)
 	}
 	return entries, nil

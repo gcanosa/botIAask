@@ -10,21 +10,27 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	
 )
 
 // Entry is one backlog item.
 type Entry struct {
-	ID           string    `json:"id"`
-	Body         string    `json:"body"`
-	CreatedAt    time.Time `json:"created_at"`
-	AuthorNick   string    `json:"author_nick"`
-	AdminOnly    bool      `json:"admin_only"`
-	Importance   string    `json:"importance"`
-	ReviewStatus string    `json:"review_status"`
-	Disabled     bool      `json:"disabled"`
+	ID         string    `json:"id"`
+	Body       string    `json:"body"`
+	CreatedAt  time.Time `json:"created_at"`
+	AuthorNick string    `json:"author_nick"`
+	// Network is the IRC network the author was on (empty for legacy rows predating
+	// multi-network support, and for the reserved "web" sentinel — see Add).
+	Network      string `json:"network"`
+	AdminOnly    bool   `json:"admin_only"`
+	Importance   string `json:"importance"`
+	ReviewStatus string `json:"review_status"`
+	Disabled     bool   `json:"disabled"`
 }
+
+// WebNetwork is the reserved Network value for entries created from the web dashboard, so a
+// dashboard username can never collide with (and be deleted/listed via) an IRC nick sharing
+// the same text on some connected network.
+const WebNetwork = "web"
 
 // Database is programmer todos SQLite storage.
 type Database struct {
@@ -33,7 +39,7 @@ type Database struct {
 
 // NewDatabase opens or creates the DB at dbPath.
 func NewDatabase(dbPath string) (*Database, error) {
-	sqldb, err := db.OpenDatabase( dbPath)
+	sqldb, err := db.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("progtodo: open: %w", err)
 	}
@@ -55,6 +61,16 @@ func NewDatabase(dbPath string) (*Database, error) {
 	}
 	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_author ON programmer_todos (author_nick)`)
 	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_admin_only ON programmer_todos (admin_only)`)
+	// Migration: network (IRC network the author was on), for multi-network scoping so the
+	// same nick on two networks can't list/delete each other's TODOs. Project convention:
+	// tolerate the "duplicate column" error on re-runs (ALTER TABLE ADD COLUMN can't be
+	// guarded by IF NOT EXISTS in SQLite).
+	if _, err := sqldb.Exec(`ALTER TABLE programmer_todos ADD COLUMN network TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		sqldb.Close()
+		return nil, fmt.Errorf("progtodo: add network column: %w", err)
+	}
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_progtodo_network_author ON programmer_todos (network, author_nick)`)
 	if err := runProgtodoMigrations(sqldb); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("progtodo: migrate: %w", err)
@@ -85,6 +101,19 @@ func runProgtodoMigrations(db *sql.DB) error {
 // Close releases the database handle.
 func (d *Database) Close() error { return d.db.Close() }
 
+// BackfillLegacyNetwork attributes rows left with network = ” (created before the network
+// column existed) to defaultNetwork. Callers must only invoke this when the resolved default
+// is unambiguous — i.e. exactly one IRC network is configured; main.go enforces that gate.
+// No per-network uniqueness constraint exists on this table, so a plain update is sufficient.
+func (d *Database) BackfillLegacyNetwork(defaultNetwork string) error {
+	defaultNetwork = strings.TrimSpace(defaultNetwork)
+	if defaultNetwork == "" {
+		return fmt.Errorf("progtodo: BackfillLegacyNetwork: empty defaultNetwork")
+	}
+	_, err := d.db.Exec(`UPDATE programmer_todos SET network = ? WHERE network = ''`, defaultNetwork)
+	return err
+}
+
 func newID() (string, error) {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
@@ -94,8 +123,10 @@ func newID() (string, error) {
 }
 
 // Add creates a new entry; returns the public id (8 hex chars, same style as upload ticket ids).
-// importance: empty or unknown defaults to "medium"; must be low, medium, or high.
-func (d *Database) Add(body, authorNick string, adminOnly bool, importance string) (string, error) {
+// network scopes ownership so the same nick on two IRC networks (or the WebNetwork sentinel
+// for dashboard-created entries) can't see or delete each other's rows — see ListByAuthor,
+// DeleteByAuthor. importance: empty or unknown defaults to "medium"; must be low, medium, or high.
+func (d *Database) Add(body, authorNick, network string, adminOnly bool, importance string) (string, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return "", fmt.Errorf("empty body")
@@ -120,23 +151,23 @@ func (d *Database) Add(body, authorNick string, adminOnly bool, importance strin
 		ao = 1
 	}
 	_, err = d.db.Exec(`
-		INSERT INTO programmer_todos (id, body, author_nick, admin_only, importance, review_status, disabled)
-		VALUES (?, ?, ?, ?, ?, 'pending', 0)`,
-		id, body, authorNick, ao, imp)
+		INSERT INTO programmer_todos (id, body, author_nick, network, admin_only, importance, review_status, disabled)
+		VALUES (?, ?, ?, ?, ?, ?, 'pending', 0)`,
+		id, body, authorNick, network, ao, imp)
 	if err != nil {
 		return "", err
 	}
 	return id, nil
 }
 
-// ListByAuthor returns all todos created by the given nick (for IRC !todo list).
-func (d *Database) ListByAuthor(authorNick string) ([]Entry, error) {
+// ListByAuthor returns todos created by the given nick on the given network (for IRC !todo list).
+func (d *Database) ListByAuthor(authorNick, network string) ([]Entry, error) {
 	authorNick = strings.TrimSpace(authorNick)
 	rows, err := d.db.Query(`
-		SELECT id, body, created_at, author_nick, admin_only, importance, review_status, disabled
+		SELECT id, body, created_at, author_nick, network, admin_only, importance, review_status, disabled
 		FROM programmer_todos
-		WHERE author_nick = ?
-		ORDER BY datetime(created_at) DESC`, authorNick)
+		WHERE author_nick = ? AND network = ?
+		ORDER BY datetime(created_at) DESC`, authorNick, network)
 	if err != nil {
 		return nil, err
 	}
@@ -144,13 +175,13 @@ func (d *Database) ListByAuthor(authorNick string) ([]Entry, error) {
 	return scanEntries(rows)
 }
 
-// DeleteByAuthor deletes a row only if it belongs to authorNick.
-func (d *Database) DeleteByAuthor(authorNick, publicID string) (bool, error) {
+// DeleteByAuthor deletes a row only if it belongs to authorNick on network.
+func (d *Database) DeleteByAuthor(authorNick, network, publicID string) (bool, error) {
 	authorNick, publicID = strings.TrimSpace(authorNick), strings.TrimSpace(publicID)
 	if publicID == "" {
 		return false, nil
 	}
-	res, err := d.db.Exec(`DELETE FROM programmer_todos WHERE id = ? AND author_nick = ?`, publicID, authorNick)
+	res, err := d.db.Exec(`DELETE FROM programmer_todos WHERE id = ? AND author_nick = ? AND network = ?`, publicID, authorNick, network)
 	if err != nil {
 		return false, err
 	}
@@ -162,7 +193,7 @@ func (d *Database) DeleteByAuthor(authorNick, publicID string) (bool, error) {
 // (including rejected rows; UI shows strikethrough for rejected).
 func (d *Database) ListPublic() ([]Entry, error) {
 	rows, err := d.db.Query(`
-		SELECT id, body, created_at, author_nick, admin_only, importance, review_status, disabled
+		SELECT id, body, created_at, author_nick, network, admin_only, importance, review_status, disabled
 		FROM programmer_todos
 		WHERE COALESCE(admin_only, 0) = 0
 		ORDER BY
@@ -178,7 +209,7 @@ func (d *Database) ListPublic() ([]Entry, error) {
 // ListAll returns every row (staff).
 func (d *Database) ListAll() ([]Entry, error) {
 	rows, err := d.db.Query(`
-		SELECT id, body, created_at, author_nick, admin_only, importance, review_status, disabled
+		SELECT id, body, created_at, author_nick, network, admin_only, importance, review_status, disabled
 		FROM programmer_todos
 		ORDER BY
 			CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
@@ -197,12 +228,12 @@ func (d *Database) GetByID(id string) (*Entry, error) {
 		return nil, fmt.Errorf("missing id")
 	}
 	row := d.db.QueryRow(`
-		SELECT id, body, created_at, author_nick, admin_only, importance, review_status, disabled
+		SELECT id, body, created_at, author_nick, network, admin_only, importance, review_status, disabled
 		FROM programmer_todos WHERE id = ?`, id)
 	var e Entry
 	var adminOnly, disabled int
 	var created string
-	err := row.Scan(&e.ID, &e.Body, &created, &e.AuthorNick, &adminOnly, &e.Importance, &e.ReviewStatus, &disabled)
+	err := row.Scan(&e.ID, &e.Body, &created, &e.AuthorNick, &e.Network, &adminOnly, &e.Importance, &e.ReviewStatus, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -296,7 +327,7 @@ func scanEntries(rows *sql.Rows) ([]Entry, error) {
 		var e Entry
 		var adminOnly, disabled int
 		var created string
-		err := rows.Scan(&e.ID, &e.Body, &created, &e.AuthorNick, &adminOnly, &e.Importance, &e.ReviewStatus, &disabled)
+		err := rows.Scan(&e.ID, &e.Body, &created, &e.AuthorNick, &e.Network, &adminOnly, &e.Importance, &e.ReviewStatus, &disabled)
 		if err != nil {
 			return nil, err
 		}
