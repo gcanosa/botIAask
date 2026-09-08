@@ -2,168 +2,208 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{{.Upload.Title}} - Paste</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #38bdf8;
-            --bg: #0f172a;
-            --card-bg: #1e293b;
-            --border: rgba(255, 255, 255, 0.1);
+            --primary-dim: rgba(56, 189, 248, 0.12);
+            --accent: #c084fc;
+            --bg: #0b1120;
+            --bg-gradient: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(56, 189, 248, 0.15), transparent);
+            --card-bg: #151f38;
+            --border: rgba(255, 255, 255, 0.08);
             --text: #f1f5f9;
             --text-muted: #94a3b8;
-            --code-bg: #0b1120;
+            --code-bg: #0a0f1e;
+            --success: #34d399;
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+        html { -webkit-text-size-adjust: 100%; }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-gradient), var(--bg);
+            background-attachment: fixed;
             color: var(--text);
             line-height: 1.5;
             min-height: 100vh;
+            padding-bottom: var(--safe-bottom);
         }
 
         header {
-            background: rgba(15, 23, 42, 0.8);
-            backdrop-filter: blur(8px);
+            background: rgba(11, 17, 32, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
-            padding: 1.5rem 2rem;
+            padding: calc(1.25rem + var(--safe-top)) 1.25rem 1.25rem;
             position: sticky;
             top: 0;
             z-index: 10;
         }
 
         .header-content {
-            max-width: 1200px;
+            max-width: 1100px;
             margin: 0 auto;
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
             align-items: flex-start;
+            gap: 1rem;
         }
 
+        .title-group { min-width: 0; flex: 1 1 260px; }
+
         .title-group h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--primary);
-            margin-bottom: 0.25rem;
+            font-size: 1.375rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+            word-break: break-word;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .meta {
             display: flex;
-            gap: 1.5rem;
+            flex-wrap: wrap;
+            gap: 0.5rem 1.25rem;
             font-size: 0.8125rem;
             color: var(--text-muted);
         }
 
-        .meta span b {
-            color: var(--text);
+        .meta span { white-space: nowrap; }
+        .meta span b { color: var(--text); font-weight: 500; }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
         }
 
         .description {
-            max-width: 1200px;
-            margin: 1rem auto;
-            padding: 0 2rem;
+            max-width: 1100px;
+            margin: 1.25rem auto 0;
+            padding: 0 1.25rem;
             color: var(--text-muted);
             font-size: 0.9375rem;
             font-style: italic;
         }
 
         main {
-            max-width: 1200px;
-            margin: 1rem auto 3rem;
-            padding: 0 2rem;
+            max-width: 1100px;
+            margin: 1.25rem auto 2rem;
+            padding: 0 1.25rem;
         }
 
         .badge {
-            background: rgba(56, 189, 248, 0.1);
+            background: var(--primary-dim);
             color: var(--primary);
-            padding: 0.25rem 0.75rem;
+            padding: 0.2rem 0.7rem;
             border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
+            font-size: 0.6875rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
+            white-space: nowrap;
         }
+
+        .badge.lang { background: rgba(192, 132, 252, 0.12); color: var(--accent); }
 
         footer {
             text-align: center;
-            padding: 2rem;
+            padding: 1.5rem;
             color: var(--text-muted);
-            font-size: 0.8125rem;
+            font-size: 0.75rem;
             border-top: 1px solid var(--border);
-            margin-top: 2rem;
+            margin-top: 1.5rem;
         }
 
-        .copy-btn {
-            background: rgba(255, 255, 255, 0.05);
+        .btn {
+            background: rgba(255, 255, 255, 0.04);
             color: var(--text);
             border: 1px solid var(--border);
-            padding: 0.5rem 1rem;
+            padding: 0.5rem 0.9rem;
             border-radius: 0.5rem;
-            font-weight: 700;
+            font-weight: 600;
+            font-family: inherit;
             cursor: pointer;
-            transition: all 0.2s;
-            font-size: 0.7rem;
+            transition: all 0.15s ease;
+            font-size: 0.75rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.04em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            min-height: 2.25rem;
+            touch-action: manipulation;
         }
-        .copy-btn:hover {
-            border-color: var(--primary);
+        .btn:hover { border-color: var(--primary); color: var(--primary); }
+        .btn:active { transform: scale(0.97); }
+        .btn.active {
+            background: var(--primary-dim);
             color: var(--primary);
-            transform: translateY(-1px);
+            border-color: rgba(56, 189, 248, 0.3);
         }
-        .copy-btn.active {
-            background: var(--primary);
-            color: var(--bg);
-            border-color: var(--primary);
+        .btn.success {
+            background: rgba(52, 211, 153, 0.12);
+            color: var(--success);
+            border-color: rgba(52, 211, 153, 0.3);
         }
-        .copy-btn.success {
-            background: #10b981;
-            color: white;
-            border-color: #10b981;
+
+        .code-card {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 0.875rem;
+            overflow: hidden;
+            box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.4);
         }
 
         .code-wrapper {
             display: flex;
-            background: var(--code-bg);
-            border: 1px solid var(--border);
-            border-radius: 0.75rem;
-            overflow: hidden;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            max-height: 75vh;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .line-numbers {
-            padding: 1.5rem 1rem;
+            padding: 1.25rem 0.875rem;
             border-right: 1px solid var(--border);
             background: rgba(0, 0, 0, 0.2);
             color: var(--text-muted);
             text-align: right;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             user-select: none;
-            line-height: 1.5;
-            min-width: 4rem;
+            line-height: 1.6;
+            flex-shrink: 0;
+            position: sticky;
+            left: 0;
         }
 
-        .line-numbers div {
-            height: 1.3125rem; /* Matches line height of code */
-        }
+        .line-numbers div { min-height: 1.3rem; }
 
         pre {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.875rem;
-            padding: 1.5rem;
+            font-size: 0.8125rem;
+            padding: 1.25rem;
             margin: 0;
             overflow-x: auto;
             white-space: pre;
             color: #e2e8f0;
             flex: 1;
-            line-height: 1.5;
+            line-height: 1.6;
+            min-width: 0;
         }
 
         code.hljs {
@@ -171,41 +211,63 @@
             padding: 0 !important;
         }
 
-        .ml-2 { margin-left: 0.5rem; }
         .hidden { display: none !important; }
+
+        /* Small phones: tighten spacing and font sizes */
+        @media (max-width: 480px) {
+            header { padding: calc(1rem + var(--safe-top)) 1rem 1rem; }
+            .title-group h1 { font-size: 1.125rem; }
+            .meta { font-size: 0.75rem; gap: 0.4rem 0.9rem; }
+            main, .description { padding-left: 1rem; padding-right: 1rem; }
+            .btn { padding: 0.5rem 0.7rem; font-size: 0.6875rem; }
+            .btn .btn-label { display: none; }
+            pre, .line-numbers { font-size: 0.75rem; padding: 1rem 0.75rem; }
+            .code-wrapper { max-height: 65vh; }
+        }
+
+        /* Tablets */
+        @media (min-width: 481px) and (max-width: 900px) {
+            .header-content { flex-direction: column; }
+            .actions { width: 100%; }
+        }
+
+        /* Fine pointers (mouse) get a tighter, non-touch button size back */
+        @media (hover: hover) and (pointer: fine) {
+            .btn { min-height: 0; padding: 0.5rem 0.85rem; }
+        }
     </style>
 </head>
 <body>
     <header>
         <div class="header-content">
             <div class="title-group">
-                <h1>{{.Upload.Title}}</h1>
+                <h1>{{.Upload.Title}}<span id="lang-badge"></span></h1>
                 <div class="meta">
-                    <span>Author: <b>{{.Upload.Username}}</b></span>
-                    <span>Ticket: <b>{{.Upload.TicketID}}</b></span>
-                    <span>Published: <b>{{if .Upload.ApprovedAt.Valid}}{{.Upload.ApprovedAt.Time.Format "2006-01-02 15:04"}}{{else}}Pending{{end}}</b></span>
-                    <span>Expires: <b>{{if eq .Upload.ExpiresInDays 0}}Never{{else}}{{.Upload.ExpiresInDays}} days{{end}}</b></span>
+                    <span>By <b>{{.Upload.Username}}</b></span>
+                    {{if .Upload.Channel}}<span><b>{{.Upload.Channel}}</b>{{if .Upload.Network}} on <b>{{.Upload.Network}}</b>{{end}}</span>{{end}}
+                    <span>Published <b>{{if .Upload.ApprovedAt.Valid}}{{.Upload.ApprovedAt.Time.Format "2006-01-02 15:04"}}{{else}}pending{{end}}</b></span>
+                    <span>Expires <b>{{if eq .Upload.ExpiresInDays 0}}never{{else}}in {{.Upload.ExpiresInDays}}d{{end}}</b></span>
                 </div>
             </div>
-            <div class="flex items-center gap-2">
-                <button id="toggle-highlight" onclick="toggleHighlight()" class="copy-btn active">Highlight: ON</button>
-                <button id="toggle-lines" onclick="toggleLines()" class="copy-btn active">Lines: ON</button>
-                <button id="copy-btn" onclick="copyContent()" class="copy-btn">Copy Content</button>
+            <div class="actions">
+                <button id="toggle-highlight" onclick="toggleHighlight()" class="btn active"><span class="btn-label">Highlight</span> ON</button>
+                <button id="toggle-lines" onclick="toggleLines()" class="btn active"><span class="btn-label">Lines</span> ON</button>
+                <button id="copy-btn" onclick="copyContent()" class="btn">📋 <span class="btn-label">Copy</span></button>
                 <span class="badge">Approved</span>
             </div>
         </div>
     </header>
 
     {{if .Upload.Description}}
-    <div class="description">
-        {{.Upload.Description}}
-    </div>
+    <div class="description">{{.Upload.Description}}</div>
     {{end}}
 
     <main>
-        <div class="code-wrapper">
-            <div id="line-numbers" class="line-numbers"></div>
-            <pre><code id="code-block">{{.Content}}</code></pre>
+        <div class="code-card">
+            <div class="code-wrapper">
+                <div id="line-numbers" class="line-numbers"></div>
+                <pre><code id="code-block">{{.Content}}</code></pre>
+            </div>
         </div>
     </main>
 
@@ -213,54 +275,52 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 
     <footer>
-        &copy; 2026 botIAask - Secure Paste Service
+        &copy; 2026 botIAask &middot; Secure Paste Service
     </footer>
 
     <script>
         const codeBlock = document.getElementById('code-block');
         const lineNumbers = document.getElementById('line-numbers');
         const rawContent = codeBlock.textContent;
+        const serverPasteKind = {{if .Upload.PasteKind}}"{{.Upload.PasteKind}}"{{else}}""{{end}};
         let isHighlighted = true;
         let isLinesOn = true;
 
         function init() {
-            // Initial highlight
             hljs.highlightElement(codeBlock);
             generateLineNumbers();
-            
-            // Language detection badge
-            const detected = hljs.highlightAuto(rawContent);
-            if (detected.language) {
-                const badge = document.createElement('span');
-                badge.className = 'badge ml-2';
-                badge.style.background = 'rgba(192, 132, 252, 0.1)';
-                badge.style.color = '#c084fc';
-                badge.textContent = detected.language.toUpperCase();
-                document.querySelector('.title-group h1').appendChild(badge);
+
+            // Prefer the server-detected language (Linguist-style) over client guesswork;
+            // fall back to hljs auto-detection when the server didn't record one (e.g. file uploads).
+            let label = serverPasteKind && serverPasteKind.toLowerCase() !== 'plain text' ? serverPasteKind : '';
+            if (!label) {
+                const detected = hljs.highlightAuto(rawContent);
+                if (detected.language) label = detected.language;
+            }
+            if (label) {
+                const badge = document.getElementById('lang-badge');
+                badge.className = 'badge lang';
+                badge.textContent = label.toUpperCase();
             }
         }
 
         function generateLineNumbers() {
             const lines = rawContent.split('\n');
-            // Remove last empty line if it exists
             if (lines[lines.length - 1] === '') lines.pop();
-            
             lineNumbers.innerHTML = lines.map((_, i) => `<div>${i + 1}</div>`).join('');
         }
 
         function toggleHighlight() {
             isHighlighted = !isHighlighted;
             const btn = document.getElementById('toggle-highlight');
-            
             if (isHighlighted) {
-                // Re-detect and highlight to ensure clean state
                 const result = hljs.highlightAuto(rawContent);
                 codeBlock.innerHTML = result.value;
-                btn.innerText = 'Highlight: ON';
+                btn.innerHTML = '<span class="btn-label">Highlight</span> ON';
                 btn.classList.add('active');
             } else {
                 codeBlock.textContent = rawContent;
-                btn.innerText = 'Highlight: OFF';
+                btn.innerHTML = '<span class="btn-label">Highlight</span> OFF';
                 btn.classList.remove('active');
             }
         }
@@ -269,33 +329,27 @@
             isLinesOn = !isLinesOn;
             const btn = document.getElementById('toggle-lines');
             lineNumbers.classList.toggle('hidden', !isLinesOn);
-            
-            if (isLinesOn) {
-                btn.innerText = 'Lines: ON';
-                btn.classList.add('active');
-            } else {
-                btn.innerText = 'Lines: OFF';
-                btn.classList.remove('active');
-            }
+            btn.innerHTML = isLinesOn ? '<span class="btn-label">Lines</span> ON' : '<span class="btn-label">Lines</span> OFF';
+            btn.classList.toggle('active', isLinesOn);
         }
 
         async function copyContent() {
             const btn = document.getElementById('copy-btn');
+            const original = btn.innerHTML;
             try {
                 await navigator.clipboard.writeText(rawContent);
-                const originalText = btn.innerText;
-                btn.innerText = 'Copied!';
+                btn.innerHTML = '<span class="btn-label">Copied</span> ✓';
                 btn.classList.add('success');
-                setTimeout(() => {
-                    btn.innerText = originalText;
-                    btn.classList.remove('success');
-                }, 2000);
             } catch (err) {
                 console.error('Failed to copy: ', err);
+                btn.innerHTML = '⚠️ <span class="btn-label">Copy failed</span>';
             }
+            setTimeout(() => {
+                btn.innerHTML = original;
+                btn.classList.remove('success');
+            }, 2000);
         }
 
-        // Run on load
         init();
     </script>
 </body>

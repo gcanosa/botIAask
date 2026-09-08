@@ -72,10 +72,10 @@ type OMDBConfig struct {
 // Set owner and repo for the project, and optionally a token for higher rate limits.
 // Set token in YAML or GITHUB_TOKEN environment variable.
 type GitHubConfig struct {
-	Owner string `yaml:"owner,omitempty"`           // GitHub username or organization
-	Repo  string `yaml:"repo,omitempty"`            // Repository name
-	Token string `yaml:"token,omitempty"`           // Personal access token (optional, for higher rate limits)
-	Ref   string `yaml:"ref,omitempty"`             // Branch/tag/commit ref to fetch from (default: main or master)
+	Owner string `yaml:"owner,omitempty"` // GitHub username or organization
+	Repo  string `yaml:"repo,omitempty"`  // Repository name
+	Token string `yaml:"token,omitempty"` // Personal access token (optional, for higher rate limits)
+	Ref   string `yaml:"ref,omitempty"`   // Branch/tag/commit ref to fetch from (default: main or master)
 }
 
 const envOMDBKey = "OMDB_API_KEY"
@@ -90,8 +90,8 @@ func (o OMDBConfig) OMDBAPIKeyOrEnv() string {
 
 // UploadsConfig holds limits for user file uploads (!upload flow).
 type UploadsConfig struct {
-	MaxFileMB int    `yaml:"max_file_mb"`             // default 200
-	DBPath    string `yaml:"db_path,omitempty"`       // optional; relative paths resolve from project root (parent of config/); absolute path if multiple instances or odd cwd
+	MaxFileMB int    `yaml:"max_file_mb"`       // default 200
+	DBPath    string `yaml:"db_path,omitempty"` // optional; relative paths resolve from project root (parent of config/); absolute path if multiple instances or odd cwd
 }
 
 // ServicesConfig holds settings for IRC services authentication (SASL).
@@ -136,16 +136,16 @@ type DaemonConfig struct {
 
 // WebConfig holds settings for the web dashboard server.
 type WebConfig struct {
-	Enabled             bool       `yaml:"enabled"`
-	Port                int        `yaml:"port"`
-	Host                string     `yaml:"host"`
-	BaseURL             string     `yaml:"base_url"`
+	Enabled bool   `yaml:"enabled"`
+	Port    int    `yaml:"port"`
+	Host    string `yaml:"host"`
+	BaseURL string `yaml:"base_url"`
 	// ServerLocation is a place name for the dashboard weather panel (Open-Meteo geocoding), e.g. "Barcelona, Spain".
 	ServerLocation string `yaml:"server_location,omitempty"`
 	// WeatherRefreshMinutes is how often the Command Center refetches /api/weather and server-side cache TTL. Default 30.
-	WeatherRefreshMinutes int  `yaml:"weather_refresh_minutes,omitempty"`
-	TrustForwardedFor     bool `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
-	Auth                AuthConfig `yaml:"auth,omitempty"`
+	WeatherRefreshMinutes int        `yaml:"weather_refresh_minutes,omitempty"`
+	TrustForwardedFor     bool       `yaml:"trust_forwarded_for,omitempty"` // if true, client IP uses first X-Forwarded-For (only behind a trusted proxy)
+	Auth                  AuthConfig `yaml:"auth,omitempty"`
 }
 
 // AuthConfig holds authentication settings for the web dashboard.
@@ -269,16 +269,30 @@ func applyOMDBDefaults(cfg *Config) {
 	}
 }
 
-// SaveConfig writes the configuration to the specified YAML file.
+// SaveConfig validates cfg, then atomically writes it to the specified YAML file. Callers
+// (runtime !join/!part, RSS toggle persistence, the web dashboard's ~15 mutation handlers)
+// must surface the returned error rather than ignore it: without this check a runtime
+// mutation (e.g. !join on a channel name already used by another network) could write a
+// config that LoadConfig/ValidateConfig then rejects at the next start, bricking the daemon.
 func SaveConfig(path string, cfg *Config) error {
+	if err := ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("refusing to save invalid config: %w", err)
+	}
+
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	err = os.WriteFile(path, data, 0644)
-	if err != nil {
+	// Write to a temp file in the same directory then rename, so a crash or concurrent
+	// read mid-write never observes a truncated config.yaml.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to replace config file: %w", err)
 	}
 
 	return nil

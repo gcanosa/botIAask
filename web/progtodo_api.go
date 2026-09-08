@@ -108,9 +108,9 @@ func (s *Server) handleProgrammerTodos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Body        string `json:"body"`
-			AdminOnly   bool   `json:"admin_only"`
-			Importance  string `json:"importance"`
+			Body       string `json:"body"`
+			AdminOnly  bool   `json:"admin_only"`
+			Importance string `json:"importance"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -122,7 +122,9 @@ func (s *Server) handleProgrammerTodos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		imp := strings.TrimSpace(body.Importance)
-		id, err := s.progtodoDB.Add(text, author, body.AdminOnly, imp)
+		// WebNetwork: dashboard usernames live in a namespace reserved from IRC nicks, so a
+		// web-created entry can never collide with (or be listed/deleted by) an IRC !todo.
+		id, err := s.progtodoDB.Add(text, author, progtodo.WebNetwork, body.AdminOnly, imp)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

@@ -2,6 +2,7 @@ package irc
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -43,6 +44,29 @@ type ircNetwork struct {
 
 	authenticated bool
 	authMu        sync.RWMutex
+
+	// quit is closed by disconnectNetwork to cancel this network's initial-connect retry
+	// loop (connectWithRetry) while it's still backing off and not yet live/registered in
+	// b.networks — without this, removing/disabling an unreachable network during backoff
+	// doesn't stop the retry, and it can re-register itself once the server comes back
+	// despite being gone from config. quitOnce guards against a double close.
+	quit     chan struct{}
+	quitOnce sync.Once
+}
+
+// requestQuit closes n.quit exactly once (safe to call more than once or concurrently).
+func (n *ircNetwork) requestQuit() {
+	n.quitOnce.Do(func() { close(n.quit) })
+}
+
+// cancelled reports whether requestQuit has been called on this network.
+func (n *ircNetwork) cancelled() bool {
+	select {
+	case <-n.quit:
+		return true
+	default:
+		return false
+	}
 }
 
 // netCfg reads this network's live config entry (fresh on every rehash).
@@ -65,6 +89,21 @@ func (b *ircNetwork) IsAuthenticated() bool {
 	b.authMu.RLock()
 	defer b.authMu.RUnlock()
 	return b.authenticated
+}
+
+// IsAdmin shadows the promoted Bot.IsAdmin: admin on this network means matching the
+// global admin.admins list (bot-wide) OR this network's own admins list (network-only,
+// config.IRCNetworkConfig.Admins).
+func (b *ircNetwork) IsAdmin(fullHostmask string) bool {
+	if b.Bot.IsAdmin(fullHostmask) {
+		return true
+	}
+	for _, admin := range b.netCfg().Admins {
+		if strings.Contains(fullHostmask, admin) {
+			return true
+		}
+	}
+	return false
 }
 
 // adminSessionKey builds the composite loggedInAdmins key so an admin session on one
@@ -158,6 +197,10 @@ func (b *Bot) Start() error {
 	nets := b.getCfg().IRC.Networks
 	var wg sync.WaitGroup
 	for _, netCfg := range nets {
+		if !netCfg.IsEnabled() {
+			log.Printf("irc[%s]: enabled: false, skipping connect", netCfg.Name)
+			continue
+		}
 		netCfg := netCfg
 		wg.Add(1)
 		guard.Go("irc:"+netCfg.Name, func() {
@@ -169,14 +212,43 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// runNetwork connects one network, registers it in b.networks, blocks in its event
-// loop, and unregisters it when the loop exits (Quit() or a fatal disconnect).
+// runNetwork builds one network, registers it as pending while its initial connect retries,
+// promotes it to live in b.networks on success, blocks in its event loop, and unregisters it
+// when the loop exits (Quit() or a fatal disconnect). A removal/disable requested while still
+// pending (disconnectNetwork closing n.quit) cancels the retry instead of leaking a goroutine
+// that would otherwise re-register itself once the server comes back.
 func (b *Bot) runNetwork(netCfg config.IRCNetworkConfig) {
-	n, err := b.connectNetwork(netCfg)
+	n := b.buildNetwork(netCfg)
+
+	b.pendingMu.Lock()
+	b.pending[netCfg.Name] = n
+	b.pendingMu.Unlock()
+
+	err := b.connectWithRetry(n)
+
+	b.pendingMu.Lock()
+	if b.pending[netCfg.Name] == n {
+		delete(b.pending, netCfg.Name)
+	}
+	b.pendingMu.Unlock()
+
 	if err != nil {
-		log.Printf("irc[%s]: connect failed permanently: %v", netCfg.Name, err)
+		if err == errNetworkCancelled {
+			log.Printf("irc[%s]: connect cancelled (network removed/disabled while retrying)", netCfg.Name)
+		} else {
+			log.Printf("irc[%s]: connect failed permanently: %v", netCfg.Name, err)
+		}
 		return
 	}
+
+	// A cancellation can race a just-completed connect (disconnectNetwork's pending lookup
+	// and this goroutine's delete above can interleave); check once more before going live.
+	if n.cancelled() {
+		n.conn.QuitMessage = n.FormatQuitMessage("")
+		n.conn.Quit()
+		return
+	}
+
 	b.networksMu.Lock()
 	b.networks[netCfg.Name] = n
 	b.networksMu.Unlock()
@@ -184,16 +256,55 @@ func (b *Bot) runNetwork(netCfg config.IRCNetworkConfig) {
 	n.conn.Loop() // blocks; returns when Quit()/a fatal error tears the connection down
 
 	b.networksMu.Lock()
-	delete(b.networks, netCfg.Name)
+	// Compare-and-delete: an endpoint-change rehash (ApplyLiveConfig) may have already
+	// disconnected this instance and spawned its replacement under the same name before
+	// this goroutine's Loop() unwound. Only remove the entry if it's still this instance,
+	// so a stale goroutine can never erase a live replacement's registration.
+	if b.networks[netCfg.Name] == n {
+		delete(b.networks, netCfg.Name)
+	}
 	b.networksMu.Unlock()
 }
 
-// connectNetwork builds one ircNetwork, registers its event callbacks, and connects
-// with capped exponential backoff (same retry policy the bot has always used for its
-// single connection). Callback bodies are the same as before multi-network support,
-// scoped to this network via the *ircNetwork receiver.
-func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error) {
-	n := &ircNetwork{Bot: b, name: netCfg.Name, channelMembers: make(map[string]map[string]struct{})}
+// errNetworkCancelled is returned by connectWithRetry when n.quit is closed mid-backoff.
+var errNetworkCancelled = errors.New("network connect cancelled")
+
+// connectWithRetry retries n.conn.Connect() with capped exponential backoff (same retry
+// policy the bot has always used for its single connection), stopping early if n.quit is
+// closed. ircevent only enters its own reconnect path after Loop() runs; a failed first
+// Connect() returns here and never reaches Loop(), so this is a daemon — retry forever
+// rather than give up and leave idle.
+func (b *Bot) connectWithRetry(n *ircNetwork) error {
+	backoff := 2 * time.Second
+	const maxBackoff = 2 * time.Minute
+	for attempt := 1; ; attempt++ {
+		if n.cancelled() {
+			return errNetworkCancelled
+		}
+		if err := n.conn.Connect(); err == nil {
+			return nil
+		} else {
+			log.Printf("irc[%s]: connect attempt %d failed (retrying in %s): %v", n.name, attempt, backoff, err)
+		}
+		select {
+		case <-time.After(backoff):
+		case <-n.quit:
+			return errNetworkCancelled
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
+// buildNetwork constructs one ircNetwork and registers its event callbacks, without
+// connecting (see connectWithRetry). Callback bodies are the same as before multi-network
+// support, scoped to this network via the *ircNetwork receiver.
+func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
+	n := &ircNetwork{Bot: b, name: netCfg.Name, channelMembers: make(map[string]map[string]struct{}), quit: make(chan struct{})}
 
 	serverAddr := fmt.Sprintf("%s:%d", netCfg.Server, netCfg.Port)
 	n.conn = &ircevent.Connection{
@@ -284,7 +395,7 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 				actionMsg := ctcpContent[7:]
 				logger.LogChannelEvent(n.name, target, logger.EventAction, sender, actionMsg, "")
 				if b.tracker != nil {
-					b.tracker.LogAction(sender)
+					b.tracker.LogAction(n.name, sender)
 				}
 				ch, reply := seenTargets(target, sender)
 				n.recordSeen(sender, ch, "action", actionMsg)
@@ -295,7 +406,7 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 		} else {
 			logger.LogChannelEvent(n.name, target, logger.EventMessage, sender, message, "")
 			if b.tracker != nil {
-				b.tracker.LogMessage(sender)
+				b.tracker.LogMessage(n.name, sender)
 			}
 			ch, reply := seenTargets(target, sender)
 			n.recordSeen(sender, ch, "message", message)
@@ -330,7 +441,7 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 		n.membersMu.Unlock()
 
 		if b.tracker != nil {
-			b.tracker.LogJoin()
+			b.tracker.LogJoin(n.name)
 			n.updateTrackerAdmins()
 		}
 
@@ -372,7 +483,7 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 		n.membersMu.Unlock()
 
 		if b.tracker != nil {
-			b.tracker.LogPart()
+			b.tracker.LogPart(n.name)
 			n.updateTrackerAdmins()
 		}
 
@@ -422,7 +533,7 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 		n.membersMu.Unlock()
 
 		if b.tracker != nil {
-			b.tracker.LogPart()
+			b.tracker.LogPart(n.name)
 			n.updateTrackerAdmins()
 		}
 
@@ -465,30 +576,18 @@ func (b *Bot) connectNetwork(netCfg config.IRCNetworkConfig) (*ircNetwork, error
 		n.statsMu.Lock()
 		n.connected = false
 		n.statsMu.Unlock()
+		// Also clear authenticated: left true across a disconnect, it made
+		// Bot.IsAuthenticated() (an OR across networks) report stale SASL success for a
+		// network that's no longer even connected.
+		n.authMu.Lock()
+		n.authenticated = false
+		n.authMu.Unlock()
 		if b.getCfg().Bot.Debug {
 			log.Printf("irc[%s]: disconnected from IRC server", n.name)
 		}
 	})
 
-	// Initial connect: ircevent only enters its reconnect path after Loop() runs; a failed
-	// first Connect() returns here and never reaches Loop(), so this is a daemon — retry
-	// forever with capped exponential backoff rather than giving up and leaving idle.
-	backoff := 2 * time.Second
-	const maxBackoff = 2 * time.Minute
-	for attempt := 1; ; attempt++ {
-		if err := n.conn.Connect(); err == nil {
-			return n, nil
-		} else {
-			log.Printf("irc[%s]: connect attempt %d failed (retrying in %s): %v", n.name, attempt, backoff, err)
-		}
-		time.Sleep(backoff)
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
-	}
+	return n
 }
 
 // ApplyLiveConfig swaps in a new config, then reconciles the live network set against
@@ -500,6 +599,13 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 	oldCfg := b.cfg.Load()
 	b.cfg.Store(newCfg)
 
+	// Re-prime tellPending for the new network set: loadPendingTells only ever ran once
+	// from Start(), so a network added at runtime (rather than present at process start)
+	// started with an empty pending-tell cache and silently never delivered its
+	// already-queued DB tells. Safe to call again — it only adds keys that DueReminders/
+	// TakeTells' DB state still says are pending, never removes.
+	b.loadPendingTells()
+
 	b.rateLimiterMu.Lock()
 	if newCfg.Bot.RateLimiting != nil && newCfg.Bot.RateLimiting.Enabled {
 		w := time.Duration(newCfg.Bot.RateLimiting.Window) * time.Second
@@ -509,8 +615,8 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 	}
 	b.rateLimiterMu.Unlock()
 
-	oldNames := config.IRCNetworkNames(oldCfg.IRC.Networks)
-	newNames := config.IRCNetworkNames(newCfg.IRC.Networks)
+	oldNames := config.IRCNetworkNames(enabledNetworks(oldCfg.IRC.Networks))
+	newNames := config.IRCNetworkNames(enabledNetworks(newCfg.IRC.Networks))
 
 	for _, name := range channelListDifference(oldNames, newNames) { // present in old, not new: removed
 		b.disconnectNetwork(name)
@@ -529,7 +635,7 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 			continue
 		}
 		if oldN.Server != newN.Server || oldN.Port != newN.Port || oldN.Nickname != newN.Nickname ||
-			oldN.UseSSL != newN.UseSSL || oldN.Services != newN.Services {
+			oldN.UseSSL != newN.UseSSL || oldN.TLSSkipVerify != newN.TLSSkipVerify || oldN.Services != newN.Services {
 			b.disconnectNetwork(name)
 			guard.Go("irc:"+name, func() { b.runNetwork(newN) })
 			continue // reconnect already re-joins newN.Channels on connect; skip the hot diff below
@@ -558,13 +664,42 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 func (b *Bot) disconnectNetwork(name string) {
 	b.networksMu.Lock()
 	net := b.networks[name]
-	delete(b.networks, name)
-	b.networksMu.Unlock()
-	if net == nil {
-		return
+	if net != nil {
+		delete(b.networks, name)
 	}
-	net.conn.QuitMessage = net.FormatQuitMessage("")
-	net.conn.Quit() // the goroutine blocked in runNetwork's conn.Loop() returns on its own
+	b.networksMu.Unlock()
+
+	// Also check pending: the network may still be backing off its initial connect and
+	// never have reached b.networks. Without this, removing/disabling an unreachable
+	// network is a no-op — its retry loop keeps running and re-registers itself once the
+	// server comes back despite no longer being in config.
+	b.pendingMu.Lock()
+	pend := b.pending[name]
+	if pend != nil {
+		delete(b.pending, name)
+	}
+	b.pendingMu.Unlock()
+
+	if net != nil {
+		net.conn.QuitMessage = net.FormatQuitMessage("")
+		net.conn.Quit() // the goroutine blocked in runNetwork's conn.Loop() returns on its own
+	}
+	if pend != nil && pend != net {
+		pend.requestQuit() // cancels connectWithRetry; runNetwork logs and returns
+	}
+}
+
+// enabledNetworks filters out networks with enabled: false, for the add/remove diff in
+// ApplyLiveConfig (disabling a network is treated the same as removing it; re-enabling,
+// the same as adding it back).
+func enabledNetworks(nets []config.IRCNetworkConfig) []config.IRCNetworkConfig {
+	out := make([]config.IRCNetworkConfig, 0, len(nets))
+	for _, n := range nets {
+		if n.IsEnabled() {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func stringsIntersect(a, b []string) []string {

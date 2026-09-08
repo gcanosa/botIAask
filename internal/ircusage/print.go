@@ -56,6 +56,7 @@ var adminLines = []line{
 	{cmd: "!join #channel [key]", desc: "Join a channel; optional +k key (saved in config)"},
 	{cmd: "!part [#channel]", desc: "Leave a channel (updates config when applicable)"},
 	{cmd: "!ignore <nick>", desc: "Ignore a user"},
+	{cmd: "!unignore <nick>", desc: "Stop ignoring a user"},
 	{cmd: "!say #chan <msg>", desc: "Send a message to a channel"},
 	{cmd: "!news on|off", desc: "Toggle news for the current channel (session only)"},
 	{cmd: "!news start|stop", desc: "Turn global RSS-to-IRC announcements on/off (saves config)"},

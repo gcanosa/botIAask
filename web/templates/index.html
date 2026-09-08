@@ -723,8 +723,12 @@
                 </div>
                 <div id="irc-config-admins-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">IRC admin hostmasks</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span> under <span class="mono">admin.admins</span>. Changes are written to disk and applied to the running bot (no full rehash NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span>: <strong>global</strong> under <span class="mono">admin.admins</span> (admin on every network), or under a specific network's <span class="mono">admins</span> (admin on that network only). Changes are written to disk and applied to the running bot via a full config rehash (logged-in IRC admins get a NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Scope</label>
+                            <select id="irc-config-admins-network" class="btn btn-ghost" style="min-width: 10rem; margin: 0;" onchange="ircConfigAdminsNetworkChange()" aria-label="Admin list scope"></select>
+                        </div>
                         <div style="flex: 1; min-width: 12rem;">
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Hostmask fragment</label>
                             <input type="text" id="irc-config-admin-hostmask" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="~nick@user/host" autocomplete="off" aria-label="IRC admin hostmask">
@@ -763,19 +767,45 @@
                         <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
                             <input type="checkbox" id="irc-net-ssl" checked> SSL
                         </label>
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;" title="Skip TLS certificate verification (self-signed certs, bare-IP servers). Only takes effect with SSL on.">
+                            <input type="checkbox" id="irc-net-tls-skip-verify"> Skip cert verify
+                        </label>
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
+                            <input type="checkbox" id="irc-net-enabled" checked> Enabled
+                        </label>
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Nickname</label>
                             <input type="text" id="irc-net-nick" class="btn btn-ghost" style="min-width: 8rem; text-align: left; cursor: text; margin: 0;" placeholder="Nickname" autocomplete="off" aria-label="Nickname">
                         </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Quit message</label>
+                            <input type="text" id="irc-net-quit-message" class="btn btn-ghost" style="min-width: 12rem; text-align: left; cursor: text; margin: 0;" placeholder="(default: name/version/uptime)" autocomplete="off" aria-label="Quit message">
+                        </div>
                         <button type="button" onclick="ircNetworkAdd()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add network</button>
+                    </div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem; padding-top: 0.75rem; border-top: 1px dashed var(--glass-border);">
+                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
+                            <input type="checkbox" id="irc-net-sasl-enabled"> SASL
+                        </label>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL username</label>
+                            <input type="text" id="irc-net-sasl-username" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="registered_nickname" autocomplete="off" aria-label="SASL username">
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL password</label>
+                            <input type="password" id="irc-net-sasl-password" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="(leave blank to keep current)" autocomplete="new-password" aria-label="SASL password">
+                        </div>
+                        <span class="mono" style="font-size: 0.7rem; color: var(--text-muted);">Password is write-only — never shown back. Leave blank on edit to keep the stored one.</span>
                     </div>
                     <div class="data-table-wrap" style="overflow-x: auto;">
                         <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
                                     <th style="text-align: left; padding: 0.5rem 0.75rem;">Name</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">Enabled</th>
                                     <th style="text-align: left; padding: 0.5rem 0.75rem;">Server</th>
                                     <th style="text-align: center; padding: 0.5rem 0.75rem;">SSL</th>
+                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">SASL</th>
                                     <th style="text-align: left; padding: 0.5rem 0.75rem;">Nickname</th>
                                     <th style="text-align: center; padding: 0.5rem 0.75rem;">Status</th>
                                     <th style="text-align: center; padding: 0.5rem 0.75rem;">Channels</th>
