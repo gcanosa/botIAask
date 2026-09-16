@@ -7,6 +7,7 @@
 ### 🤖 AI & IRC Interaction
 - **AI-Powered Responses**: Ask questions directly to an AI model using `!ask`.
 - **RSS & news**: Configurable feeds; optional IRC announcements and per-channel toggles.
+- **GitHub Activity Tracking**: Announce pushes, pull requests, and releases from tracked repos to any number of networks/channels, including private repos via an encrypted-at-rest access token. Fully configured from the web dashboard.
 - **Rate Limiting**: Intelligent command throttling to prevent spam.
 - **Log Rotation**: Automatic multi-day log management for all channels.
 
@@ -146,6 +147,7 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 - **Market View**: Live financial data panel for crypto and currency rates.
 - **System Stats**: Detailed charts for AI requests and system performance.
 - **Bookmarks**: Searchable database of links shared across channels.
+- **GitHub Tracker**: Add/edit/remove tracked repos, set per-repo target channels and event-type filters (push/PR/release), and enter a Personal Access Token for private repos (stored encrypted, never shown again).
 
 ### Web Dashboard Security
 
