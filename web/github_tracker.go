@@ -2,12 +2,37 @@ package web
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
 	"botIAask/config"
 	"botIAask/github"
 )
+
+// joinAnnounceChannels best-effort live-joins each "network:#chan" target for the current
+// process only (not persisted to config), so a freshly tracked repo's channel starts
+// receiving announcements immediately instead of silently going nowhere until the admin
+// separately configures autojoin or runs !join. Mirrors the same session-join call the web
+// dashboard's IRC channel UI already uses (irc.Bot.JoinChannelSession). A channel that's
+// already autojoined, already session-joined, or on an unreachable network just returns a
+// (logged, non-fatal) error here — the repo save itself must not fail because of it.
+func (s *Server) joinAnnounceChannels(channels []string) {
+	if s.bot == nil {
+		return
+	}
+	defaultNet := config.DefaultRSSNetwork(s.getConfig().IRC.Networks)
+	for _, raw := range channels {
+		network, ch := config.SplitNetworkChannel(raw, defaultNet)
+		ch = strings.TrimSpace(ch)
+		if network == "" || ch == "" {
+			continue
+		}
+		if err := s.bot.JoinChannelSession(network, config.IRChannel{Name: ch}); err != nil {
+			log.Printf("github tracker: join %s on %s: %v", ch, network, err)
+		}
+	}
+}
 
 // handleGitHubTrackerSettings: GET returns enabled/interval + per-repo poll status; POST
 // updates enabled/interval. Mirrors handleRSSSettings.
@@ -189,6 +214,7 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.joinAnnounceChannels(req.Channels)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		return
@@ -304,6 +330,9 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 	if err := s.runFullRehashFromWeb("web (github repos edit)"); err != nil {
 		http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if req.Channels != nil {
+		s.joinAnnounceChannels(*req.Channels)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
