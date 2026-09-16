@@ -13,21 +13,22 @@ const DefaultConfigPath = "config/config.yaml"
 
 // Config represents the application configuration structure.
 type Config struct {
-	IRC         IRCConfig       `yaml:"irc"`
-	AI          AIConfig        `yaml:"ai"`
-	Bot         BotConfig       `yaml:"bot"`
-	Admin       AdminConfig     `yaml:"admin"`
-	Web         WebConfig       `yaml:"web,omitempty"`
-	Daemon      DaemonConfig    `yaml:"daemon,omitempty"`
-	RateLimiter RateLimitConfig `yaml:"rateLimiter,omitempty"`
-	Logger      LoggerConfig    `yaml:"logger,omitempty"`
-	RSS         RSSConfig       `yaml:"rss,omitempty"`
-	Stats       StatsConfig     `yaml:"stats,omitempty"`
-	Uploads     UploadsConfig   `yaml:"uploads,omitempty"`
-	Flight      FlightConfig    `yaml:"flight,omitempty"`
-	OMDB        OMDBConfig      `yaml:"omdb,omitempty"`
-	GitHub      GitHubConfig    `yaml:"github,omitempty"`
-	Backup      BackupConfig    `yaml:"backup,omitempty"`
+	IRC           IRCConfig           `yaml:"irc"`
+	AI            AIConfig            `yaml:"ai"`
+	Bot           BotConfig           `yaml:"bot"`
+	Admin         AdminConfig         `yaml:"admin"`
+	Web           WebConfig           `yaml:"web,omitempty"`
+	Daemon        DaemonConfig        `yaml:"daemon,omitempty"`
+	RateLimiter   RateLimitConfig     `yaml:"rateLimiter,omitempty"`
+	Logger        LoggerConfig        `yaml:"logger,omitempty"`
+	RSS           RSSConfig           `yaml:"rss,omitempty"`
+	Stats         StatsConfig         `yaml:"stats,omitempty"`
+	Uploads       UploadsConfig       `yaml:"uploads,omitempty"`
+	Flight        FlightConfig        `yaml:"flight,omitempty"`
+	OMDB          OMDBConfig          `yaml:"omdb,omitempty"`
+	GitHub        GitHubConfig        `yaml:"github,omitempty"`
+	GitHubTracker GitHubTrackerConfig `yaml:"github_tracker,omitempty"`
+	Backup        BackupConfig        `yaml:"backup,omitempty"`
 }
 
 // BackupConfig controls scheduled hot backups of the SQLite databases in data/.
@@ -217,6 +218,7 @@ func LoadConfig(path string) (*Config, error) {
 	applyWebDefaults(&cfg)
 	applyFlightDefaults(&cfg)
 	applyOMDBDefaults(&cfg)
+	applyGitHubTrackerDefaults(&cfg)
 
 	if err := ValidateConfig(&cfg); err != nil {
 		return nil, err
@@ -266,6 +268,12 @@ const defaultOMDBBase = "https://www.omdbapi.com/"
 func applyOMDBDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.OMDB.BaseURL) == "" {
 		cfg.OMDB.BaseURL = defaultOMDBBase
+	}
+}
+
+func applyGitHubTrackerDefaults(cfg *Config) {
+	if cfg.GitHubTracker.IntervalMinutes <= 0 {
+		cfg.GitHubTracker.IntervalMinutes = 10
 	}
 }
 

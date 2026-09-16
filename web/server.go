@@ -30,6 +30,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/github"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
@@ -55,6 +56,7 @@ type Server struct {
 	uploadsDB        *uploads.Database
 	cryptoDB         *crypto.Database
 	progtodoDB       *progtodo.Database
+	githubFetcher    *github.Fetcher
 	templates        *template.Template
 	forexCache       map[string]float64
 	forexUpdate      time.Time
@@ -132,7 +134,7 @@ func (s *Server) SetConfig(cfg *config.Config) {
 }
 
 // NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, aiClient *ai.Client, rehashExt func(source string, fromWeb bool) error) *Server {
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, githubFetcher *github.Fetcher, aiClient *ai.Client, rehashExt func(source string, fromWeb bool) error) *Server {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
@@ -157,6 +159,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		uploadsDB:        uploadsDB,
 		cryptoDB:         cryptoDB,
 		progtodoDB:       progtodoDB,
+		githubFetcher:    githubFetcher,
 		aiClient:         aiClient,
 		templates:        tmpl,
 		rehashExt:        rehashExt,
@@ -181,6 +184,9 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
 	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
+	mux.HandleFunc("/api/github/settings", s.handleGitHubTrackerSettings)
+	mux.HandleFunc("/api/github/repos", s.handleGitHubTrackerRepos)
+	mux.HandleFunc("/api/github/repos/edit", s.handleGitHubTrackerRepoEdit)
 	mux.HandleFunc("/api/rehash", s.handleRehash)
 	mux.HandleFunc("/api/irc/channels/reveal", s.handleIRCChannelReveal)
 	mux.HandleFunc("/api/irc/channels/announce", s.handleIRCChannelAnnounce)

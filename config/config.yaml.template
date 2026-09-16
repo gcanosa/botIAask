@@ -103,6 +103,18 @@ rss:
     # is.gd, tinyurl, v.gd, clck.ru, da.gd
     # Defaults to is.gd with automatic fallback chain if preferred service fails.
     url_shortener: is.gd
+# github_tracker: announces pushes/PRs/releases from tracked GitHub repos to IRC. Distinct
+# from the unrelated top-level "github:" section (dashboard changelog widget, single repo).
+github_tracker:
+    enabled: false
+    interval_minutes: 10
+    repos:
+        # - owner: anthropics
+        #   repo: claude-code
+        #   channels: ['libera:#dev']       # same "network:#channel" convention as rss.channels
+        #   event_types: []                 # subset of push/pull_request/release; empty = all
+        #   # token_encrypted is set by the web dashboard (AES-256-GCM, key auto-generated
+        #   # at data/github_secret.key on first run) — never hand-edit a plaintext token here.
 stats:
     enabled: true
     interval: 60

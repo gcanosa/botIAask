@@ -413,6 +413,7 @@ function showPanel(panelId) {
     }
     if (panelId === 'todos') fetchProgrammerTodos();
     if (panelId === 'changelog') loadChangelog();
+    if (panelId === 'github') fetchGitHubRepos();
 
     closeSidebarIfMobile();
 }
@@ -660,6 +661,9 @@ function updateAdminView(isAdmin) {
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
         document.getElementById('bookmarks-admin-header')?.classList.remove('hidden');
+        document.getElementById('admin-github-settings-btn')?.classList.remove('hidden');
+        document.getElementById('github-admin-header')?.classList.remove('hidden');
+        document.getElementById('github-admin-add')?.classList.remove('hidden');
         if (window.location.hash === '#admin') {
             fetchIRCNetworks();
             fetchIRCConfigAdmins();
@@ -683,6 +687,10 @@ function updateAdminView(isAdmin) {
         document.getElementById('news-admin-header')?.classList.add('hidden');
         document.getElementById('bookmarks-admin-header')?.classList.add('hidden');
         document.getElementById('rss-admin-settings')?.classList.add('hidden');
+        document.getElementById('admin-github-settings-btn')?.classList.add('hidden');
+        document.getElementById('github-admin-header')?.classList.add('hidden');
+        document.getElementById('github-admin-add')?.classList.add('hidden');
+        document.getElementById('github-admin-settings')?.classList.add('hidden');
     }
 }
 
@@ -4050,3 +4058,197 @@ window.saveLoggerSettings = saveLoggerSettings;
 window.saveAISettings = saveAISettings;
 window.loadChangelog = loadChangelog;
 window.debounceChangelogSearch = debounceChangelogSearch;
+
+// GitHub repo tracker
+function githubEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+async function toggleGitHubSettings() {
+    const card = document.getElementById('github-admin-settings');
+    const isHidden = card.classList.contains('hidden');
+    if (isHidden) {
+        card.classList.remove('hidden');
+        await fetchGitHubSettings();
+    } else {
+        card.classList.add('hidden');
+    }
+}
+
+async function fetchGitHubSettings() {
+    try {
+        const res = await fetch('/api/github/settings');
+        const data = await res.json();
+        const enabledEl = document.getElementById('github-enabled');
+        if (enabledEl) enabledEl.checked = !!data.enabled;
+        const intervalEl = document.getElementById('github-interval');
+        if (intervalEl) intervalEl.value = data.interval_minutes;
+    } catch (e) { console.error("Failed to fetch GitHub tracker settings", e); }
+}
+
+async function saveGitHubSettings() {
+    const status = document.getElementById('github-settings-status');
+    status.textContent = 'Saving...';
+    status.style.color = 'var(--text-muted)';
+
+    const enabled = document.getElementById('github-enabled').checked;
+    const interval = parseInt(document.getElementById('github-interval').value);
+
+    try {
+        const res = await fetch('/api/github/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled, interval_minutes: interval })
+        });
+        if (res.ok) {
+            status.textContent = '✓ Settings saved and applied';
+            status.style.color = 'var(--success)';
+            setTimeout(() => { status.textContent = ''; }, 3000);
+        } else {
+            status.textContent = '✕ Save failed: ' + (await res.text());
+            status.style.color = 'var(--error)';
+        }
+    } catch (e) {
+        status.textContent = '✕ Error: ' + e.message;
+        status.style.color = 'var(--error)';
+    }
+}
+
+async function fetchGitHubRepos() {
+    try {
+        const res = await fetch('/api/github/repos');
+        const data = await res.json();
+        renderGitHubRepoList(data.repos || []);
+    } catch (e) { console.error("Failed to fetch GitHub repos", e); }
+}
+
+function renderGitHubRepoList(repos) {
+    const tbody = document.getElementById('github-repo-list');
+    if (!tbody) return;
+    if (!repos.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="padding: 1rem; color: var(--text-muted);">No repos tracked yet.</td></tr>';
+        return;
+    }
+    const isAdmin = !document.getElementById('admin-github-settings-btn')?.classList.contains('hidden');
+    tbody.innerHTML = repos.map((r) => {
+        const fullName = `${r.owner}/${r.repo}`;
+        const statusLed = r.ok
+            ? '<span title="ok" style="color: var(--success);">●</span>'
+            : `<span title="${githubEsc(r.error || 'not yet polled')}" style="color: var(--error);">●</span>`;
+        const events = (r.event_types && r.event_types.length) ? r.event_types.join(', ') : 'all';
+        const actions = isAdmin ? `
+            <button class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" onclick="editGitHubRepoPrompt('${githubEsc(r.owner)}','${githubEsc(r.repo)}')">Edit</button>
+            <button class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; color: var(--error);" onclick="deleteGitHubRepo('${githubEsc(r.owner)}','${githubEsc(r.repo)}')">Remove</button>
+        ` : '';
+        return `<tr>
+            <td style="padding: 1rem;">
+                <div style="font-weight: 600;">${githubEsc(fullName)}</div>
+                ${r.cached_description ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${githubEsc(r.cached_description)}</div>` : ''}
+            </td>
+            <td style="padding: 1rem; font-size: 0.8rem;">${githubEsc((r.channels || []).join(', ') || '—')}</td>
+            <td style="padding: 1rem; font-size: 0.8rem;">${githubEsc(events)}</td>
+            <td style="padding: 1rem;">${statusLed}</td>
+            <td style="padding: 1rem; font-size: 0.8rem;">${r.has_token ? 'private (PAT set)' : 'public'}</td>
+            <td id="github-admin-header" style="padding: 1rem; text-align: right; white-space: nowrap;" class="${isAdmin ? '' : 'hidden'}">${actions}</td>
+        </tr>`;
+    }).join('');
+}
+
+function githubSelectedEventTypes(prefix) {
+    const types = [];
+    if (document.getElementById(prefix + '-event-push')?.checked) types.push('push');
+    if (document.getElementById(prefix + '-event-pr')?.checked) types.push('pull_request');
+    if (document.getElementById(prefix + '-event-release')?.checked) types.push('release');
+    // All three checked (the default) means "no filter" server-side; send [] rather than
+    // the full list so a later addition to the event-type set doesn't require re-editing
+    // every existing repo to pick up the new type.
+    return types.length === 3 ? [] : types;
+}
+
+async function addGitHubRepo() {
+    const status = document.getElementById('github-add-status');
+    const owner = document.getElementById('github-new-owner').value.trim();
+    const repo = document.getElementById('github-new-repo').value.trim();
+    const channels = document.getElementById('github-new-channels').value.split(',').map(c => c.trim()).filter(c => c !== '');
+    const token = document.getElementById('github-new-token').value;
+    const event_types = githubSelectedEventTypes('github-new');
+
+    if (!owner || !repo) {
+        status.textContent = '✕ Owner and repo are required';
+        status.style.color = 'var(--error)';
+        return;
+    }
+
+    status.textContent = 'Adding...';
+    status.style.color = 'var(--text-muted)';
+    try {
+        const res = await fetch('/api/github/repos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ owner, repo, channels, event_types, token })
+        });
+        if (res.ok) {
+            status.textContent = '✓ Repo added';
+            status.style.color = 'var(--success)';
+            setTimeout(() => { status.textContent = ''; }, 3000);
+            document.getElementById('github-new-owner').value = '';
+            document.getElementById('github-new-repo').value = '';
+            document.getElementById('github-new-channels').value = '';
+            document.getElementById('github-new-token').value = '';
+            fetchGitHubRepos();
+        } else {
+            status.textContent = '✕ ' + (await res.text());
+            status.style.color = 'var(--error)';
+        }
+    } catch (e) {
+        status.textContent = '✕ Error: ' + e.message;
+        status.style.color = 'var(--error)';
+    }
+}
+
+async function deleteGitHubRepo(owner, repo) {
+    if (!confirm(`Stop tracking ${owner}/${repo}?`)) return;
+    try {
+        const res = await fetch('/api/github/repos?' + new URLSearchParams({ owner, repo }), { method: 'DELETE' });
+        if (res.ok) fetchGitHubRepos();
+        else alert('Failed to remove: ' + (await res.text()));
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+// ponytail: a prompt()-based edit flow (channels/event-types/token) rather than an inline
+// edit form — the add form above already covers the common "set it up once" case, and this
+// keeps the diff small. Upgrade to an inline edit row if repo edits turn out to be frequent.
+async function editGitHubRepoPrompt(owner, repo) {
+    const channels = prompt(`Channels for ${owner}/${repo} (comma-separated network:#channel), blank = no change:`);
+    if (channels === null) return;
+    const token = prompt('New Personal Access Token (blank = keep existing, "-" = clear):');
+    if (token === null) return;
+
+    const body = { owner, repo };
+    if (channels.trim() !== '') {
+        body.channels = channels.split(',').map(c => c.trim()).filter(c => c !== '');
+    }
+    if (token.trim() !== '') {
+        body.token = token.trim() === '-' ? '' : token.trim();
+    }
+
+    try {
+        const res = await fetch('/api/github/repos/edit', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (res.ok) fetchGitHubRepos();
+        else alert('Failed to update: ' + (await res.text()));
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+window.toggleGitHubSettings = toggleGitHubSettings;
+window.saveGitHubSettings = saveGitHubSettings;
+window.addGitHubRepo = addGitHubRepo;
+window.deleteGitHubRepo = deleteGitHubRepo;
+window.editGitHubRepoPrompt = editGitHubRepoPrompt;
