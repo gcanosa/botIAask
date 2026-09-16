@@ -76,6 +76,12 @@
                     </a>
                 </div>
                 <div class="nav-item">
+                    <a href="#github" class="nav-link" onclick="showPanel('github')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+                        GitHub
+                    </a>
+                </div>
+                <div class="nav-item">
                     <a href="#pastes" class="nav-link" onclick="showPanel('pastes')">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
                         Pastes
@@ -636,6 +642,94 @@
                                 </tr>
                             </thead>
                             <tbody id="news-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- GitHub Tracker Panel -->
+            <section id="panel-github" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">GitHub Activity</h1>
+                    <p class="section-subtitle">Tracked repos announce pushes, pull requests, and releases to IRC.</p>
+                </div>
+
+                <!-- Admin Settings Card -->
+                <div id="github-admin-settings" class="card hidden animate-fade" style="margin-bottom: 2rem; border: 1px solid var(--primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 class="card-title" style="margin: 0; color: var(--primary);">Tracker Configuration</h3>
+                        <button onclick="toggleGitHubSettings()" class="btn btn-ghost" style="padding: 0.25rem;">✕</button>
+                    </div>
+                    <div class="grid grid-2" style="margin-bottom: 1.5rem;">
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7; display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                <input type="checkbox" id="github-enabled" style="width: auto; margin: 0;">
+                                Enabled
+                            </label>
+                        </div>
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Poll Interval (Minutes)</label>
+                            <input type="number" id="github-interval" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button onclick="saveGitHubSettings()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Apply Changes</button>
+                        <div id="github-settings-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Admin Add Repo Card -->
+                <div id="github-admin-add" class="card hidden" style="margin-bottom: 2rem;">
+                    <h3 class="card-title" style="margin-bottom: 1rem;">Track a Repo</h3>
+                    <div class="grid grid-2" style="margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Owner</label>
+                            <input type="text" id="github-new-owner" placeholder="anthropics" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Repo</label>
+                            <input type="text" id="github-new-repo" placeholder="claude-code" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Channels (comma-separated <span class="mono">network:#channel</span> entries)</label>
+                        <input type="text" id="github-new-channels" placeholder="libera:#dev, oftc:#announce" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7; display: block; margin-bottom: 0.5rem;">Announce</label>
+                        <label style="margin-right: 1rem; cursor: pointer;"><input type="checkbox" id="github-new-event-push" checked style="width: auto;"> Pushes</label>
+                        <label style="margin-right: 1rem; cursor: pointer;"><input type="checkbox" id="github-new-event-pr" checked style="width: auto;"> Pull Requests</label>
+                        <label style="cursor: pointer;"><input type="checkbox" id="github-new-event-release" checked style="width: auto;"> Releases</label>
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Personal Access Token (optional, for private repos)</label>
+                        <input type="password" id="github-new-token" placeholder="leave blank for a public repo" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        <div style="font-size: 0.65rem; opacity: 0.6; margin-top: 0.25rem;">A fine-grained, read-only, single-repo token is recommended. Stored encrypted; never shown again.</div>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button onclick="addGitHubRepo()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Add Repo</button>
+                        <div id="github-add-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+                        <h3 class="card-title" style="margin: 0;">Tracked Repos</h3>
+                        <button id="admin-github-settings-btn" onclick="toggleGitHubSettings()" class="btn btn-ghost hidden" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">Settings</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="text-align: left; padding: 1rem;">REPO</th>
+                                    <th style="text-align: left; padding: 1rem;">CHANNELS</th>
+                                    <th style="text-align: left; padding: 1rem;">EVENTS</th>
+                                    <th style="text-align: left; padding: 1rem;">STATUS</th>
+                                    <th style="text-align: left; padding: 1rem;">TOKEN</th>
+                                    <th id="github-admin-header" style="text-align: right; padding: 1rem;" class="hidden">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="github-repo-list"></tbody>
                         </table>
                     </div>
                 </div>

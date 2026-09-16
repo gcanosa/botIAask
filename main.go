@@ -18,6 +18,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/github"
 	"botIAask/internal/guard"
 	"botIAask/internal/ircusage"
 	"botIAask/irc"
@@ -338,19 +339,35 @@ func main() {
 		guard.Go("crypto fetcher", cryptoFetcher.Start)
 	}
 
+	// Initialize GitHub Tracker (repo activity -> IRC announcer)
+	ghCryptor, err := github.NewCryptor("data/github_secret.key")
+	if err != nil {
+		log.Fatalf("Failed to initialize GitHub tracker crypto: %v", err)
+	}
+	githubDB, err := github.NewDatabase("data/github_seen.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize GitHub tracker database: %v", err)
+	}
+	defer githubDB.Close()
+	githubFetcher := github.NewFetcher(cfg, bot, githubDB, ghCryptor)
+	if cfg.GitHubTracker.Enabled {
+		guard.Go("github tracker", githubFetcher.Start)
+	}
+
 	rstate := &rehashState{
-		configPath:   configPath,
-		aiClient:     aiClient,
-		bot:          bot,
-		rssFetcher:   rssFetcher,
-		statsTracker: statsTracker,
-		rssDB:        rssDB,
-		webMu:        &webServerMu,
-		webRef:       &webServerRef,
+		configPath:    configPath,
+		aiClient:      aiClient,
+		bot:           bot,
+		rssFetcher:    rssFetcher,
+		statsTracker:  statsTracker,
+		rssDB:         rssDB,
+		githubFetcher: githubFetcher,
+		webMu:         &webServerMu,
+		webRef:        &webServerRef,
 	}
 	var applyRehash func(string, bool) error
 	rstate.startWeb = func(cfg *config.Config) {
-		startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, applyRehash, &webServerMu, &webServerRef)
+		startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, githubFetcher, aiClient, applyRehash, &webServerMu, &webServerRef)
 	}
 	applyRehash = func(source string, fromWeb bool) error {
 		return doApplyRehash(rstate, source, fromWeb)
@@ -372,17 +389,17 @@ func main() {
 	// Handle daemon mode execution
 	if *daemon || isDaemonChild {
 		// Run in daemon mode (already detached if -mode start or -daemon was used)
-		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, applyRehash, &webServerMu, &webServerRef)
+		err := runAsDaemon(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, githubFetcher, applyRehash, &webServerMu, &webServerRef)
 		if err != nil {
 			log.Fatalf("Failed to start daemon logic: %v", err)
 		}
 	} else {
 		// Run in foreground with debug mode
-		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, applyRehash, &webServerMu, &webServerRef)
+		runInForeground(cfg, bot, aiClient, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, githubFetcher, applyRehash, &webServerMu, &webServerRef)
 	}
 }
 
-func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) error {
+func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, githubFetcher *github.Fetcher, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) error {
 	// Forked daemon child has stdio detached; avoid fmt to stdout (no terminal). Debug goes to log if configured.
 	// Use configured PID file
 	pidFile := cfg.Daemon.PIDFile
@@ -394,7 +411,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
 		guard.Go("web server", func() {
-			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, githubFetcher, aiClient, rehash, webMu, webRef)
 		})
 	}
 
@@ -438,7 +455,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	return nil
 }
 
-func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
+func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progTodoDB *progtodo.Database, githubFetcher *github.Fetcher, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
 	// Set up signal handling for graceful shutdown
 	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -446,7 +463,7 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	// Start the web server if requested or configured
 	if cfg.Web.Enabled {
 		guard.Go("web server", func() {
-			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, aiClient, rehash, webMu, webRef)
+			startWebServer(cfg, bot, rssFetcher, statsTracker, bookmarksDB, uploadsDB, cryptoDB, progTodoDB, githubFetcher, aiClient, rehash, webMu, webRef)
 		})
 	}
 
@@ -482,8 +499,8 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	time.Sleep(1 * time.Second)
 }
 
-func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, aiClient *ai.Client, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, aiClient, rehash)
+func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, ghf *github.Fetcher, aiClient *ai.Client, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
+	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, ghf, aiClient, rehash)
 	webMu.Lock()
 	*webRef = ws
 	webMu.Unlock()

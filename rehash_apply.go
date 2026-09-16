@@ -9,6 +9,7 @@ import (
 
 	"botIAask/ai"
 	"botIAask/config"
+	"botIAask/github"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -18,15 +19,16 @@ import (
 
 // rehashState holds dependencies for a full on-disk config reload.
 type rehashState struct {
-	configPath   string
-	aiClient     *ai.Client
-	bot          *irc.Bot
-	rssFetcher   *rss.Fetcher
-	statsTracker *stats.Tracker
-	rssDB        *rss.Database
-	webMu        *sync.Mutex
-	webRef       **web.Server
-	startWeb     func(cfg *config.Config)
+	configPath    string
+	aiClient      *ai.Client
+	bot           *irc.Bot
+	rssFetcher    *rss.Fetcher
+	statsTracker  *stats.Tracker
+	rssDB         *rss.Database
+	githubFetcher *github.Fetcher
+	webMu         *sync.Mutex
+	webRef        **web.Server
+	startWeb      func(cfg *config.Config)
 }
 
 func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
@@ -44,6 +46,7 @@ func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
 	s.aiClient.UpdateConfig(newCfg.AI.LMStudioURL, newCfg.AI.Model)
 	s.bot.ApplyLiveConfig(newCfg)
 	s.rssFetcher.ApplyConfig(newCfg)
+	s.githubFetcher.ApplyConfig(newCfg)
 	s.statsTracker.ApplyConfig(newCfg)
 	if err := s.rssDB.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
 		log.Printf("RSS: repair source column after rehash: %v", err)

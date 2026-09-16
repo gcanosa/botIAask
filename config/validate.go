@@ -28,6 +28,37 @@ func ValidateConfig(cfg *Config) error {
 	if err := validateNoCrossNetworkChannelOverlap(cfg.IRC.Networks); err != nil {
 		return err
 	}
+	if err := validateGitHubTracker(cfg.GitHubTracker); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateGitHubTracker checks the tracked-repo list for duplicate targets and malformed
+// event-type filters that YAML unmarshalling alone wouldn't catch.
+func validateGitHubTracker(cfg GitHubTrackerConfig) error {
+	if cfg.Enabled && cfg.IntervalMinutes <= 0 {
+		return fmt.Errorf("github_tracker: interval_minutes must be positive when enabled")
+	}
+	seen := make(map[string]bool, len(cfg.Repos))
+	validEvents := map[string]bool{"push": true, "pull_request": true, "release": true}
+	for _, r := range cfg.Repos {
+		owner := strings.TrimSpace(r.Owner)
+		repo := strings.TrimSpace(r.Repo)
+		if owner == "" || repo == "" {
+			return fmt.Errorf("github_tracker: repo entry with empty owner or repo")
+		}
+		key := strings.ToLower(owner + "/" + repo)
+		if seen[key] {
+			return fmt.Errorf("github_tracker: duplicate repo %q", owner+"/"+repo)
+		}
+		seen[key] = true
+		for _, et := range r.EventTypes {
+			if !validEvents[et] {
+				return fmt.Errorf("github_tracker: repo %q has invalid event_type %q (must be push, pull_request, or release)", owner+"/"+repo, et)
+			}
+		}
+	}
 	return nil
 }
 
