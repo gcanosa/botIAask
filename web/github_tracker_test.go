@@ -191,6 +191,20 @@ func TestGitHubRepoEdit_NonBlankTokenReplaces(t *testing.T) {
 	}
 }
 
+// TestGitHubRepos_AddDoesNotPanicWithoutBot guards joinAnnounceChannels' nil-bot no-op:
+// none of the setup helpers wire up a real *irc.Bot (would require a live connection), so
+// every add/edit request already exercises this path — it must not panic or fail the save.
+func TestGitHubRepos_AddDoesNotPanicWithoutBot(t *testing.T) {
+	cfg := &config.Config{IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "libera", Server: "irc.libera.chat", Port: 6697, Nickname: "bot"}}}}
+	s, cookie, csrfToken := setupGitHubTrackerTest(t, cfg)
+
+	body := `{"owner":"anthropics","repo":"claude-code","channels":["libera:#not-joined-yet"]}`
+	rec := doGitHubReposRequest(t, s, cookie, csrfToken, http.MethodPost, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGitHubRepoEdit_ExplicitEmptyTokenClears(t *testing.T) {
 	cfg := &config.Config{
 		IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "libera", Server: "irc.libera.chat", Port: 6697, Nickname: "bot"}}},
