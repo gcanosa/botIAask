@@ -1687,15 +1687,17 @@ func truncateReminderNotice(s string, maxBytes int) string {
 	return s[:maxBytes-3] + "..."
 }
 
-// formatDuration formats a time.Duration into a human-readable string.
+// formatDuration formats a time.Duration into a human-readable string. Past 24h it rolls
+// into days (dropping seconds, e.g. "2d3h15m") instead of an unreadable hour count like "50h3m12s".
 func formatDuration(d time.Duration) string {
-	// Calculate hours, minutes, and seconds
-	hours := int64(d.Hours())
+	days := int64(d.Hours()) / 24
+	hours := int64(d.Hours()) % 24
 	minutes := int64(d.Minutes()) % 60
 	seconds := int64(d.Seconds()) % 60
 
-	// Format the duration
-	if hours > 0 {
+	if days > 0 {
+		return fmt.Sprintf("%dd%dh%dm", days, hours, minutes)
+	} else if hours > 0 {
 		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
 	} else if minutes > 0 {
 		return fmt.Sprintf("%dm%ds", minutes, seconds)
