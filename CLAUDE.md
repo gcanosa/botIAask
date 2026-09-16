@@ -21,6 +21,7 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `web/` | HTTP server, dashboard handlers, auth, CSRF |
 | `uploads/` | Paste and file upload DB + disk storage |
 | `rss/` | RSS feed fetching, deduplication, IRC announcements |
+| `github/` | GitHub repo activity tracking (pushes/PRs/releases via the Events API), PAT encryption, IRC announcements |
 | `crypto/` | CoinGecko price fetching, market history DB |
 | `stats/` | Activity tracking, SQLite persistence |
 | `bookmarks/` | URL bookmark DB |
@@ -57,10 +58,13 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 | `crypto.db` | `crypto` package |
 | `prog_todos.db` | `progtodo` package |
 | `web_auth.db` | `web` package (auth, sessions, CSRF tokens) |
+| `github_seen.db` | `github` package (event dedup, per-repo ETag cache) |
 
 The `db/` package provides shared `OpenDB()` with connection pooling and WAL-mode pragmas.
 
 Schema migrations use `ALTER TABLE ADD COLUMN` with "duplicate column" error tolerance — errors are logged but don't abort startup.
+
+`data/github_secret.key` (not a DB) is a random AES-256 key auto-generated on first run, encrypting GitHub PATs stored in `config.yaml` (`github_tracker.repos[].token_encrypted`). Back it up alongside `data/` — losing it makes stored tokens unrecoverable (re-enter them via the dashboard; public repos are unaffected).
 
 ---
 
