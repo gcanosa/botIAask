@@ -277,8 +277,10 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []R
 	meta := RepoMeta{CachedDescription: r.CachedDescription}
 	eventTypeAllowed := allowedEventTypeSet(r.EventTypes)
 
-	// GitHub returns newest-first; announce oldest-first so channel history reads
-	// chronologically (same reversal rss/fetcher.go does for feed entries).
+	// GitHub returns newest-first; walk oldest-first so seen-marking and the collapsed
+	// summaries below both read chronologically (same reversal rss/fetcher.go does for
+	// feed entries).
+	var toAnnounce []Announcement
 	for i := len(events) - 1; i >= 0; i-- {
 		ev := events[i]
 		if !eventTypeAllowed(ev.Type) {
@@ -305,6 +307,12 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []R
 			continue
 		}
 
+		toAnnounce = append(toAnnounce, ann)
+	}
+
+	// Collapse to at most one line per event kind so a burst of activity (several pushes
+	// in a session, or a first-time catch-up) doesn't flood the channel one line per event.
+	for _, ann := range CollapseForBroadcast(toAnnounce) {
 		f.bot.Broadcast(r.Channels, ann.Message)
 		time.Sleep(announcePace)
 	}

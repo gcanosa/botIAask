@@ -15,8 +15,13 @@ const (
 )
 
 func formatPush(repoFullName, pusher, branch string, size int, headline, more, link string) string {
-	return ircPushTag + " " + ircBold + repoFullName + ircBold + " " + pusher +
-		" pushed " + strconv.Itoa(size) + " commit" + plural(size) + " to " + ircBold + branch + ircBold +
+	base := ircPushTag + " " + ircBold + repoFullName + ircBold + " " + pusher
+	if headline == "" {
+		// GitHub's Events API didn't include a commit list for this push, so there's no
+		// message/count to show — just the fact that something landed, and a link to it.
+		return base + " pushed to " + ircBold + branch + ircBold + sprintfLink(link)
+	}
+	return base + " pushed " + strconv.Itoa(size) + " commit" + plural(size) + " to " + ircBold + branch + ircBold +
 		`: "` + headline + `"` + more + sprintfLink(link)
 }
 
