@@ -7,7 +7,7 @@
 ### 🤖 AI & IRC Interaction
 - **AI-Powered Responses**: Ask questions directly to an AI model using `!ask`.
 - **RSS & news**: Configurable feeds; optional IRC announcements and per-channel toggles.
-- **GitHub Activity Tracking**: Announce pushes, pull requests, and releases from tracked repos to any number of networks/channels, including private repos via an encrypted-at-rest access token. Fully configured from the web dashboard.
+- **GitHub Activity Tracking**: Announce pushes, pull requests, releases, issues, and branch/tag creation or deletion from tracked repos to any number of networks/channels, including private repos via an encrypted-at-rest access token. Each announcement tag carries the natural GitHub identifier (`[PUSH abcd123]`, `[PR #42]`, `[RELEASE v1.0]`, `[ISSUE #7]`, `[BRANCH name]`), and links are auto-shortened. Manage repos from the web dashboard or via `!gh list/add/del/search` in IRC.
 - **Rate Limiting**: Intelligent command throttling to prevent spam.
 - **Log Rotation**: Automatic multi-day log management for all channels.
 
@@ -131,6 +131,10 @@ Command **prefix** (default `!`) and the AI trigger name (default `ask`) are set
 | `!ticket pending` | Lists pending paste/file tickets. |
 | `!ticket approve <ID>` | Approves a ticket (paste or file). |
 | `!ticket cancel <ID>` | Cancels a ticket. |
+| `!gh list` | Lists tracked GitHub repos (channels, event filter, token state). |
+| `!gh add <owner>/<repo> [net:#chan ...] [--private]` | Tracks a repo. `--private` prompts for a PAT via PM, and only over a connection the server confirms is encrypted. |
+| `!gh del <owner>/<repo>` | Stops tracking a repo. |
+| `!gh search <owner>/<repo> <query>` | A PR/issue number or commit SHA does a live GitHub lookup; anything else searches recent local activity by text/regex. |
 | `!rehash` | Reloads configuration from disk (notifies other admins). |
 | `!quit [reason]` | Disconnects; quit message from `irc.quit_message` or default banner. |
 
@@ -147,7 +151,7 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 - **Market View**: Live financial data panel for crypto and currency rates.
 - **System Stats**: Detailed charts for AI requests and system performance.
 - **Bookmarks**: Searchable database of links shared across channels.
-- **GitHub Tracker**: Add/edit/remove tracked repos, set per-repo target channels and event-type filters (push/PR/release), and enter a Personal Access Token for private repos (stored encrypted, never shown again).
+- **GitHub Tracker**: Add/edit/remove tracked repos, set per-repo target channels and event-type filters (push/pull_request/release/issues/create/delete), and enter a Personal Access Token for private repos (stored encrypted, never shown again). For private repos, create the token at https://github.com/settings/tokens: a classic PAT needs the `repo` scope, or a fine-grained PAT scoped to the repo needs read-only **Contents** (push/release/branch-tag events), **Pull requests**, and **Issues**. The same repos can also be managed from IRC with `!gh list/add/del/search`.
 
 ### Web Dashboard Security
 

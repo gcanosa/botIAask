@@ -66,6 +66,30 @@ Schema migrations use `ALTER TABLE ADD COLUMN` with "duplicate column" error tol
 
 `data/github_secret.key` (not a DB) is a random AES-256 key auto-generated on first run, encrypting GitHub PATs stored in `config.yaml` (`github_tracker.repos[].token_encrypted`). Back it up alongside `data/` — losing it makes stored tokens unrecoverable (re-enter them via the dashboard; public repos are unaffected).
 
+### GitHub Tracker: token scope for private repos
+
+The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.go`) and parses `PushEvent`, `PullRequestEvent`, `ReleaseEvent`, `IssuesEvent` (opened/closed only), `CreateEvent`, `DeleteEvent` (branch/tag create/delete) from that single response (`github/events.go`). Announcement tags show the natural GitHub identifier per kind (`[PUSH <short-sha>]`, `[PR #N]`, `[RELEASE <tag>]`, `[ISSUE #N]`, `[BRANCH <name>]`/`[TAG <name>]`), and links are shortened via the same `rss.ShortenURLWithService` helper RSS uses (`config.RSS.url_shortener`) before being broadcast. For a **public** repo no token is needed (or use a `public_repo`-scope classic PAT just for the higher rate limit). For a **private** repo, create the token at https://github.com/settings/tokens and enter it via the dashboard or `!gh add ... --private` (never hand-edit `token_encrypted`):
+
+- **Classic PAT**: `repo` scope (full control of private repositories — GitHub has no finer-grained classic scope that covers push+PR+release+issues events).
+- **Fine-grained PAT**: select the specific repo(s) and grant, read-only:
+  - **Contents** — covers push/commit events, releases, and branch/tag create/delete
+  - **Pull requests** — covers PR events
+  - **Issues** — covers `IssuesEvent` and the `!gh search` issue-number lookup fallback
+  - **Metadata** is mandatory and auto-included; nothing else is required.
+
+`event_types` per repo now accepts `push`, `pull_request`, `release`, `issues`, `create`, `delete` (empty means all of them).
+
+`!gh search <owner>/<repo> <query>` makes **separate, on-demand** calls outside the polling loop: a numeric query tries `GET .../pulls/{number}` then falls back to `GET .../issues/{number}`; a 7–40 char hex string calls `GET .../commits/{sha}`; anything else searches the `seen_events` history locally (regex/text match over already-announced events, no live API call). These on-demand calls don't share `Fetch()`'s rate-limit backoff — a burst of searches has no protection of its own (known limitation).
+
+### GitHub Tracker: IRC admin commands
+
+`!gh list` / `!gh add <owner>/<repo> [network:#chan ...] [--private]` / `!gh del <owner>/<repo>` / `!gh search <owner>/<repo> <query>` (admin + `!admin` session required, see `irc/github_admin.go`). Adding a repo without `--private` mirrors the dashboard's add flow (validate, save, rehash, best-effort channel join) with no token. `--private` is the **only** way to attach a token from IRC, and it's deliberately narrow:
+
+- Refused outright if invoked in a channel — a PAT must never be typed where it can be logged by every client/bouncer in the room.
+- In a PM, the bot first `WHOIS`es the admin and waits (5s) for numeric `671` (`RPL_WHOISSECURE`) before offering the flow. Not every ircd sends this numeral even over a real TLS connection — the check is intentionally fail-closed (no `671` = treated as unverifiable = refused, pointing the admin at the web dashboard instead), so `!gh add --private` may always refuse on less mainstream networks even when the connection actually is encrypted.
+- If secure, the bot asks the admin to reply with the PAT in that same PM within 120s; the reply is intercepted before normal PRIVMSG logging/`!seen`/`!tell` processing so the plaintext token never touches `logs/`.
+- Editing an existing repo's token is still dashboard-only; IRC only adds/removes whole repo entries.
+
 ---
 
 ## Web Dashboard Auth

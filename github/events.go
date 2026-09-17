@@ -16,8 +16,16 @@ type RepoMeta struct {
 // Announcement is a fully-formatted, ready-to-broadcast IRC line for one GitHub event.
 type Announcement struct {
 	RepoFullName string
-	Kind         string // "push" | "pull_request" | "release"
-	Message      string
+	Kind         string // "push" | "pull_request" | "release" | "issues" | "create" | "delete"
+	// RefID is the natural GitHub identifier for this event (short SHA, "#N", or a
+	// branch/tag name) — shown in the "[KIND RefID]" tag by format.go.
+	RefID string
+	// Link is the raw (un-shortened) URL embedded in Message, or "" for events with no
+	// link (delete). Kept alongside Message so fetcher.go can swap in a shortened URL
+	// right before broadcast without redoing all the extraction/formatting work above —
+	// see shortenAnnouncementLink.
+	Link    string
+	Message string
 }
 
 // ExtractAnnouncement turns a raw Events API entry into an Announcement, or ok=false if
@@ -31,6 +39,12 @@ func ExtractAnnouncement(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 		return extractPullRequest(ev, meta)
 	case "ReleaseEvent":
 		return extractRelease(ev, meta)
+	case "IssuesEvent":
+		return extractIssue(ev, meta)
+	case "CreateEvent":
+		return extractCreate(ev, meta)
+	case "DeleteEvent":
+		return extractDelete(ev, meta)
 	default:
 		return Announcement{}, false
 	}
@@ -70,10 +84,16 @@ func extractPush(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	if p.Before != "" && p.Before != p.Head && p.Size != 1 {
 		link = "https://github.com/" + ev.Repo.Name + "/compare/" + p.Before + "..." + p.Head
 	}
+	shortSHA := p.Head
+	if len(shortSHA) > 7 {
+		shortSHA = shortSHA[:7]
+	}
 	return Announcement{
 		RepoFullName: ev.Repo.Name,
 		Kind:         "push",
-		Message:      formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, headline, more, link),
+		RefID:        shortSHA,
+		Link:         link,
+		Message:      formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, headline, more, link, shortSHA),
 	}, true
 }
 
@@ -131,10 +151,13 @@ func extractPullRequest(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	if link == "" {
 		link = "https://github.com/" + ev.Repo.Name + "/pull/" + strconv.Itoa(p.Number)
 	}
+	refID := "#" + strconv.Itoa(p.Number)
 	return Announcement{
 		RepoFullName: ev.Repo.Name,
 		Kind:         "pull_request",
-		Message:      formatPullRequest(ev.Repo.Name, author, action, p.Number, title, link),
+		RefID:        refID,
+		Link:         link,
+		Message:      formatPullRequest(ev.Repo.Name, author, action, refID, title, link),
 	}, true
 }
 
@@ -158,10 +181,6 @@ func extractRelease(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	if p.Action != "published" {
 		return Announcement{}, false
 	}
-	name := p.Release.Name
-	if name == "" {
-		name = p.Release.TagName
-	}
 	author := p.Release.Author.Login
 	if author == "" {
 		author = ev.Actor.Login
@@ -173,7 +192,95 @@ func extractRelease(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	return Announcement{
 		RepoFullName: ev.Repo.Name,
 		Kind:         "release",
-		Message:      formatRelease(ev.Repo.Name, author, p.Release.TagName, name, link),
+		RefID:        p.Release.TagName,
+		Link:         link,
+		Message:      formatRelease(ev.Repo.Name, author, p.Release.TagName, p.Release.Name, link),
+	}, true
+}
+
+type issuesPayload struct {
+	Action string `json:"action"`
+	Issue  struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"issue"`
+}
+
+// extractIssue only announces newly opened or closed issues — labeled/assigned/edited/
+// reopened and other lifecycle actions are intentionally not announced.
+func extractIssue(ev RawEvent, meta RepoMeta) (Announcement, bool) {
+	var p issuesPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return Announcement{}, false
+	}
+	switch p.Action {
+	case "opened", "closed":
+	default:
+		return Announcement{}, false
+	}
+
+	author := ev.Actor.Login
+	if p.Issue.User.Login != "" {
+		author = p.Issue.User.Login
+	}
+	link := p.Issue.HTMLURL
+	if link == "" {
+		link = "https://github.com/" + ev.Repo.Name + "/issues/" + strconv.Itoa(p.Issue.Number)
+	}
+	refID := "#" + strconv.Itoa(p.Issue.Number)
+	return Announcement{
+		RepoFullName: ev.Repo.Name,
+		Kind:         "issues",
+		RefID:        refID,
+		Link:         link,
+		Message:      formatIssue(ev.Repo.Name, author, p.Action, refID, p.Issue.Title, link),
+	}, true
+}
+
+type createDeletePayload struct {
+	RefType string `json:"ref_type"` // "branch" | "tag" | "repository"
+	Ref     string `json:"ref"`
+}
+
+// extractCreate announces new branches/tags. ref_type "repository" (CreateEvent also
+// fires when the repo itself is created) is ignored — not relevant to activity tracking.
+func extractCreate(ev RawEvent, meta RepoMeta) (Announcement, bool) {
+	var p createDeletePayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil || p.Ref == "" {
+		return Announcement{}, false
+	}
+	if p.RefType != "branch" && p.RefType != "tag" {
+		return Announcement{}, false
+	}
+	link := "https://github.com/" + ev.Repo.Name + "/tree/" + p.Ref
+	return Announcement{
+		RepoFullName: ev.Repo.Name,
+		Kind:         "create",
+		RefID:        p.Ref,
+		Link:         link,
+		Message:      formatCreate(ev.Repo.Name, ev.Actor.Login, p.RefType, p.Ref, link),
+	}, true
+}
+
+// extractDelete announces branch/tag deletion. There is deliberately no link: the ref no
+// longer exists once this event fires.
+func extractDelete(ev RawEvent, meta RepoMeta) (Announcement, bool) {
+	var p createDeletePayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil || p.Ref == "" {
+		return Announcement{}, false
+	}
+	if p.RefType != "branch" && p.RefType != "tag" {
+		return Announcement{}, false
+	}
+	return Announcement{
+		RepoFullName: ev.Repo.Name,
+		Kind:         "delete",
+		RefID:        p.Ref,
+		Message:      formatDelete(ev.Repo.Name, ev.Actor.Login, p.RefType, p.Ref),
 	}, true
 }
 
@@ -220,6 +327,12 @@ func kindLabel(kind string) string {
 		return "PR updates"
 	case "release":
 		return "releases"
+	case "issues":
+		return "issues"
+	case "create":
+		return "refs created"
+	case "delete":
+		return "refs deleted"
 	default:
 		return kind
 	}

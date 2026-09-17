@@ -350,6 +350,7 @@ func main() {
 	}
 	defer githubDB.Close()
 	githubFetcher := github.NewFetcher(cfg, bot, githubDB, ghCryptor)
+	bot.SetGitHubFetcher(githubFetcher)
 	if cfg.GitHubTracker.Enabled {
 		guard.Go("github tracker", githubFetcher.Start)
 	}

@@ -272,6 +272,10 @@ func (f *Fetcher) Fetch() {
 	}
 }
 
+// DB exposes the fetcher's database for "!gh search" (irc/ has no other path to it —
+// Fetcher.db is otherwise private).
+func (f *Fetcher) DB() *Database { return f.db }
+
 func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []RawEvent) {
 	repoKey := r.FullName()
 	meta := RepoMeta{CachedDescription: r.CachedDescription}
@@ -301,8 +305,10 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []R
 		}
 
 		// Mark seen BEFORE broadcasting so a failed broadcast doesn't cause a retry storm
-		// (same ordering as rss/fetcher.go's MarkSeen-before-Broadcast).
-		if err := f.db.MarkEventSeen(key, repoKey, ann.Kind, ev.CreatedAt); err != nil {
+		// (same ordering as rss/fetcher.go's MarkSeen-before-Broadcast). Store the
+		// pre-collapse RefID/Message (not the collapsed/suffixed broadcast text) so
+		// "!gh search" sees one row per real event even though broadcast collapses bursts.
+		if err := f.db.MarkEventSeen(key, repoKey, ann.Kind, ann.RefID, ann.Message, ev.CreatedAt); err != nil {
 			log.Printf("[GITHUB] Failed to mark event seen for %s: %v", key, err)
 			continue
 		}
@@ -312,8 +318,15 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []R
 
 	// Collapse to at most one line per event kind so a burst of activity (several pushes
 	// in a session, or a first-time catch-up) doesn't flood the channel one line per event.
+	// Shortening happens here, AFTER collapsing (not inside ExtractAnnouncement), so a
+	// burst of many raw events costs at most 3 shortener calls per repo per cycle instead
+	// of one per raw event — the URL shortener is a network call to a third-party service
+	// with its own multi-service fallback chain, unbounded by Fetch()'s own context.
+	f.mu.Lock()
+	shortener := f.cfg.RSS.URLShortener
+	f.mu.Unlock()
 	for _, ann := range CollapseForBroadcast(toAnnounce) {
-		f.bot.Broadcast(r.Channels, ann.Message)
+		f.bot.Broadcast(r.Channels, shortenAnnouncementLink(ann, shortener))
 		time.Sleep(announcePace)
 	}
 }
@@ -331,6 +344,12 @@ func allowedEventTypeSet(filter []string) func(rawType string) bool {
 			want["PullRequestEvent"] = true
 		case "release":
 			want["ReleaseEvent"] = true
+		case "issues":
+			want["IssuesEvent"] = true
+		case "create":
+			want["CreateEvent"] = true
+		case "delete":
+			want["DeleteEvent"] = true
 		}
 	}
 	return func(rawType string) bool { return want[rawType] }

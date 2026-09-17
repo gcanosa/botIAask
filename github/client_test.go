@@ -90,3 +90,89 @@ func TestFetchRepoEvents_BearerAuthHeaderWhenTokenSet(t *testing.T) {
 		t.Fatalf("expected Bearer auth header, got %q", gotAuth)
 	}
 }
+
+func TestFetchPullRequest_200(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number": 42, "title": "Fix bug", "state": "open", "merged": false, "html_url": "https://x/pull/42", "user": {"login": "bob"}}`))
+	})
+	info, err := FetchPullRequest(context.Background(), "owner", "repo", "", 42)
+	if err != nil {
+		t.Fatalf("FetchPullRequest: %v", err)
+	}
+	if info == nil || info.Number != 42 || info.Title != "Fix bug" || info.Author != "bob" {
+		t.Fatalf("unexpected PR info: %+v", info)
+	}
+}
+
+func TestFetchPullRequest_404ReturnsNilNilNotError(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	info, err := FetchPullRequest(context.Background(), "owner", "repo", "", 999)
+	if err != nil {
+		t.Fatalf("expected no error on 404, got %v", err)
+	}
+	if info != nil {
+		t.Fatalf("expected nil info on 404, got %+v", info)
+	}
+}
+
+func TestFetchPullRequest_UsesBearerAuthWhenTokenSet(t *testing.T) {
+	var gotAuth string
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"number": 1}`))
+	})
+	if _, err := FetchPullRequest(context.Background(), "owner", "repo", "sekrit", 1); err != nil {
+		t.Fatalf("FetchPullRequest: %v", err)
+	}
+	if gotAuth != "Bearer sekrit" {
+		t.Fatalf("expected Bearer auth header, got %q", gotAuth)
+	}
+}
+
+func TestFetchIssue_200(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number": 45, "title": "Something broke", "state": "open", "html_url": "https://x/issues/45", "user": {"login": "dave"}}`))
+	})
+	info, err := FetchIssue(context.Background(), "owner", "repo", "", 45)
+	if err != nil {
+		t.Fatalf("FetchIssue: %v", err)
+	}
+	if info == nil || info.Number != 45 || info.Author != "dave" {
+		t.Fatalf("unexpected issue info: %+v", info)
+	}
+}
+
+func TestFetchIssue_404ReturnsNilNil(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	info, err := FetchIssue(context.Background(), "owner", "repo", "", 999)
+	if err != nil || info != nil {
+		t.Fatalf("expected nil, nil on 404, got %+v, %v", info, err)
+	}
+}
+
+func TestFetchCommit_200(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"sha": "abcd1234", "html_url": "https://x/commit/abcd1234", "commit": {"message": "fix: thing\n\nbody"}, "author": {"login": "alice"}}`))
+	})
+	info, err := FetchCommit(context.Background(), "owner", "repo", "", "abcd1234")
+	if err != nil {
+		t.Fatalf("FetchCommit: %v", err)
+	}
+	if info == nil || info.SHA != "abcd1234" || info.Message != "fix: thing" || info.Author != "alice" {
+		t.Fatalf("unexpected commit info: %+v", info)
+	}
+}
+
+func TestFetchCommit_404ReturnsNilNil(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	info, err := FetchCommit(context.Background(), "owner", "repo", "", "deadbeef")
+	if err != nil || info != nil {
+		t.Fatalf("expected nil, nil on 404, got %+v, %v", info, err)
+	}
+}

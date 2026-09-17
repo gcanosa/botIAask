@@ -66,6 +66,10 @@ var adminLines = []line{
 	{cmd: "!voice [nick]", desc: "Give voice to self or nick (in channel)"},
 	{cmd: "!devoice [nick]", desc: "Remove voice (in channel)"},
 	{cmd: "!ticket ...", desc: "pending | approve <ID> | cancel <ID>"},
+	{cmd: "!gh list", desc: "List tracked GitHub repos (channels, event filter, token state)"},
+	{cmd: "!gh add <owner>/<repo> [net:#chan ...] [--private]", desc: "Track a repo; --private prompts for a PAT via PM (requires a verifiably secure/TLS connection)"},
+	{cmd: "!gh del <owner>/<repo>", desc: "Stop tracking a repo"},
+	{cmd: "!gh search <owner>/<repo> <query>", desc: "PR/issue # or commit SHA -> live GitHub lookup; else local text/regex search over recent events"},
 	{cmd: "!rehash", desc: "Reload config from disk (sends each logged-in admin NOTICEs with a change summary)"},
 	{cmd: "!quit [reason]", desc: "Disconnect (default message from irc.quit_message or app meta)"},
 }

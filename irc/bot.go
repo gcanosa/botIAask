@@ -18,6 +18,7 @@ import (
 	"botIAask/bookmarks"
 	"botIAask/config"
 	"botIAask/crypto"
+	"botIAask/github"
 	"botIAask/internal/guard"
 	"botIAask/internal/sysinfo"
 	"botIAask/logger"
@@ -99,6 +100,14 @@ type Bot struct {
 	// Programmer TODO backlog
 	progtodoDB *progtodo.Database
 
+	// GitHub repo activity tracker, for !gh commands.
+	githubFetcher *github.Fetcher
+
+	// pendingGHTokens tracks an in-flight "!gh add --private" PM token request, keyed like
+	// adminSessionKey(network, nick). Guarded by ghTokenMu, not loginsMu — unrelated state.
+	pendingGHTokens map[string]pendingGHTokenRequest
+	ghTokenMu       sync.Mutex
+
 	rehashHook   func(source string) error
 	rehashHookMu sync.Mutex
 
@@ -112,15 +121,16 @@ type Bot struct {
 // NewBot initializes a new Bot instance.
 func NewBot(cfg *config.Config, aiClient *ai.Client) *Bot {
 	bot := &Bot{
-		aiClient:       aiClient,
-		startTime:      time.Now(),
-		networks:       make(map[string]*ircNetwork),
-		pending:        make(map[string]*ircNetwork),
-		version:        meta.Version,
-		ignoreList:     make(map[string]bool),
-		loggedInAdmins: make(map[string]bool),
-		tellPending:    make(map[string]struct{}),
-		cmdSem:         make(chan struct{}, 4),
+		aiClient:        aiClient,
+		startTime:       time.Now(),
+		networks:        make(map[string]*ircNetwork),
+		pending:         make(map[string]*ircNetwork),
+		version:         meta.Version,
+		ignoreList:      make(map[string]bool),
+		loggedInAdmins:  make(map[string]bool),
+		tellPending:     make(map[string]struct{}),
+		pendingGHTokens: make(map[string]pendingGHTokenRequest),
+		cmdSem:          make(chan struct{}, 4),
 	}
 	bot.cfg.Store(cfg)
 
@@ -493,8 +503,8 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %smovie <title>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %sconvert <amount> <from> <to>, %scrypto, %sping <host>, %sreminder add <time> <note>/del/list/read, %stell <nick> <msg>, %sseen <nick>, %stodo add|private|list|del",
 			b.pfx(), b.cmd(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
 		if isAdmin && isLoggedInAdmin {
-			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID]",
-				b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
+			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID], %sgh list/add/del/search",
+				b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
 			b.sendPrivmsgMentionedLines(target, sender, public, admin)
 		} else if isAdmin {
 			merged := public + fmt.Sprintf(" | Admin: Auth required using %sadmin", b.pfx())
@@ -1347,6 +1357,20 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.SendMessage(u.Network, u.Channel, fmt.Sprintf("\x0304[REJECTED]\x03 Ticket %s was rejected by an administrator.", ticketID))
 			}
 		}
+		return
+	}
+
+	// GitHub tracker admin commands
+	if strings.HasPrefix(message, b.pfx()+"gh") {
+		if !isAdmin || !isLoggedInAdmin {
+			b.sendPrivmsg(target, fmt.Sprintf("@%s: Authorized admins only.", sender))
+			return
+		}
+		if b.githubFetcher == nil {
+			b.sendPrivmsg(target, "GitHub tracker not initialized.")
+			return
+		}
+		b.handleGHCommand(target, message, sender, source)
 		return
 	}
 
