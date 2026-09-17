@@ -184,6 +184,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
 	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
+	mux.HandleFunc("/api/github/toggle", s.handleGitHubToggle)
 	mux.HandleFunc("/api/github/settings", s.handleGitHubTrackerSettings)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubTrackerRepos)
 	mux.HandleFunc("/api/github/repos/edit", s.handleGitHubTrackerRepoEdit)
@@ -384,6 +385,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_requests":             s.bot.GetAIRequestCount(),
 		"rss_enabled":             s.rssFetcher.IsEnabled(),
 		"stats_enabled":           s.statsTracker.IsEnabled(),
+		"github_enabled":          s.githubFetcher.IsEnabled(),
 		"stats_interval_seconds":  interval,
 		"weather_refresh_minutes": weatherMin,
 		"start_time":              s.bot.GetStartTime().Format(time.RFC3339),
@@ -1109,6 +1111,24 @@ func (s *Server) handleRSSToggle(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"rss_enabled": enabled})
+}
+
+func (s *Server) handleGitHubToggle(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := s.requireAdminCSRF(r)
+	if !isAdmin {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	enabled := !s.githubFetcher.IsEnabled()
+	s.githubFetcher.SetEnabled(enabled)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"github_enabled": enabled})
 }
 
 func (s *Server) handleRSSNews(w http.ResponseWriter, r *http.Request) {
