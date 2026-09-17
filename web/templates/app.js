@@ -560,6 +560,7 @@ async function fetchStatus() {
         // Features
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
+        updateGitHubStatus(data.github_enabled, data.is_admin);
         const actEmpty = document.getElementById('activity-chart-empty');
         if (activityChart && actEmpty && !actEmpty.classList.contains('hidden') && currentTimeframe) {
             setActivityChartEmptyHint(currentTimeframe, activityChart.data.labels.length);
@@ -1084,6 +1085,27 @@ async function toggleNews() {
         updateNewsStatus(data.rss_enabled);
     } catch (e) {
         console.error("Failed to toggle news", e);
+    }
+}
+
+function updateGitHubStatus(enabled) {
+    const indicator = document.getElementById('github-indicator');
+    if (enabled) {
+        indicator.classList.add('pulse');
+        indicator.style.background = 'var(--primary)';
+    } else {
+        indicator.classList.remove('pulse');
+        indicator.style.background = 'var(--text-muted)';
+    }
+}
+
+async function toggleGitHub() {
+    try {
+        const res = await fetch('/api/github/toggle', { method: 'POST' });
+        const data = await res.json();
+        updateGitHubStatus(data.github_enabled);
+    } catch (e) {
+        console.error("Failed to toggle GitHub monitor", e);
     }
 }
 
@@ -3199,6 +3221,7 @@ window.logout = logout;
 window.onThemeSelectChange = onThemeSelectChange;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
+window.toggleGitHub = toggleGitHub;
 window.updatePassword = updatePassword;
 window.ircAutojoinAdd = ircAutojoinAdd;
 window.ircAutojoinNetworkChange = ircAutojoinNetworkChange;
@@ -3293,6 +3316,7 @@ window.logout = logout;
 window.onThemeSelectChange = onThemeSelectChange;
 window.toggleStats = toggleStats;
 window.toggleNews = toggleNews;
+window.toggleGitHub = toggleGitHub;
 window.updatePassword = updatePassword;
 window.forceFetchNews = forceFetchNews;
 window.deleteNews = deleteNews;
