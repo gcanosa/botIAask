@@ -389,6 +389,13 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			log.Printf("[DEBUG] irc[%s]: PRIVMSG received - Sender: %s, Target: %s, Content: %s", n.name, sender, target, message)
 		}
 
+		// A pending "!gh add --private" token reply must never reach logs/, !seen, or
+		// !tell — checked and consumed here, before any of that, rather than inside
+		// dispatchCommand (which runs after the normal logging call below).
+		if n.tryConsumePendingGitHubToken(target, message, sender) {
+			return
+		}
+
 		if strings.HasPrefix(message, "\x01") && strings.HasSuffix(message, "\x01") {
 			ctcpContent := message[1 : len(message)-1]
 			if strings.HasPrefix(ctcpContent, "ACTION ") {

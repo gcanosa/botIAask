@@ -1,6 +1,7 @@
 package github
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -72,9 +73,12 @@ func TestExtractAnnouncement_PullRequest(t *testing.T) {
 	if !ok {
 		t.Fatal("expected PR open to be announced")
 	}
-	if !strings.Contains(ann.Message, "bob") || !strings.Contains(ann.Message, "opened PR #42") ||
-		!strings.Contains(ann.Message, "Fix bug in X") {
+	if !strings.Contains(ann.Message, "bob") || !strings.Contains(ann.Message, "[PR #42]") ||
+		!strings.Contains(ann.Message, "opened") || !strings.Contains(ann.Message, "Fix bug in X") {
 		t.Fatalf("unexpected PR message: %q", ann.Message)
+	}
+	if ann.RefID != "#42" {
+		t.Fatalf("expected RefID #42, got %q", ann.RefID)
 	}
 }
 
@@ -85,7 +89,7 @@ func TestExtractAnnouncement_PullRequestMergedNotClosed(t *testing.T) {
 		"pull_request": {"html_url": "x", "title": "t", "user": {"login": "bob"}, "merged": true}
 	}`)
 	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
-	if !ok || !strings.Contains(ann.Message, "merged PR #7") {
+	if !ok || !strings.Contains(ann.Message, "[PR #7]") || !strings.Contains(ann.Message, "merged") {
 		t.Fatalf("expected merged PR message, got ok=%v msg=%q", ok, ann.Message)
 	}
 }
@@ -106,8 +110,8 @@ func TestExtractAnnouncement_PullRequestTrimmedPayload(t *testing.T) {
 	if !ok {
 		t.Fatal("expected trimmed PR open to be announced")
 	}
-	if !strings.Contains(ann.Message, "carol") || !strings.Contains(ann.Message, "opened PR #42") ||
-		!strings.Contains(ann.Message, "fix/thing -> main") ||
+	if !strings.Contains(ann.Message, "carol") || !strings.Contains(ann.Message, "[PR #42]") ||
+		!strings.Contains(ann.Message, "opened") || !strings.Contains(ann.Message, "fix/thing -> main") ||
 		!strings.Contains(ann.Message, "github.com/owner/repo/pull/42") {
 		t.Fatalf("unexpected trimmed PR message: %q", ann.Message)
 	}
@@ -120,7 +124,7 @@ func TestExtractAnnouncement_PullRequestMergedActionTrimmedPayload(t *testing.T)
 		"pull_request": {"head": {"ref": "fix/thing"}, "base": {"ref": "main"}}
 	}`)
 	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
-	if !ok || !strings.Contains(ann.Message, "merged PR #7") {
+	if !ok || !strings.Contains(ann.Message, "[PR #7]") || !strings.Contains(ann.Message, "merged") {
 		t.Fatalf("expected merged PR message, got ok=%v msg=%q", ok, ann.Message)
 	}
 }
@@ -195,6 +199,99 @@ func TestCollapseForBroadcast_DifferentKindsEachGetALine(t *testing.T) {
 	}
 	if !strings.Contains(out[1].Message, "pr merged") || !strings.Contains(out[1].Message, "+1 more PR updates") {
 		t.Fatalf("unexpected pull_request line: %q", out[1].Message)
+	}
+}
+
+func TestExtractAnnouncement_Issue_OpenedAndClosed(t *testing.T) {
+	for _, action := range []string{"opened", "closed"} {
+		ev := rawEvent("8", "IssuesEvent", "dave", "owner/repo", fmt.Sprintf(`{
+			"action": "%s",
+			"issue": {"number": 45, "title": "Something broke", "html_url": "https://github.com/owner/repo/issues/45", "user": {"login": "dave"}}
+		}`, action))
+		ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+		if !ok {
+			t.Fatalf("expected issue %q to be announced", action)
+		}
+		if ann.RefID != "#45" || !strings.Contains(ann.Message, "[ISSUE #45]") ||
+			!strings.Contains(ann.Message, action) || !strings.Contains(ann.Message, "Something broke") {
+			t.Fatalf("unexpected issue message for action %q: %q", action, ann.Message)
+		}
+	}
+}
+
+func TestExtractAnnouncement_Issue_ActionNotAnnounced(t *testing.T) {
+	ev := rawEvent("8b", "IssuesEvent", "dave", "owner/repo", `{"action": "labeled", "issue": {"number": 45}}`)
+	if _, ok := ExtractAnnouncement(ev, RepoMeta{}); ok {
+		t.Fatal("expected non-opened/closed issue action to be skipped")
+	}
+}
+
+func TestExtractAnnouncement_Create_Branch(t *testing.T) {
+	ev := rawEvent("9", "CreateEvent", "erin", "owner/repo", `{"ref_type": "branch", "ref": "feature/x"}`)
+	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+	if !ok {
+		t.Fatal("expected branch creation to be announced")
+	}
+	if ann.RefID != "feature/x" || !strings.Contains(ann.Message, "[BRANCH feature/x]") ||
+		!strings.Contains(ann.Message, "erin") || !strings.Contains(ann.Message, "created") {
+		t.Fatalf("unexpected create message: %q", ann.Message)
+	}
+}
+
+func TestExtractAnnouncement_Create_Tag(t *testing.T) {
+	ev := rawEvent("9b", "CreateEvent", "erin", "owner/repo", `{"ref_type": "tag", "ref": "v2.0"}`)
+	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+	if !ok || !strings.Contains(ann.Message, "[TAG v2.0]") {
+		t.Fatalf("unexpected tag create message: ok=%v msg=%q", ok, ann.Message)
+	}
+}
+
+func TestExtractAnnouncement_Create_RefTypeRepositoryIgnored(t *testing.T) {
+	ev := rawEvent("9c", "CreateEvent", "erin", "owner/repo", `{"ref_type": "repository", "ref": ""}`)
+	if _, ok := ExtractAnnouncement(ev, RepoMeta{}); ok {
+		t.Fatal("expected ref_type repository (repo creation itself) to be skipped")
+	}
+}
+
+func TestExtractAnnouncement_Delete_Branch(t *testing.T) {
+	ev := rawEvent("10", "DeleteEvent", "frank", "owner/repo", `{"ref_type": "branch", "ref": "old-feature"}`)
+	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+	if !ok {
+		t.Fatal("expected branch deletion to be announced")
+	}
+	if ann.RefID != "old-feature" || !strings.Contains(ann.Message, "[BRANCH old-feature]") ||
+		!strings.Contains(ann.Message, "deleted") {
+		t.Fatalf("unexpected delete message: %q", ann.Message)
+	}
+	if strings.Contains(ann.Message, "🔗") || ann.Link != "" {
+		t.Fatalf("expected no link on a delete announcement, got message %q link %q", ann.Message, ann.Link)
+	}
+}
+
+func TestExtractAnnouncement_Delete_Tag(t *testing.T) {
+	ev := rawEvent("10b", "DeleteEvent", "frank", "owner/repo", `{"ref_type": "tag", "ref": "v0.9-beta"}`)
+	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+	if !ok || !strings.Contains(ann.Message, "[TAG v0.9-beta]") {
+		t.Fatalf("unexpected tag delete message: ok=%v msg=%q", ok, ann.Message)
+	}
+}
+
+func TestCollapseForBroadcast_NewKindsEachGetALine(t *testing.T) {
+	anns := []Announcement{
+		{RepoFullName: "owner/repo", Kind: "issues", Message: "issue 1"},
+		{RepoFullName: "owner/repo", Kind: "issues", Message: "issue 2 (latest)"},
+		{RepoFullName: "owner/repo", Kind: "create", Message: "branch created"},
+		{RepoFullName: "owner/repo", Kind: "delete", Message: "branch deleted"},
+	}
+	out := CollapseForBroadcast(anns)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 collapsed lines (issues, create, delete), got %d: %v", len(out), out)
+	}
+	if !strings.Contains(out[0].Message, "issue 2 (latest)") || !strings.Contains(out[0].Message, "+1 more issues") {
+		t.Fatalf("unexpected issues line: %q", out[0].Message)
+	}
+	if out[1].Message != "branch created" || out[2].Message != "branch deleted" {
+		t.Fatalf("unexpected create/delete lines: %q / %q", out[1].Message, out[2].Message)
 	}
 }
 

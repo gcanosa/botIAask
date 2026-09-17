@@ -43,6 +43,17 @@ func TestValidateGitHubTracker_RejectsInvalidEventType(t *testing.T) {
 	}
 }
 
+func TestValidateGitHubTracker_AcceptsNewEventTypes(t *testing.T) {
+	cfg := GitHubTrackerConfig{
+		Repos: []GitHubTrackerRepoConfig{
+			{Owner: "foo", Repo: "bar", EventTypes: []string{"issues", "create", "delete"}},
+		},
+	}
+	if err := validateGitHubTracker(cfg); err != nil {
+		t.Fatalf("expected issues/create/delete to be valid event types, got %v", err)
+	}
+}
+
 func TestValidateGitHubTracker_RequiresPositiveIntervalWhenEnabled(t *testing.T) {
 	cfg := GitHubTrackerConfig{Enabled: true, IntervalMinutes: 0}
 	if err := validateGitHubTracker(cfg); err == nil {

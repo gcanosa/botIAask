@@ -18,7 +18,8 @@ type GitHubTrackerRepoConfig struct {
 	Repo     string   `yaml:"repo"`
 	Channels []string `yaml:"channels,omitempty"` // "network:#chan" entries, see SplitNetworkChannel
 	// EventTypes restricts which event kinds this repo announces (subset of
-	// "push"/"pull_request"/"release"). Empty means all three.
+	// "push"/"pull_request"/"release"/"issues"/"create"/"delete", the last two covering
+	// branch/tag creation and deletion). Empty means all of them.
 	EventTypes []string `yaml:"event_types,omitempty"`
 	// TokenEncrypted is the AES-256-GCM ciphertext (base64) of a GitHub PAT, produced by
 	// github.Cryptor. Empty means the repo is polled unauthenticated (public repo).

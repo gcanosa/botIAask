@@ -2,6 +2,7 @@ package github
 
 import (
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"botIAask/config"
@@ -28,6 +29,11 @@ func TestAnnounceNewEvents_DedupAndEventTypeFilter(t *testing.T) {
 	}
 	bot := &recordingBot{}
 	f := NewFetcher(&config.Config{}, bot, d, c)
+
+	// Avoid a real network call to the URL shortener in this test.
+	oldShorten := shortenURLFunc
+	shortenURLFunc = func(link, _ string) string { return link }
+	t.Cleanup(func() { shortenURLFunc = oldShorten })
 
 	repoCfg := config.GitHubTrackerRepoConfig{
 		Owner: "owner", Repo: "repo", Channels: []string{"libera:#dev"},
@@ -67,5 +73,54 @@ func TestAllowedEventTypeSet_RestrictsToConfigured(t *testing.T) {
 	}
 	if allowed("PullRequestEvent") {
 		t.Fatal("expected unconfigured type to be filtered out")
+	}
+}
+
+func TestAllowedEventTypeSet_NewEventTypes(t *testing.T) {
+	allowed := allowedEventTypeSet([]string{"issues", "create", "delete"})
+	if !allowed("IssuesEvent") || !allowed("CreateEvent") || !allowed("DeleteEvent") {
+		t.Fatal("expected issues/create/delete filter strings to map to their raw event types")
+	}
+	if allowed("PushEvent") {
+		t.Fatal("expected push to be filtered out when not in the list")
+	}
+}
+
+// TestAnnounceNewEvents_StoresPreCollapseMessage confirms MarkEventSeen persists each raw
+// event's own RefID/Message, not the collapsed/suffixed broadcast text, so "!gh search"
+// can find every real event even when a burst collapses to one broadcast line.
+func TestAnnounceNewEvents_StoresPreCollapseMessage(t *testing.T) {
+	d, err := NewDatabase(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	defer d.Close()
+	c, err := NewCryptor(filepath.Join(t.TempDir(), "key"))
+	if err != nil {
+		t.Fatalf("NewCryptor: %v", err)
+	}
+	bot := &recordingBot{}
+	f := NewFetcher(&config.Config{}, bot, d, c)
+	oldShorten := shortenURLFunc
+	shortenURLFunc = func(link, _ string) string { return link }
+	t.Cleanup(func() { shortenURLFunc = oldShorten })
+
+	repoCfg := config.GitHubTrackerRepoConfig{Owner: "owner", Repo: "repo", Channels: []string{"libera:#dev"}}
+	events := []RawEvent{
+		rawEvent("1", "PushEvent", "alice", "owner/repo", `{"ref":"refs/heads/main","head":"abc1234"}`),
+		rawEvent("2", "PushEvent", "bob", "owner/repo", `{"ref":"refs/heads/main","head":"def5678"}`),
+	}
+	f.announceNewEvents(repoCfg, events)
+
+	// Broadcast collapses to one line, but both events must have their own stored row.
+	if len(bot.broadcasts) != 1 {
+		t.Fatalf("expected 1 collapsed broadcast, got %d: %v", len(bot.broadcasts), bot.broadcasts)
+	}
+	rows, err := d.SearchEvents("owner/repo", regexp.MustCompile("abc1234|def5678"), 10)
+	if err != nil {
+		t.Fatalf("SearchEvents: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 stored rows (one per raw event), got %d: %+v", len(rows), rows)
 	}
 }

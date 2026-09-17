@@ -41,7 +41,10 @@ func validateGitHubTracker(cfg GitHubTrackerConfig) error {
 		return fmt.Errorf("github_tracker: interval_minutes must be positive when enabled")
 	}
 	seen := make(map[string]bool, len(cfg.Repos))
-	validEvents := map[string]bool{"push": true, "pull_request": true, "release": true}
+	validEvents := map[string]bool{
+		"push": true, "pull_request": true, "release": true,
+		"issues": true, "create": true, "delete": true,
+	}
 	for _, r := range cfg.Repos {
 		owner := strings.TrimSpace(r.Owner)
 		repo := strings.TrimSpace(r.Repo)
@@ -55,7 +58,7 @@ func validateGitHubTracker(cfg GitHubTrackerConfig) error {
 		seen[key] = true
 		for _, et := range r.EventTypes {
 			if !validEvents[et] {
-				return fmt.Errorf("github_tracker: repo %q has invalid event_type %q (must be push, pull_request, or release)", owner+"/"+repo, et)
+				return fmt.Errorf("github_tracker: repo %q has invalid event_type %q (must be push, pull_request, release, issues, create, or delete)", owner+"/"+repo, et)
 			}
 		}
 	}

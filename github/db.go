@@ -3,6 +3,7 @@ package github
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"time"
 
 	"botIAask/db"
@@ -34,6 +35,13 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("github: create seen_events: %w", err)
 	}
 	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_github_seen_repo ON seen_events (repo)`)
+
+	// Migration: persist enough of each event to support "!gh search" locally (originally
+	// seen_events was a pure dedup cache with no human-readable content at all).
+	_, _ = sqldb.Exec(`ALTER TABLE seen_events ADD COLUMN ref_id TEXT`)
+	_, _ = sqldb.Exec(`ALTER TABLE seen_events ADD COLUMN message TEXT`)
+	_, _ = sqldb.Exec(`UPDATE seen_events SET ref_id = '' WHERE ref_id IS NULL`)
+	_, _ = sqldb.Exec(`UPDATE seen_events SET message = '' WHERE message IS NULL`)
 
 	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS repo_etags (
@@ -68,15 +76,57 @@ func (d *Database) EventSeen(eventKey string) (bool, error) {
 	return true, nil
 }
 
-// MarkEventSeen records eventKey as announced. INSERT OR IGNORE tolerates a race between
-// overlapping Fetch() calls (e.g. a slow poll cycle still running when the next ticks)
-// without erroring.
-func (d *Database) MarkEventSeen(eventKey, repo, kind string, occurredAt time.Time) error {
+// MarkEventSeen records eventKey as announced, along with enough of the announcement
+// (refID, message) to support "!gh search" locally afterward. INSERT OR IGNORE tolerates
+// a race between overlapping Fetch() calls (e.g. a slow poll cycle still running when the
+// next ticks) without erroring.
+func (d *Database) MarkEventSeen(eventKey, repo, kind, refID, message string, occurredAt time.Time) error {
 	_, err := d.db.Exec(
-		`INSERT OR IGNORE INTO seen_events (event_key, repo, kind, occurred_at) VALUES (?, ?, ?, ?)`,
-		eventKey, repo, kind, occurredAt,
+		`INSERT OR IGNORE INTO seen_events (event_key, repo, kind, ref_id, message, occurred_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		eventKey, repo, kind, refID, message, occurredAt,
 	)
 	return err
+}
+
+// SeenEvent is one row read back from seen_events, for "!gh search"'s local-history path.
+type SeenEvent struct {
+	EventKey   string
+	Repo       string
+	Kind       string
+	RefID      string
+	Message    string
+	OccurredAt time.Time
+}
+
+// SearchEvents returns up to limit rows for repo (newest first) whose message or ref_id
+// matches pattern. Matching happens in Go (regexp.MatchString per row after a plain
+// "WHERE repo = ?" fetch), not via a SQL REGEXP extension: seen_events is small and
+// already filtered to one repo (bounded further by the ~90 day retention window), so a
+// full scan-and-filter in Go is simpler and adds no new dependency.
+func (d *Database) SearchEvents(repo string, pattern *regexp.Regexp, limit int) ([]SeenEvent, error) {
+	rows, err := d.db.Query(
+		`SELECT event_key, repo, kind, ref_id, message, occurred_at FROM seen_events WHERE repo = ? ORDER BY occurred_at DESC`,
+		repo,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SeenEvent
+	for rows.Next() {
+		var e SeenEvent
+		if err := rows.Scan(&e.EventKey, &e.Repo, &e.Kind, &e.RefID, &e.Message, &e.OccurredAt); err != nil {
+			return nil, err
+		}
+		if pattern.MatchString(e.Message) || pattern.MatchString(e.RefID) {
+			out = append(out, e)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, rows.Err()
 }
 
 // GetETag returns the stored ETag for repo, or "" if none is stored yet.
