@@ -41,6 +41,7 @@ var userLines = []line{
 	{cmd: "!peso", desc: "Argentine peso rate view"},
 	{cmd: "!convert <amount> <from> <to>", desc: "Convert between currencies, e.g. !convert 100 USD ARS"},
 	{cmd: "!crypto", desc: "Crypto market view"},
+	{cmd: "!ping", desc: "Measure your round-trip lag to the bot (CTCP PING)"},
 	{cmd: "!ping <host>", desc: "Single probe: RTT in ms, or unreachable"},
 	{cmd: "!reminder ...", desc: "add <time> <note> (time e.g. 30m/2h/3d, 0=on next join) | del <id> | list | read <id>"},
 	{cmd: "!tell <nick> <msg>", desc: "Leave a message; delivered when that nick is next seen"},

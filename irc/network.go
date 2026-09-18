@@ -27,6 +27,10 @@ type ircNetwork struct {
 
 	conn *ircevent.Connection
 
+	// pendingPings: in-flight CTCP PING round-trips keyed by folded nick (see ping_cmd.go).
+	pingMu       sync.Mutex
+	pendingPings map[string]pendingPing
+
 	// statsMu guards connected/connectionTime (shadows nothing on Bot; Bot's own statsMu
 	// guards the unrelated global aiRequests counter).
 	statsMu        sync.Mutex
@@ -429,6 +433,9 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		target := e.Params[0]
 		message := e.Params[1]
 		sender := e.Nick()
+		if n.handlePingReply(sender, message) {
+			return
+		}
 		logger.LogChannelEvent(n.name, target, logger.EventNotice, sender, message, "")
 	})
 
