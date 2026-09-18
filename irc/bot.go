@@ -787,7 +787,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				return
 			}
 			if len(parts) < 2 {
-				b.sendPrivmsg(target, fmt.Sprintf("Usage: %sping <host> — e.g. %sping 1.1.1.1", b.pfx(), b.pfx()))
+				b.startCTCPPing(target, sender)
 				return
 			}
 			b.handlePingCommand(target, sender, parts[1])
