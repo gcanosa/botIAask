@@ -407,6 +407,7 @@ function showPanel(panelId) {
         fetchCryptoChart();
         fetchForexChart();
     }
+    if (panelId === 'chanstats') initChanStats();
     if (panelId === 'logs') {
         fetchLogCatalog();
         bindLogsPanelListeners();
@@ -4276,3 +4277,205 @@ window.saveGitHubSettings = saveGitHubSettings;
 window.addGitHubRepo = addGitHubRepo;
 window.deleteGitHubRepo = deleteGitHubRepo;
 window.editGitHubRepoPrompt = editGitHubRepoPrompt;
+
+
+// ---------------------------------------------------------------------------
+// Channel Stats panel (data: /api/chanstats, rolled up server-side from IRC logs)
+// ---------------------------------------------------------------------------
+const csState = { days: 30, net: '', chan: '', charts: {}, bound: false };
+const CS_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const CS_MODE_NAMES = { o: 'op', h: 'halfop', v: 'voice', a: 'admin', q: 'owner', b: 'ban' };
+
+function csVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function csRgba(color, a) {
+    let c = color.replace('#', '');
+    if (c.length === 3) c = c.split('').map(x => x + x).join('');
+    const n = parseInt(c, 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+function csFmt(n) { return Number(n || 0).toLocaleString(); }
+function csEsc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
+function csHour(h) { return String(h).padStart(2, '0') + ':00'; }
+
+function csTipShow(ev, html) {
+    const tip = document.getElementById('cs-tip');
+    tip.innerHTML = html;
+    tip.classList.remove('hidden');
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, ev.clientX + 14)) + 'px';
+    tip.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, ev.clientY + 14)) + 'px';
+}
+function csTipHide() { document.getElementById('cs-tip').classList.add('hidden'); }
+
+function initChanStats() {
+    if (!csState.bound) {
+        csState.bound = true;
+        document.getElementById('cs-range').addEventListener('click', (e) => {
+            const b = e.target.closest('button[data-days]');
+            if (!b) return;
+            csState.days = parseInt(b.dataset.days, 10);
+            document.querySelectorAll('#cs-range button').forEach(x => x.classList.toggle('active', x === b));
+            fetchChanStats();
+        });
+        document.getElementById('cs-channels').addEventListener('click', (e) => {
+            const b = e.target.closest('.cs-chip');
+            if (!b) return;
+            csState.net = b.dataset.net || '';
+            csState.chan = b.dataset.chan || '';
+            fetchChanStats();
+        });
+    }
+    fetchChanStats();
+}
+
+async function fetchChanStats() {
+    const empty = document.getElementById('cs-empty');
+    const body = document.getElementById('cs-body');
+    try {
+        const q = new URLSearchParams({ days: csState.days, network: csState.net, channel: csState.chan });
+        const res = await fetch('/api/chanstats?' + q, { credentials: 'same-origin' });
+        if (res.status === 401) { empty.textContent = 'Admin login required to view channel stats.'; empty.classList.remove('hidden'); body.classList.add('hidden'); return; }
+        if (!res.ok) throw new Error(await res.text());
+        renderChanStats(await res.json());
+    } catch (err) {
+        empty.textContent = 'Could not load channel stats: ' + err.message;
+        empty.classList.remove('hidden');
+        body.classList.add('hidden');
+    }
+}
+
+function csChart(id, cfg) {
+    if (csState.charts[id]) csState.charts[id].destroy();
+    csState.charts[id] = new Chart(document.getElementById(id).getContext('2d'), cfg);
+}
+
+function renderChanStats(d) {
+    const empty = document.getElementById('cs-empty');
+    const body = document.getElementById('cs-body');
+    const chans = d.channels || [];
+    empty.textContent = 'No channel history yet. Rollups are built from logs/ on startup and refreshed every 10 minutes.';
+    empty.classList.toggle('hidden', chans.length > 0);
+    body.classList.toggle('hidden', chans.length === 0);
+
+    // channel chips; drop a stale selection
+    if ((csState.chan || csState.net) && !chans.some(c => c.network === csState.net && c.channel === csState.chan)) { csState.net = ''; csState.chan = ''; }
+    const multiNet = new Set(chans.map(c => c.network)).size > 1;
+    const total = chans.reduce((a, c) => a + c.msgs + c.actions, 0);
+    document.getElementById('cs-channels').innerHTML =
+        `<button type="button" class="cs-chip ${!csState.chan ? 'active' : ''}">All channels <small>${csFmt(total)}</small></button>` +
+        chans.map(c => `<button type="button" class="cs-chip ${c.network === csState.net && c.channel === csState.chan ? 'active' : ''}" data-net="${csEsc(c.network)}" data-chan="${csEsc(c.channel)}" title="${csEsc(c.network)} — busiest ${csHour(c.peak_hour)}, ${csFmt(c.joins)} joins / ${csFmt(c.parts)} parts">${csEsc(c.channel)}${multiNet ? ` <small>${csEsc(c.network)}</small>` : ''} <small>${csFmt(c.msgs + c.actions)}</small></button>`).join('');
+    if (!chans.length) return;
+
+    const daily = d.daily || [];
+    const sum = (k) => daily.reduce((a, x) => a + x[k], 0);
+    const msgs = sum('msgs'), actions = sum('actions');
+    const hourTotal = d.hours.reduce((a, b) => a + b, 0);
+    const peakH = d.hours.indexOf(Math.max(...d.hours));
+    const bestDay = daily.reduce((b, x) => (x.msgs + x.actions > b.msgs + b.actions ? x : b), daily[0] || { day: '', msgs: 0, actions: 0 });
+    const bestWd = bestDay.day ? CS_WEEKDAYS[new Date(bestDay.day + 'T12:00:00').getDay()] : '';
+    const cmdTotal = (d.cmds || []).reduce((a, c) => a + c.count, 0);
+    const modeTotal = Object.values(d.modes || {}).reduce((a, b) => a + b, 0);
+    const activeDays = daily.filter(x => x.msgs + x.actions > 0).length;
+    const kpi = (l, v, s) => `<div class="cs-kpi"><div class="cs-kpi__label">${l}</div><div class="cs-kpi__value">${v}</div><div class="cs-kpi__sub">${s}</div></div>`;
+    document.getElementById('cs-kpis').innerHTML = [
+        kpi('Messages', csFmt(msgs), `${csFmt(actions)} actions`),
+        kpi('Avg / day', csFmt(Math.round((msgs + actions) / Math.max(csState.days, 1))), `${activeDays} active of ${csState.days} days`),
+        kpi('Busiest hour', hourTotal ? csHour(peakH) : '—', hourTotal ? `${(100 * d.hours[peakH] / hourTotal).toFixed(1)}% of activity` : 'no data'),
+        kpi('Best day', csFmt(bestDay.msgs + bestDay.actions), bestDay.day ? `${bestWd} ${bestDay.day}` : '—'),
+        kpi('Joins / parts', `${csFmt(sum('joins'))} / ${csFmt(sum('parts'))}`, 'membership churn'),
+        kpi('Commands', csFmt(cmdTotal), 'bot commands used'),
+        kpi('Mode changes', csFmt(modeTotal), 'ops, voices, bans…'),
+        kpi('Topic changes', csFmt(sum('topics')), 'in range'),
+    ].join('');
+
+    const primary = csVar('--primary') || '#38bdf8', accent = csVar('--accent') || '#c084fc';
+    const grid = csVar('--chart-grid') || 'rgba(255,255,255,0.06)', tick = csVar('--chart-tick') || '#94a3b8';
+    const baseScales = { y: { beginAtZero: true, grid: { color: grid }, ticks: { color: tick, precision: 0 } }, x: { grid: { display: false }, ticks: { color: tick } } };
+
+    // busy hours
+    const hmax = Math.max(1, ...d.hours);
+    csChart('cs-hours', {
+        type: 'bar',
+        data: { labels: d.hours.map((_, h) => String(h).padStart(2, '0')), datasets: [{ data: d.hours, borderRadius: 4, backgroundColor: d.hours.map(v => csRgba(v / hmax > 0.6 ? accent : primary, 0.25 + 0.75 * v / hmax)) }] },
+        options: {
+            responsive: true, maintainAspectRatio: false, scales: baseScales,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (i) => `${csHour(i[0].dataIndex)} – ${csHour((i[0].dataIndex + 1) % 24)}`,
+                        label: (i) => `${csFmt(i.raw)} messages`,
+                        afterLabel: (i) => hourTotal ? `${(100 * i.raw / hourTotal).toFixed(1)}% of activity · ${(i.raw / (hourTotal / 24)).toFixed(1)}× the hourly average` : '',
+                    },
+                },
+            },
+        },
+    });
+
+    // weekday x hour heatmap (Mon..Sun)
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const hm = Math.max(1, ...d.heat.flat());
+    let html = '<div></div>' + Array.from({ length: 24 }, (_, h) => `<div class="cs-heat__hour">${h}</div>`).join('');
+    order.forEach(wd => {
+        html += `<div>${CS_WEEKDAYS[wd]}</div>`;
+        d.heat[wd].forEach((v, h) => {
+            const bg = v ? csRgba(primary, 0.15 + 0.85 * v / hm) : 'var(--surface-ghost)';
+            html += `<div class="cs-heat__cell" data-tip="&lt;b&gt;${CS_WEEKDAYS[wd]} ${csHour(h)}&lt;/b&gt;&lt;br&gt;${csFmt(v)} messages" style="background:${bg}"></div>`;
+        });
+    });
+    const heat = document.getElementById('cs-heat');
+    heat.innerHTML = html;
+    heat.onmouseover = (e) => { const c = e.target.closest('.cs-heat__cell'); if (c) csTipShow(e, c.dataset.tip.replace(/&lt;/g, '<').replace(/&gt;/g, '>')); };
+    heat.onmousemove = (e) => { if (e.target.closest('.cs-heat__cell')) csTipShow(e, document.getElementById('cs-tip').innerHTML); };
+    heat.onmouseleave = csTipHide;
+
+    // daily trend
+    csChart('cs-daily', {
+        type: 'line',
+        data: {
+            labels: daily.map(x => x.day.slice(5)),
+            datasets: [
+                { label: 'Messages', data: daily.map(x => x.msgs + x.actions), borderColor: primary, backgroundColor: csRgba(primary, 0.15), fill: true, tension: 0.35, pointRadius: daily.length > 60 ? 0 : 3, pointHoverRadius: 5 },
+                { label: 'Joins', data: daily.map(x => x.joins), borderColor: accent, borderDash: [4, 4], borderWidth: 1.5, tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, scales: baseScales,
+            plugins: {
+                legend: { labels: { color: tick, usePointStyle: true, boxWidth: 8 } },
+                tooltip: {
+                    callbacks: {
+                        title: (i) => { const x = daily[i[0].dataIndex]; return `${CS_WEEKDAYS[new Date(x.day + 'T12:00:00').getDay()]} ${x.day}`; },
+                        afterBody: (i) => { const x = daily[i[0].dataIndex]; return [`${csFmt(x.msgs)} msgs · ${csFmt(x.actions)} actions`, `${csFmt(x.parts)} parts · ${csFmt(x.topics)} topic changes`]; },
+                    },
+                },
+            },
+        },
+    });
+
+    const hbar = (id, list, color, unit) => {
+        csChart(id, {
+            type: 'bar',
+            data: { labels: list.map(x => x.name), datasets: [{ data: list.map(x => x.count), backgroundColor: csRgba(color, 0.7), borderRadius: 4 }] },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                scales: { x: { beginAtZero: true, grid: { color: grid }, ticks: { color: tick, precision: 0 } }, y: { grid: { display: false }, ticks: { color: tick } } },
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: (i) => `${csFmt(i.raw)} ${unit}` } } },
+            },
+        });
+    };
+    hbar('cs-nicks', d.nicks || [], primary, 'messages');
+    hbar('cs-cmds', d.cmds || [], accent, 'uses');
+
+    // modes
+    const modes = Object.entries(d.modes || {}).sort((a, b) => b[1] - a[1]);
+    document.getElementById('cs-modes').innerHTML = modes.length
+        ? modes.map(([m, n]) => `<div class="cs-mode ${m[0] === '+' ? 'cs-mode--plus' : 'cs-mode--minus'}"><span>${csEsc(m)} ${CS_MODE_NAMES[m[1]] || ''}</span><b>${csFmt(n)}</b></div>`).join('') +
+          ((d.mode_by || []).length ? `<div class="cs-modeby">Most active: ${d.mode_by.map(x => `${csEsc(x.name)} (${csFmt(x.count)})`).join(' · ')}</div>` : '')
+        : '<p class="cs-none">No mode changes recorded in this range (mode logging started with this feature; older logs have none).</p>';
+
+    // topics
+    document.getElementById('cs-topics').innerHTML = (d.topics || []).length
+        ? d.topics.map(t => `<div class="cs-topic">${csEsc(t.text)}<small>${csEsc(t.nick)} · ${csEsc(t.day)} ${csEsc(t.time)}</small></div>`).join('')
+        : '<p class="cs-none">No topic changes recorded in this range.</p>';
+}

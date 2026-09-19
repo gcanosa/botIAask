@@ -63,6 +63,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, err
 	}
 
+	if err := createChanActivity(sqldb); err != nil {
+		return nil, err
+	}
+
 	return &Database{db: sqldb}, nil
 }
 

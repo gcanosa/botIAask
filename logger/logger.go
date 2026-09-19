@@ -31,6 +31,8 @@ const (
 	EventNick
 	EventAction
 	EventNotice
+	EventMode  // sender = who set it, message = "+o nick" (mode string + args)
+	EventTopic // sender = who changed it, message = new topic
 )
 
 // LogChannelEvent logs an event to the daily channel log file.
@@ -90,6 +92,10 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 		logLine = fmt.Sprintf("[%s] *** %s was kicked by %s (%s)\n", timeStr, target, sender, reason)
 	case EventNick:
 		logLine = fmt.Sprintf("[%s] *** %s is now known as %s\n", timeStr, sender, message)
+	case EventMode:
+		logLine = fmt.Sprintf("[%s] *** %s sets mode %s\n", timeStr, sender, message)
+	case EventTopic:
+		logLine = fmt.Sprintf("[%s] *** %s changed the topic to: %s\n", timeStr, sender, message)
 	default:
 		logLine = fmt.Sprintf("[%s] <%s> %s\n", timeStr, sender, message)
 	}

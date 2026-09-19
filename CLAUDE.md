@@ -52,7 +52,7 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 | File | Owner |
 |------|-------|
 | `rss_seen.db` | `rss` package |
-| `stats.db` | `stats` package |
+| `stats.db` | `stats` package (`bot_stats` snapshots + `chan_activity` per-channel daily rollups for web Channel Stats, built from `logs/` by `stats.RunChanRollup`; `logger.ParseDayLog` is the parser) |
 | `bookmarks.db` | `bookmarks` package |
 | `uploads.db` | `uploads` package |
 | `crypto.db` | `crypto` package |
