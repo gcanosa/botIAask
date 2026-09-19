@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestFormatPush_TagCarriesShortSHA(t *testing.T) {
+func TestFormatPush_ShowsShortSHAOnce(t *testing.T) {
 	msg := formatPush("owner/repo", "alice", "main", 1, "", "", "https://github.com/owner/repo/commit/abcd1234", "abcd123")
-	if !strings.Contains(msg, "[PUSH abcd123]") {
-		t.Fatalf("expected tag with short SHA, got %q", msg)
+	if !strings.Contains(msg, "[PUSH]") || strings.Count(msg, "abcd123") != 2 { // body + link URL
+		t.Fatalf("expected plain PUSH tag and SHA in body, got %q", msg)
 	}
 }
 
