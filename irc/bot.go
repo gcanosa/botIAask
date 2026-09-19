@@ -1730,20 +1730,6 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-func statsOnOff(v bool) string {
-	if v {
-		return "on"
-	}
-	return "off"
-}
-
-func statsIntOrNA(v int) string {
-	if v < 0 {
-		return "n/a"
-	}
-	return strconv.Itoa(v)
-}
-
 // sendAdminStats sends a multi-line snapshot for !stats (logged-in admins only).
 func (b *ircNetwork) sendAdminStats(target, sender string) {
 	b.statsMu.Lock()
@@ -1778,14 +1764,51 @@ func (b *ircNetwork) sendAdminStats(target, sender string) {
 	}
 	b.loginsMu.RUnlock()
 
-	snap := "off"
-	if b.tracker != nil && b.tracker.IsEnabled() {
-		snap = "on"
+	cfg := b.getCfg()
+
+	// Line 1: BOT
+	conn := statsColor(statsRed, "● offline")
+	if b.isConnected() {
+		conn = statsColor(statsGreen, "● online")
 	}
+	line1 := statsChip("12", "BOT") + " " + statsJoin(
+		statsColor(statsWhite, meta.Version), statsKV("net", b.name), conn,
+		statsKV("up", appU), statsKV("sess", sessU),
+		statsColor(statsGray, runtime.Version()), statsKV("goroutines", strconv.Itoa(nGo)),
+	)
 
-	line1 := fmt.Sprintf("Bot %s | net=%s | IRC=%s | chans=%d | go=%d | ign=%d | AI=%d | up app=%s sess=%s | activity_snap=%s",
-		meta.Version, b.name, statsOnOff(b.isConnected()), nCh, nGo, nIgn, aiN, appU, sessU, snap)
+	// Line 2: ACTIVITY (last 24h from the snapshot tracker)
+	line2 := statsChip("13", "ACTIVITY") + " "
+	if b.tracker != nil && b.tracker.IsEnabled() {
+		hist, err := b.tracker.GetHistory(time.Now().Add(-24*time.Hour), b.name)
+		if err != nil {
+			log.Printf("stats: history: %v", err)
+		}
+		var msgs, acts, ai, joins, parts, peak int
+		for _, e := range hist {
+			msgs += e.Messages
+			acts += e.Actions
+			ai += e.AIRequests
+			joins += e.Joins
+			parts += e.Parts
+			peak = max(peak, e.UserCount)
+		}
+		line2 += statsColor(statsGray, "24h:") + " " + statsJoin(
+			statsKV("msgs", statsGroup(msgs)), statsKV("actions", statsGroup(acts)),
+			statsKV("AI", statsGroup(ai)), statsKV("join/part", statsGroup(joins)+"/"+statsGroup(parts)),
+			statsKV("peak users", statsGroup(peak)),
+		)
+	} else {
+		line2 += statsColor(statsGray, "snapshots off")
+	}
+	line2 += " " + statsColor(statsGray, "· AI since start:") + " " + statsColor(statsWhite, statsGroup(aiN))
 
+	// Line 3: CHANNELS
+	line3 := statsChip("08", "CHANNELS") + " " + statsJoin(
+		statsKV("joined", strconv.Itoa(nCh)), statsKV("ignored", strconv.Itoa(nIgn)), statsKV("admins", strconv.Itoa(nAdm)),
+	)
+
+	// Line 4: DATA
 	pending, bookm, rem, pastes, files := -1, -1, -1, -1, -1
 	if b.uploadsDB != nil {
 		if n, err := b.uploadsDB.CountPendingApproval(); err != nil {
@@ -1816,33 +1839,46 @@ func (b *ircNetwork) sendAdminStats(target, sender string) {
 			rem = n
 		}
 	}
-
-	line2 := fmt.Sprintf("Queue=%s | bkm=%s | rem=%s | paste=%s | file=%s | admins=%d",
-		statsIntOrNA(pending), statsIntOrNA(bookm), statsIntOrNA(rem), statsIntOrNA(pastes), statsIntOrNA(files), nAdm)
-
-	newsDB := "?"
+	newsDB := -1
 	if b.rssDB != nil {
 		if n, err := b.rssDB.CountSeenNews(); err != nil {
 			log.Printf("stats: news db: %v", err)
 		} else {
-			newsDB = strconv.Itoa(n)
+			newsDB = n
 		}
 	}
-	line3 := fmt.Sprintf("RSS=%s, retain=%d, announce=%s, newsDB=%s rows",
-		statsOnOff(b.getCfg().RSS.Enabled), b.getCfg().RSS.RetentionCount, statsOnOff(b.getCfg().RSS.AnnounceToIRCEnabled()), newsDB)
+	queue := statsNum(pending)
+	if pending > 0 {
+		queue = statsColor(statsYellow, statsGroup(pending))
+	}
+	line4 := statsChip("09", "DATA") + " " + statsJoin(
+		statsColor(statsGray, "queue")+" "+queue,
+		statsColor(statsGray, "bookmarks")+" "+statsNum(bookm),
+		statsColor(statsGray, "reminders")+" "+statsNum(rem),
+		statsColor(statsGray, "pastes")+" "+statsNum(pastes),
+		statsColor(statsGray, "files")+" "+statsNum(files),
+		statsColor(statsGray, "news rows")+" "+statsNum(newsDB),
+	)
 
+	// Line 5: SERVICES + HOST
 	host := sysinfo.Collect(400 * time.Millisecond)
-	ramPart := "RAM=n/a"
-	if host.RAMAvailable != "" {
-		ramPart = fmt.Sprintf("RAM avail=%s (%.1f%% used)", host.RAMAvailable, host.RAMUsedPct)
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	hostParts := []string{
+		statsColor(statsGray, "RSS") + " " + statsOnOffC(cfg.RSS.Enabled),
+		statsColor(statsGray, "GitHub") + " " + statsOnOffC(cfg.GitHubTracker.Enabled) + statsColor(statsGray, fmt.Sprintf(" (%d repos)", len(cfg.GitHubTracker.Repos))),
+		statsColor(statsGray, runtime.GOOS+"/"+runtime.GOARCH),
 	}
-	cpuPart := "CPU=n/a"
 	if host.CPUValid {
-		cpuPart = fmt.Sprintf("CPU=%.1f%%", host.CPUPct)
+		hostParts = append(hostParts, statsPct("CPU", host.CPUPct))
 	}
-	line4 := fmt.Sprintf("%s/%s | %s | %s", runtime.GOOS, runtime.GOARCH, ramPart, cpuPart)
+	if host.RAMAvailable != "" {
+		hostParts = append(hostParts, statsPct("RAM", host.RAMUsedPct)+statsColor(statsGray, " ("+host.RAMAvailable+" free)"))
+	}
+	hostParts = append(hostParts, statsKV("heap", fmt.Sprintf("%d MB", ms.HeapAlloc>>20)))
+	line5 := statsChip("06", "SYS") + " " + statsJoin(hostParts...)
 
-	b.sendPrivmsgMentionedLines(target, sender, line1, line2, line3, line4)
+	b.sendPrivmsgMentionedLines(target, sender, line1, line2, line3, line4, line5)
 }
 
 // sanitize cleans a string for IRC compatibility using ircutils.
