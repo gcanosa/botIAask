@@ -498,20 +498,9 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 	isLoggedInAdmin := b.loggedInAdmins[adminSessionKey(b.name, sender)]
 	b.loginsMu.RUnlock()
 
-	// !help command
-	if strings.HasPrefix(message, b.pfx()+"help") {
-		public := fmt.Sprintf("Commands: %s%s <query>, %sbc <expr>, %sweather <place>, %smovie <title>, %sflight <IATA> [date], %snews [limit], %sbookmark ADD <URL> [nickname] | %sbookmark FIND <text>, %suptime, %stime, %sspec, %spaste, %supload, %sdownload [N], %seuro, %speso, %sconvert <amount> <from> <to>, %scrypto, %sping <host>, %sreminder add <time> <note>/del/list/read, %stell <nick> <msg>, %sseen <nick>, %stodo add|private|list|del",
-			b.pfx(), b.cmd(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
-		if isAdmin && isLoggedInAdmin {
-			admin := fmt.Sprintf("Admin: %sadmin off, %sjoin #chan [key], %spart #chan, %signore nick, %sstats, %ssay #chan msg, %squit msg, %srehash, %snews on/off, %snews start/stop (IRC announce), %sop [nick], %sdeop [nick], %svoice [nick], %sdevoice [nick], %sticket pending/approve/cancel [ID], %sgh list/add/del/search",
-				b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx(), b.pfx())
-			b.sendPrivmsgMentionedLines(target, sender, public, admin)
-		} else if isAdmin {
-			merged := public + fmt.Sprintf(" | Admin: Auth required using %sadmin", b.pfx())
-			b.sendPrivmsgMentionedLines(target, sender, merged)
-		} else {
-			b.sendPrivmsgMentionedLines(target, sender, public)
-		}
+	// !help [command] — alphabetical command list, or usage + explanation for one command
+	if message == b.pfx()+"help" || strings.HasPrefix(message, b.pfx()+"help ") {
+		b.handleHelpCommand(target, sender, message, isAdmin, isLoggedInAdmin)
 		return
 	}
 
