@@ -528,6 +528,20 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 	})
 
+	// Channel MODE / TOPIC changes are logged so the rollup (web Channel Stats) can count them.
+	n.conn.AddCallback("MODE", func(e ircmsg.Message) {
+		if len(e.Params) < 2 || !ircChannelTarget(e.Params[0]) {
+			return
+		}
+		logger.LogChannelEvent(n.name, e.Params[0], logger.EventMode, e.Nick(), strings.Join(e.Params[1:], " "), "")
+	})
+	n.conn.AddCallback("TOPIC", func(e ircmsg.Message) {
+		if len(e.Params) < 2 || !ircChannelTarget(e.Params[0]) {
+			return
+		}
+		logger.LogChannelEvent(n.name, e.Params[0], logger.EventTopic, e.Nick(), e.Params[1], "")
+	})
+
 	// QUIT and NICK are not channel-specific, we'll log them globally or skip.
 	n.conn.AddCallback("QUIT", func(e ircmsg.Message) {
 		sender := e.Nick()

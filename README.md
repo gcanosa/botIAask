@@ -147,6 +147,7 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 
 - **Admin Control Panel**: Manage pastes, toggle bot features, and manage web user accounts.
 - **Live Logs**: Dedicated view for watching channel activity in real-time.
+- **Channel Stats** (admin): per-channel history with a busy-hours chart, weekday×hour heatmap, daily trend, top talkers, command usage, `+o/+h/+v/…` mode activity and topic changes; 7d/30d/90d/1y ranges, hover for details. Data is a compact daily rollup (`chan_activity` in `data/stats.db`, ~0.5 KB per channel-day) built from `logs/` and `logs/archive/` on startup (so existing history is backfilled) and refreshed every 10 minutes; kept for `stats.chan_retention_days` (default 365). Mode/topic changes are only counted from when this feature first ran, since older logs don't contain them.
 - **Paste Viewer**: Publicly accessible view for approved pastes (`/p/<ID>`).
 - **File uploads**: Admin **Uploads** panel, configurable max size; approved files at `/f/<ID>`.
 - **Market View**: Live financial data panel for crypto and currency rates.

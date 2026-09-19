@@ -120,6 +120,7 @@ stats:
     interval: 60
     save_to_db: true
     retention_days: 7
+    chan_retention_days: 365   # per-channel daily history for the web Channel Stats page
 uploads:
     max_file_mb: 200
 # OMDb for !movie (year, IMDb rating, short plot). Key: https://www.omdbapi.com/apikey.aspx

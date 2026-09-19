@@ -200,6 +200,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
+	mux.HandleFunc("/api/chanstats", s.handleChanStats)
 	mux.HandleFunc("/api/bookmarks", s.handleBookmarks)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/logout", s.handleLogout)

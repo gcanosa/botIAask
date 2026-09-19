@@ -188,6 +188,8 @@ type StatsConfig struct {
 	Interval      int   `yaml:"interval"` // in seconds
 	SaveToDB      *bool `yaml:"save_to_db,omitempty"`
 	RetentionDays int   `yaml:"retention_days"`
+	// ChanRetentionDays: how long per-channel daily rollups (web Channel Stats) are kept; 0 = 365.
+	ChanRetentionDays int `yaml:"chan_retention_days,omitempty"`
 }
 
 // ShouldSaveToDB returns whether per-interval rows are written to stats SQLite.

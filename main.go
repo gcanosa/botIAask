@@ -260,6 +260,7 @@ func main() {
 	statsTracker := stats.NewTracker(cfg, statsDB)
 	guard.Go("stats tracker", statsTracker.Start)
 	bot.SetStatsTracker(statsTracker)
+	guard.Go("chan rollup", func() { stats.RunChanRollup(statsDB, bot.GetConfig) })
 
 	// backfillNetwork/canBackfill: pre-multi-network rows (bookmarks/seen/tells/reminders/
 	// uploads/programmer_todos left with network = '') get attributed to the single

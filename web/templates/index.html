@@ -95,6 +95,12 @@
                 </div>
                 <div id="admin-nav" class="hidden">
                     <div class="nav-item">
+                        <a href="#chanstats" class="nav-link" onclick="showPanel('chanstats')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                            Channel Stats
+                        </a>
+                    </div>
+                    <div class="nav-item">
                         <a href="#admin" class="nav-link" onclick="showPanel('admin')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                             Administration
@@ -305,6 +311,41 @@
                         </div>
                     </div>
                 </div>
+            </section>
+
+            <!-- Channel Stats Panel -->
+            <section id="panel-chanstats" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Channel Stats</h1>
+                    <p class="section-subtitle">Daily history per channel, rolled up from the IRC logs (times are bot-local). Hover any chart for details.</p>
+                </div>
+                <div class="cs-controls">
+                    <div id="cs-channels" class="cs-chips" role="tablist" aria-label="Channel"></div>
+                    <div id="cs-range" class="timeframe-selector" aria-label="Range">
+                        <button type="button" class="btn-ghost" data-days="7">7d</button>
+                        <button type="button" class="btn-ghost active" data-days="30">30d</button>
+                        <button type="button" class="btn-ghost" data-days="90">90d</button>
+                        <button type="button" class="btn-ghost" data-days="365">1y</button>
+                    </div>
+                </div>
+                <p id="cs-empty" class="section-subtitle hidden">No channel history yet. Rollups are built from <code>logs/</code> on startup and refreshed every 10 minutes.</p>
+                <div id="cs-body">
+                    <div id="cs-kpis" class="cs-kpis"></div>
+                    <div class="grid grid-2">
+                        <div class="card"><div class="card-title">Busy hours <span class="cs-hint">messages by hour of day</span></div><div class="cs-chart"><canvas id="cs-hours"></canvas></div></div>
+                        <div class="card"><div class="card-title">Week heatmap <span class="cs-hint">weekday × hour</span></div><div id="cs-heat" class="cs-heat"></div></div>
+                    </div>
+                    <div class="card cs-wide"><div class="card-title">Daily activity</div><div class="cs-chart cs-chart--tall"><canvas id="cs-daily"></canvas></div></div>
+                    <div class="grid grid-2">
+                        <div class="card"><div class="card-title">Top talkers <span class="cs-hint">merged daily top lists</span></div><div class="cs-chart"><canvas id="cs-nicks"></canvas></div></div>
+                        <div class="card"><div class="card-title">Command usage</div><div class="cs-chart"><canvas id="cs-cmds"></canvas></div></div>
+                    </div>
+                    <div class="grid grid-2">
+                        <div class="card"><div class="card-title">Channel modes <span class="cs-hint">o op · h halfop · v voice · a admin · q owner · b ban</span></div><div id="cs-modes" class="cs-modes"></div></div>
+                        <div class="card"><div class="card-title">Topic changes</div><div id="cs-topics" class="cs-topics"></div></div>
+                    </div>
+                </div>
+                <div id="cs-tip" class="cs-tip hidden" role="tooltip"></div>
             </section>
 
             <!-- Logs Panel -->
