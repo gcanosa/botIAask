@@ -1165,6 +1165,12 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// !chanstats [#chan] [days] — busiest hours / top talkers from the channel logs
+	if message == b.pfx()+"chanstats" || strings.HasPrefix(message, b.pfx()+"chanstats ") {
+		b.handleChanStatsCommand(target, sender, message)
+		return
+	}
+
 	// !seen <nick> — report a nick's last observed activity
 	if strings.HasPrefix(message, b.pfx()+"seen") {
 		b.handleSeenCommand(target, sender, message)

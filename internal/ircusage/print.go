@@ -46,6 +46,7 @@ var userLines = []line{
 	{cmd: "!reminder ...", desc: "add <time> <note> (time e.g. 30m/2h/3d, 0=on next join) | del <id> | list | read <id>"},
 	{cmd: "!tell <nick> <msg>", desc: "Leave a message; delivered when that nick is next seen"},
 	{cmd: "!seen <nick>", desc: "Show when a nick was last active"},
+	{cmd: "!chanstats [#chan] [days]", desc: "Channel activity from logs: colored 24h busy-hours bar, busiest hour/day, top talkers (default 7d, max 30)"},
 	{cmd: "!todo ...", desc: "add <text> (public web) | list | del <id> | private <text> (admins: staff-only)"},
 	{cmd: "!help", desc: "Short command list in the channel"},
 }
