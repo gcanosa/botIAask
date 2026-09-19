@@ -256,7 +256,7 @@ func (f *Fetcher) Fetch() {
 			continue
 		}
 
-		f.announceNewEvents(r, result.Events)
+		f.announceNewEvents(r, token, result.RateRemaining, result.Events)
 		f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
 
 		// The poll interval is the backoff: stop working through the rest of the repo
@@ -276,7 +276,7 @@ func (f *Fetcher) Fetch() {
 // Fetcher.db is otherwise private).
 func (f *Fetcher) DB() *Database { return f.db }
 
-func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []RawEvent) {
+func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, token string, rateRemaining int, events []RawEvent) {
 	repoKey := r.FullName()
 	meta := RepoMeta{CachedDescription: r.CachedDescription}
 	eventTypeAllowed := allowedEventTypeSet(r.EventTypes)
@@ -314,6 +314,26 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, events []R
 		}
 
 		toAnnounce = append(toAnnounce, ann)
+	}
+
+	// The Events API no longer carries commit messages, so fetch the title of the newest
+	// push (the only one that survives collapsing) — one extra call per repo per cycle.
+	// Best-effort: any failure, or a nearly spent rate budget, keeps the title-less line.
+	if rateRemaining < 0 || rateRemaining > 5 {
+		for i := len(toAnnounce) - 1; i >= 0; i-- {
+			if toAnnounce[i].Kind != "push" {
+				continue
+			}
+			if enrich := toAnnounce[i].Enrich; enrich != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ci, err := FetchCommit(ctx, r.Owner, r.Repo, token, toAnnounce[i].HeadSHA)
+				cancel()
+				if err == nil && ci != nil && ci.Message != "" {
+					toAnnounce[i].Message = enrich(ci.Message)
+				}
+			}
+			break
+		}
 	}
 
 	// Collapse to at most one line per event kind so a burst of activity (several pushes

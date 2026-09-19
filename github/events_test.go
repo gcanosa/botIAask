@@ -305,3 +305,16 @@ func TestEventKey_StableAcrossReruns(t *testing.T) {
 		t.Fatalf("unexpected key shape: %q", k1)
 	}
 }
+
+func TestExtractPush_TrimmedPayloadEnrichesTitle(t *testing.T) {
+	ev := RawEvent{ID: "1", Type: "PushEvent", Repo: struct {
+		Name string `json:"name"`
+	}{Name: "o/r"}, Payload: []byte(`{"ref":"refs/heads/main","head":"cd272faaaaaaaa","before":"0000000"}`)}
+	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
+	if !ok || ann.Enrich == nil || ann.HeadSHA != "cd272faaaaaaaa" {
+		t.Fatalf("expected enrichable push, got ok=%v %+v", ok, ann)
+	}
+	if got := ann.Enrich("Fix thing"); !strings.Contains(got, ": Fix thing") {
+		t.Errorf("title missing: %q", got)
+	}
+}
