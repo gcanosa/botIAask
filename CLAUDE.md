@@ -25,14 +25,14 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `crypto/` | CoinGecko price fetching, market history DB |
 | `stats/` | Activity tracking, SQLite persistence |
 | `bookmarks/` | URL bookmark DB |
-| `logger/` | Channel event logging, log rotation |
+| `logger/` | Channel event logging, log rotation, `ChannelActivity` (log parsing for `!chanstats`) |
 | `flight/` | OpenSky/AirLabs flight tracking |
 | `weather/` | Open-Meteo weather data |
 | `omdb/` | OMDB movie database lookups |
 | `progtodo/` | Programmer TODO list DB |
 | `db/` | Shared SQLite connection pooling and PRAGMA helpers |
 | `meta/` | Version, name, author constants |
-| `internal/ircusage/` | IRC help text formatter |
+| `internal/ircusage/` | Command usage tables; source for `-usage`, `!help` and `!help <cmd>` (alphabetical, `Names`/`Lookup`) |
 | `internal/sysinfo/` | System info (gopsutil wrapper) |
 
 ---
@@ -112,7 +112,7 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 
 1. Add a handler method on `*Bot` in `irc/bot.go` (or a new file in `irc/`).
 2. Register it in the command dispatch map in `bot.go`.
-3. Add usage text in `internal/ircusage/print.go`.
+3. Add usage text in `internal/ircusage/print.go` (rows are sorted automatically; `!help` and `!help <cmd>` read them — add an optional intro in `about` in `lookup.go` for commands needing explanation).
 4. If it fetches external data, set an explicit HTTP client timeout.
 
 ---

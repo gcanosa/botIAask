@@ -110,7 +110,8 @@ Command **prefix** (default `!`) and the AI trigger name (default `ask`) are set
 | `!peso` | Argentine peso view. |
 | `!crypto` | Crypto market view. |
 | `!reminder` | `add <note>`, `del <id>`, or `list` (per-user reminders). |
-| `!help` | Short in-channel summary of commands. |
+| `!chanstats [#chan] [days]` | Channel activity from the daily logs: a colored 24-hour busy-hours bar (`00h`–`24h`, bot local time), busiest/quietest hour, peak weekday and top 5 talkers. Defaults to the current channel and 7 days (max 30); only reads plain `logs/*.log`, not archived `.gz`. |
+| `!help [command]` | Alphabetical list of commands; `!help <command>` (e.g. `!help gh`) shows its usage lines and a short explanation. |
 
 ### Admin Commands
 *Admins must match a **hostmask** in `config/config.yaml` **and** be in an active **`!admin`** session.* Mode commands (`!op`, `!deop`, `!voice`, `!devoice`) are used **in a channel** where the bot can set modes.
@@ -125,7 +126,7 @@ Command **prefix** (default `!`) and the AI trigger name (default `ask`) are set
 | `!say #channel <message>` | Sends a message to a channel. |
 | `!news on` / `!news off` | Enables or disables news for the **current** channel (session only). |
 | `!news start` / `!news stop` | Turns global RSS-to-IRC announcements on or off; persists `rss.announce_to_irc` in config. |
-| `!stats` | Bot statistics (e.g. AI request count, uptime). |
+| `!stats` | Colorful bot stats: uptime, 24h activity, channels, data counts, services, host CPU/RAM/heap. |
 | `!op [nick]` / `!deop [nick]` | Channel operator; in a channel, acts on the invoker or the given nick. |
 | `!voice [nick]` / `!devoice [nick]` | Channel voice. |
 | `!ticket pending` | Lists pending paste/file tickets. |
