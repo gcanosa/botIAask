@@ -2,7 +2,6 @@ package github
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"botIAask/rss"
@@ -45,56 +44,51 @@ func shortenAnnouncementLink(ann Announcement, preferredService string) string {
 	return strings.Replace(ann.Message, ann.Link, short, 1)
 }
 
+// Per-field mIRC colors so author/SHA/branch stand out when scanning a busy channel.
+func colorize(code, s string) string { return "\x03" + code + s + "\x03" }
+
+func author(s string) string { return colorize("04", s) } // light red / pink
+func sha(s string) string    { return colorize("13", s) } // magenta
+func ref(s string) string    { return colorize("07", s) } // orange
+
+// prefix renders "<tag> (owner/repo) author", the common start of every announcement.
+func prefix(tag, repoFullName, who string) string {
+	return tag + " " + colorize("14", "("+repoFullName+")") + " " + author(who)
+}
+
 func formatPush(repoFullName, pusher, branch string, size int, headline, more, link, shortSHA string) string {
-	tag := ircTag("09", "PUSH", shortSHA) // green on black
-	base := tag + " " + ircBold + repoFullName + ircBold + " " + pusher
+	base := prefix(ircTag("09", "PUSH", ""), repoFullName, pusher) + " pushed " + sha(shortSHA) + " to " + ref(branch)
 	if headline == "" {
 		// GitHub's Events API didn't include a commit list for this push, so there's no
-		// message/count to show — just the fact that something landed, and a link to it.
-		return base + " pushed to " + ircBold + branch + ircBold + sprintfLink(link)
+		// message to show — just the fact that something landed, and a link to it.
+		return base + sprintfLink(link)
 	}
-	return base + " pushed " + strconv.Itoa(size) + " commit" + plural(size) + " to " + ircBold + branch + ircBold +
-		`: "` + headline + `"` + more + sprintfLink(link)
+	return base + ": " + headline + more + sprintfLink(link)
 }
 
-func formatPullRequest(repoFullName, author, action, refID, title, link string) string {
-	tag := ircTag("12", "PR", refID) // blue on black
-	return tag + " " + ircBold + repoFullName + ircBold + " " + author +
-		" " + action + `: "` + title + `"` + sprintfLink(link)
+func formatPullRequest(repoFullName, who, action, refID, title, link string) string {
+	return prefix(ircTag("12", "PR", refID), repoFullName, who) + " " + action + ": " + title + sprintfLink(link)
 }
 
-func formatRelease(repoFullName, author, tag, name, link string) string {
-	ircTagStr := ircTag("06", "RELEASE", tag) // purple on black
-	base := ircTagStr + " " + ircBold + repoFullName + ircBold + " " + author + " published"
+func formatRelease(repoFullName, who, tag, name, link string) string {
+	base := prefix(ircTag("06", "RELEASE", tag), repoFullName, who) + " published"
 	if name != "" && name != tag {
 		base += ` "` + name + `"`
 	}
 	return base + sprintfLink(link)
 }
 
-func formatIssue(repoFullName, author, action, refID, title, link string) string {
-	tag := ircTag("08", "ISSUE", refID) // yellow on black
-	return tag + " " + ircBold + repoFullName + ircBold + " " + author +
-		" " + action + ` issue: "` + title + `"` + sprintfLink(link)
+func formatIssue(repoFullName, who, action, refID, title, link string) string {
+	return prefix(ircTag("08", "ISSUE", refID), repoFullName, who) + " " + action + " issue: " + title + sprintfLink(link)
 }
 
-func formatCreate(repoFullName, author, refType, refID, link string) string {
-	tag := ircTag("10", strings.ToUpper(refType), refID) // teal on black
-	return tag + " " + ircBold + repoFullName + ircBold + " " + author +
-		" created " + refType + sprintfLink(link)
+func formatCreate(repoFullName, who, refType, refID, link string) string {
+	return prefix(ircTag("10", strings.ToUpper(refType), refID), repoFullName, who) + " created " + refType + sprintfLink(link)
 }
 
 // formatDelete has no link parameter: the ref no longer exists once a DeleteEvent fires.
-func formatDelete(repoFullName, author, refType, refID string) string {
-	tag := ircTag("04", strings.ToUpper(refType), refID) // red on black
-	return tag + " " + ircBold + repoFullName + ircBold + " " + author + " deleted " + refType
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
+func formatDelete(repoFullName, who, refType, refID string) string {
+	return prefix(ircTag("04", strings.ToUpper(refType), refID), repoFullName, who) + " deleted " + refType
 }
 
 func sprintfLink(link string) string {
