@@ -26,6 +26,10 @@ type Announcement struct {
 	// see shortenAnnouncementLink.
 	Link    string
 	Message string
+	// Enrich (push only, set when the Events API gave no commit list) re-renders Message
+	// with a commit title fetched separately via FetchCommit(HeadSHA); see fetcher.go.
+	HeadSHA string
+	Enrich  func(title string) string
 }
 
 // ExtractAnnouncement turns a raw Events API entry into an Announcement, or ok=false if
@@ -88,13 +92,20 @@ func extractPush(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	if len(shortSHA) > 7 {
 		shortSHA = shortSHA[:7]
 	}
-	return Announcement{
+	ann := Announcement{
 		RepoFullName: ev.Repo.Name,
 		Kind:         "push",
 		RefID:        shortSHA,
 		Link:         link,
 		Message:      formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, headline, more, link, shortSHA),
-	}, true
+	}
+	if headline == "" {
+		ann.HeadSHA = p.Head
+		ann.Enrich = func(title string) string {
+			return formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, title, "", link, shortSHA)
+		}
+	}
+	return ann, true
 }
 
 type pullRequestPayload struct {

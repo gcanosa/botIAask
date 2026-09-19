@@ -45,13 +45,13 @@ func TestAnnounceNewEvents_DedupAndEventTypeFilter(t *testing.T) {
 		rawEvent("2", "ReleaseEvent", "", "owner/repo", `{"action":"published","release":{"tag_name":"v1","html_url":"x","author":{"login":"bob"}}}`),
 	}
 
-	f.announceNewEvents(repoCfg, events)
+	f.announceNewEvents(repoCfg, "", 0, events)
 	if len(bot.broadcasts) != 1 {
 		t.Fatalf("expected only the push event announced (release filtered out), got %d broadcasts: %v", len(bot.broadcasts), bot.broadcasts)
 	}
 
 	// Re-running with the same events must not re-announce (dedup).
-	f.announceNewEvents(repoCfg, events)
+	f.announceNewEvents(repoCfg, "", 0, events)
 	if len(bot.broadcasts) != 1 {
 		t.Fatalf("expected no re-announcement on second pass, got %d broadcasts", len(bot.broadcasts))
 	}
@@ -110,7 +110,7 @@ func TestAnnounceNewEvents_StoresPreCollapseMessage(t *testing.T) {
 		rawEvent("1", "PushEvent", "alice", "owner/repo", `{"ref":"refs/heads/main","head":"abc1234"}`),
 		rawEvent("2", "PushEvent", "bob", "owner/repo", `{"ref":"refs/heads/main","head":"def5678"}`),
 	}
-	f.announceNewEvents(repoCfg, events)
+	f.announceNewEvents(repoCfg, "", 0, events)
 
 	// Broadcast collapses to one line, but both events must have their own stored row.
 	if len(bot.broadcasts) != 1 {
