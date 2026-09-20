@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>botIAask · AI-powered IRC bot</title>
+<meta name="description" content="botIAask is an open-source IRC bot in Go with AI answers, RSS, GitHub tracking, pastes and a web dashboard.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav"><div class="wrap">
+  <a class="brand" href="index.html"><img src="img/favicon.png" alt=""><span>bot<b>IA</b>ask</span></a>
+  <ul>
+    <li><a href="index.html#features" aria-current="page">Features</a></li>
+    <li><a href="index.html#install">Install</a></li>
+    <li><a href="docs.html">Docs</a></li>
+    <li><a href="config.html">Config</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+    <li><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub ↗</a></li>
+  </ul>
+  <button class="iconbtn" id="theme" type="button" aria-label="Toggle theme"></button>
+  <button class="iconbtn burger" id="burger" type="button" aria-label="Menu">☰</button>
+</div></header>
+
+<main>
+<section class="hero"><div class="wrap">
+  <img class="logo logo-d" src="img/logo-dark.png" alt="botIAask logo"><img class="logo logo-l" src="img/logo-light.png" alt="botIAask logo">
+  <div><span class="pill"><i></i> v0.4.3 · open source · written in Go</span></div>
+  <h1>The IRC bot that <em>answers back</em>.</h1>
+  <p class="lead">botIAask brings an OpenAI-compatible AI, RSS, GitHub activity, pastes, market data and a full web dashboard to your IRC channels. It ships as one static binary or a container.</p>
+  <div class="cta"><a class="btn primary" href="#install">Get started</a><a class="btn" href="docs.html">Read the docs</a><a class="btn" href="https://github.com/gcanosa/botIAask" rel="noopener">★ Star on GitHub</a></div>
+  <div class="badges"><span class="badge">Go <b>1.26</b></span><span class="badge">SQLite <b>WAL</b></span><span class="badge">Docker <b>·</b> Podman</span><span class="badge">linux/amd64 <b>·</b> arm64</span></div>
+</div></section>
+
+<section id="features"><div class="wrap">
+  <span class="eyebrow">Features</span><h2>Everything a channel needs, in one binary.</h2>
+  <p class="sub">No plugins to wire up. Turn features on in <code>config.yaml</code> or from the dashboard and reload live.</p>
+  <div class="grid"><div class="card reveal"><div class="ic">💬</div><h3>AI answers with <code>!ask</code></h3><p>Any OpenAI-compatible endpoint: LM Studio by default, terse plain-text replies tuned for IRC, with per-user rate limiting.</p></div><div class="card reveal"><div class="ic">🌐</div><h3>Multi-network IRC</h3><p>Connect to several networks at once. Per-network channels, services auth, admins, TLS options, and live join/part.</p></div><div class="card reveal"><div class="ic">📰</div><h3>RSS &amp; news</h3><p>Multiple feeds, per-source dedup, URL shortening (is.gd, tinyurl, v.gd…), optional announcements to any network:#channel.</p></div><div class="card reveal"><div class="ic">🐙</div><h3>GitHub tracker</h3><p>Announce pushes, PRs, releases, issues, and branch/tag events. Private repos supported with encrypted-at-rest tokens. Manage with <code>!gh</code>.</p></div><div class="card reveal"><div class="ic">📎</div><h3>Pastes &amp; uploads</h3><p><code>!paste</code> and <code>!upload</code> issue time-limited links, moderated by an admin ticket workflow, with expiry.</p></div><div class="card reveal"><div class="ic">📈</div><h3>Markets, weather, movies</h3><p>Crypto, EUR and ARS rates, Open-Meteo weather, flights, OMDb lookups, math, reminders, bookmarks, <code>!tell</code>/<code>!seen</code>.</p></div><div class="card reveal"><div class="ic">🖥️</div><h3>Web dashboard</h3><p>Live logs over SSE, admin panels, feature toggles, bookmarks, financial views, and a themeable UI protected by sessions + CSRF.</p></div><div class="card reveal"><div class="ic">📊</div><h3>Channel Stats</h3><p>Busy-hours chart, weekday×hour heatmap, top talkers, mode/topic activity, from compact daily rollups. Also <code>!chanstats</code> in IRC.</p></div><div class="card reveal"><div class="ic">🛡️</div><h3>Solid by default</h3><p>Parameterised SQL, rate-limited logins, SQLite WAL, scheduled hot backups, live config <code>!rehash</code> (SIGHUP) with no restart.</p></div></div>
+</div></section>
+
+<section id="install" class="alt"><div class="wrap">
+  <span class="eyebrow">Install</span><h2>Up and running in a minute.</h2>
+  <p class="sub">Pick your flavour. All of them read the same <code>config.yaml</code>; you only need an IRC server and an AI endpoint (e.g. <a href="https://lmstudio.ai" rel="noopener">LM Studio</a> at <code>localhost:1234/v1</code>).</p>
+  <div data-tabs>
+    <div class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">Go (standalone)</button><button class="tab" role="tab" aria-selected="false">Docker</button><button class="tab" role="tab" aria-selected="false">Podman</button></div>
+    <div class="panel"><div class="term"><div class="bar"><i></i><i></i><i></i><span>go</span></div><pre><code><span class="c"># clone, configure, run</span>
+git clone https://github.com/gcanosa/botIAask.git &amp;&amp; cd botIAask
+cp config/config.yaml.template config/config.yaml   <span class="c"># edit IRC server, nick, channels, AI URL</span>
+go run main.go                <span class="c"># foreground, console output</span>
+go run main.go -dashboard     <span class="c"># daemon + web UI on :3366</span></code></pre></div></div><div class="panel" hidden><div class="term"><div class="bar"><i></i><i></i><i></i><span>docker compose</span></div><pre><code>mkdir -p state/config state/data
+cp config/config.yaml.template state/config/config.yaml   <span class="c"># edit it</span>
+docker compose up -d --build
+<span class="c"># dashboard → http://localhost:3366</span></code></pre></div></div><div class="panel" hidden><div class="term"><div class="bar"><i></i><i></i><i></i><span>podman</span></div><pre><code>mkdir -p state/config state/data
+cp config/config.yaml.template state/config/config.yaml
+./scripts/podman-build.sh                      <span class="c"># builds botiaask:local</span>
+podman compose up -d</code></pre></div></div>
+  </div>
+  <p>Need more? See <a href="docs.html#install">installation</a>, <a href="docs.html#containers">containers</a> and the <a href="config.html">config template</a>.</p>
+</div></section>
+
+<section id="modes"><div class="wrap">
+  <span class="eyebrow">Run modes</span><h2>Debug in the foreground, or run as a daemon.</h2>
+  <div class="split">
+    <div class="card reveal"><h3>🐞 Foreground / debug</h3><p>The default. Runs in your terminal with verbose console output: best for first setup and troubleshooting.</p><div class="term"><div class="bar"><i></i><i></i><i></i><span>shell</span></div><pre><code>go run main.go
+./botIAask -debug</code></pre></div></div>
+    <div class="card reveal"><h3>🛰️ Daemon + dashboard</h3><p>Detaches, writes <code>bot.pid</code>, and can start the web UI on port 3366. Control it with <code>-mode</code>.</p><div class="term"><div class="bar"><i></i><i></i><i></i><span>shell</span></div><pre><code>./botIAask -dashboard
+./botIAask -mode restart
+./botIAask -rehash</code></pre></div></div>
+  </div>
+</div></section>
+
+<section class="alt"><div class="wrap">
+  <span class="eyebrow">Latest</span><h2>Releases</h2>
+  <div id="releases" data-n="3" class="grid" style="grid-template-columns:1fr"><div class="card relcard"><div><h3 style="margin:0">v0.4.2</h3><p style="margin:0;color:var(--muted)">GitHub repo activity tracker · uptime day display</p></div><a class="btn" href="https://github.com/gcanosa/botIAask/releases" rel="noopener">All releases →</a></div></div>
+  <p><a href="changelog.html">Read the full changelog →</a></p>
+</div></section>
+</main>
+<footer><div class="wrap">
+  <span>botIAask v0.4.3 · by Gerardo Canosa · Go &amp; SQLite</span>
+  <nav><a href="docs.html">Docs</a><a href="config.html">Config</a><a href="changelog.html">Changelog</a><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub</a><a href="https://hub.docker.com/r/berkelioar/botiaask" rel="noopener">Docker Hub</a></nav>
+</div></footer>
+<script src="assets/app.js"></script>
+</body>
+</html>
