@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config template · botIAask</title>
+<meta name="description" content="The annotated botIAask config.yaml template: IRC networks, AI, web dashboard, RSS, GitHub tracker, stats and backups.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav"><div class="wrap">
+  <a class="brand" href="index.html"><img src="img/favicon.png" alt=""><span>bot<b>IA</b>ask</span></a>
+  <ul>
+    <li><a href="index.html#features">Features</a></li>
+    <li><a href="index.html#install">Install</a></li>
+    <li><a href="docs.html">Docs</a></li>
+    <li><a href="config.html" aria-current="page">Config</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+    <li><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub ↗</a></li>
+  </ul>
+  <button class="iconbtn" id="theme" type="button" aria-label="Toggle theme"></button>
+  <button class="iconbtn burger" id="burger" type="button" aria-label="Menu">☰</button>
+</div></header>
+
+<main><section><div class="wrap">
+<span class="eyebrow">Config template</span><h2>config.yaml.template</h2>
+<p class="sub">Copy it to <code>config/config.yaml</code> and edit. Commented lines show optional features. Never commit real passwords or tokens.</p>
+<div class="cta" style="justify-content:flex-start;margin-bottom:16px"><a class="btn primary" href="config.yaml.template" download="config.yaml">⬇ Download</a>
+<button class="btn" type="button" onclick="navigator.clipboard.writeText(document.getElementById('cfg').dataset.raw||'').then(()=>this.textContent='Copied ✓')">Copy all</button>
+<a class="btn" href="https://github.com/gcanosa/botIAask/blob/main/config/config.yaml.template" rel="noopener">View on GitHub</a></div>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>config/config.yaml.template</span></div><pre style="max-height:70vh"><code id="cfg">Loading…</code></pre></div>
+</div></section></main>
+<footer><div class="wrap">
+  <span>botIAask v0.4.3 · by Gerardo Canosa · Go &amp; SQLite</span>
+  <nav><a href="docs.html">Docs</a><a href="config.html">Config</a><a href="changelog.html">Changelog</a><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub</a><a href="https://hub.docker.com/r/berkelioar/botiaask" rel="noopener">Docker Hub</a></nav>
+</div></footer>
+<script src="assets/app.js"></script>
+</body>
+</html>

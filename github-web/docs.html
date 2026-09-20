@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation · botIAask</title>
+<meta name="description" content="Install botIAask, run it with Docker, Podman or standalone, choose daemon or debug mode, and configure every feature.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav"><div class="wrap">
+  <a class="brand" href="index.html"><img src="img/favicon.png" alt=""><span>bot<b>IA</b>ask</span></a>
+  <ul>
+    <li><a href="index.html#features">Features</a></li>
+    <li><a href="index.html#install">Install</a></li>
+    <li><a href="docs.html" aria-current="page">Docs</a></li>
+    <li><a href="config.html">Config</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+    <li><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub ↗</a></li>
+  </ul>
+  <button class="iconbtn" id="theme" type="button" aria-label="Toggle theme"></button>
+  <button class="iconbtn burger" id="burger" type="button" aria-label="Menu">☰</button>
+</div></header>
+
+<main class="wrap docs"><aside class="side" aria-label="Documentation"><div class="grp">Getting started</div><a href="#overview">Overview</a><a href="#requirements">Requirements</a><a href="#install">Installation</a><a href="#modes">Daemon vs debug</a><div class="grp">Deploy</div><a href="#containers">Docker &amp; Podman</a><a href="#standalone">Standalone binary</a><div class="grp">Configure</div><a href="#config">Configuration</a><a href="#cli">CLI flags</a><a href="#rehash">Live reload</a><div class="grp">Use it</div><a href="#commands">IRC commands</a><a href="#github">GitHub tracker</a><a href="#dashboard">Web dashboard</a><a href="#data">Data &amp; backups</a></aside>
+<article class="doc">
+
+<h2 id="overview">Overview</h2>
+<p><strong>botIAask</strong> is an IRC bot written in Go. It connects with <code>ergochat/irc-go</code>, answers questions through an OpenAI-compatible endpoint (LM Studio by default) and can expose an optional web dashboard on port <code>3366</code>. Everything is configured in a single YAML file and stored in per-feature SQLite databases under <code>data/</code>.</p>
+
+<h2 id="requirements">Requirements</h2>
+<ul><li><a href="https://go.dev/doc/install" rel="noopener">Go</a> 1.26 (see <code>go.mod</code>), only if you build from source.</li>
+<li>An IRC network to connect to.</li>
+<li>An OpenAI-compatible API: <a href="https://lmstudio.ai" rel="noopener">LM Studio</a>, Ollama's OpenAI endpoint, or a hosted provider. Default: <code>http://localhost:1234/v1</code>.</li>
+<li>Docker or Podman, only for the container route.</li></ul>
+
+<h2 id="install">Installation</h2>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>build from source</span></div><pre><code>git clone https://github.com/gcanosa/botIAask.git
+cd botIAask
+cp config/config.yaml.template config/config.yaml
+$EDITOR config/config.yaml
+go build .              <span class="c"># produces ./botIAask</span>
+./botIAask</code></pre></div>
+<div class="note"><strong>Config is required.</strong> The bot exits with an error if <code>config/config.yaml</code> is missing. There is no <code>.env</code> file; some API keys fall back to environment variables.</div>
+<p>A minimal config to get talking:</p>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>config/config.yaml</span></div><pre><code><span class="k">irc</span>:
+  <span class="k">networks</span>:
+    - <span class="k">name</span>: <span class="s">libera</span>
+      <span class="k">server</span>: <span class="s">irc.libera.chat</span>
+      <span class="k">port</span>: <span class="n">6697</span>
+      <span class="k">use_ssl</span>: <span class="n">true</span>
+      <span class="k">nickname</span>: <span class="s">MyBot</span>
+      <span class="k">channels</span>: [<span class="s">'#mychannel'</span>]
+<span class="k">ai</span>:
+  <span class="k">lm_studio_url</span>: <span class="s">http://localhost:1234/v1</span>
+  <span class="k">model</span>: <span class="s">meta-Llama-3.1-8B-instruct</span></code></pre></div>
+
+<h2 id="modes">Daemon vs debug</h2>
+<p>The same binary runs in two ways. Pick one per environment.</p>
+<div class="split">
+<div class="card"><h3>🐞 Foreground / debug</h3><ul><li>Default when you run <code>go run main.go</code> or <code>./botIAask</code>.</li><li><code>-debug</code> (default <code>true</code>) prints verbose console output.</li><li>Stops with <kbd>Ctrl-C</kbd>. No PID file.</li><li>Best for setup, troubleshooting and containers (where the runtime supervises the process).</li></ul></div>
+<div class="card"><h3>🛰️ Daemon</h3><ul><li><code>-daemon</code> detaches; <code>-dashboard</code> implies daemon and enables the web UI.</li><li>Writes <code>bot.pid</code> (<code>daemon.pid_file</code>) and logs to <code>logs/</code>.</li><li>Control with <code>-mode start|stop|restart</code>.</li><li>Best for a VPS or home server without a supervisor.</li></ul></div>
+</div>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>shell</span></div><pre><code>./botIAask -dashboard          <span class="c"># start daemon + web UI</span>
+./botIAask -mode restart       <span class="c"># restart it</span>
+./botIAask -mode stop          <span class="c"># stop it</span>
+./botIAask -rehash             <span class="c"># reload config without a restart</span></code></pre></div>
+<div class="note warn"><strong>systemd tip:</strong> run the foreground form under a unit file (<code>Restart=on-failure</code>) instead of <code>-daemon</code>, and let systemd handle the PID.</div>
+
+<h2 id="containers">Docker &amp; Podman</h2>
+<p>The repo ships a multi-stage <code>Dockerfile</code> (static Go build, <code>debian:bookworm-slim</code>, non-root user <code>bot</code>, exposes <code>3366</code>) and a <code>docker-compose.yml</code>. Both Docker and Podman work with the same files.</p>
+<h3>Compose</h3>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>shell</span></div><pre><code>mkdir -p state/config state/data
+cp config/config.yaml.template state/config/config.yaml   <span class="c"># then edit it</span>
+docker compose up -d --build     <span class="c"># or: podman compose up -d</span>
+docker compose logs -f</code></pre></div>
+<p>Compose mounts <code>state/{data,config,logs,pastes,upload_files}</code> into <code>/app/</code>. Mount the <em>directory</em> <code>config/</code> rather than the single file, so the runtime doesn't create a directory named <code>config.yaml</code> by mistake. Override with <code>STATE_DIR</code>, <code>WEB_PORT</code> and <code>IMAGE</code> environment variables.</p>
+<h3>Plain Podman</h3>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>podman</span></div><pre><code>./scripts/podman-build.sh                           <span class="c"># → botiaask:local</span>
+podman run -d --name botiaask -p 3366:3366 \
+  -v ./state/config:/app/config:Z -v ./state/data:/app/data:Z \
+  -v ./state/logs:/app/logs:Z botiaask:local</code></pre></div>
+<h3>Prebuilt image</h3>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>docker</span></div><pre><code>docker run -d --name botiaask -p 3366:3366 \
+  -v "$PWD/state/config:/app/config" -v "$PWD/state/data:/app/data" \
+  berkelioar/botiaask:latest</code></pre></div>
+<div class="note"><strong>Reaching LM Studio from a container:</strong> on Linux, use <code>network_mode: "host"</code> and <code>http://127.0.0.1:1234/v1</code>. On macOS/Windows use <code>http://host.docker.internal:1234/v1</code> (Podman: <code>host.containers.internal</code>).</div>
+<p>The container runs in the foreground, so use <code>web.enabled: true</code> in the config to serve the dashboard rather than <code>-dashboard</code>. Publishing a new image is covered by <code>scripts/dockerhub-push.sh</code>, <code>push-latest.sh</code> and <code>push-version.sh</code>.</p>
+
+<h2 id="standalone">Standalone binary</h2>
+<p>A single static file with no runtime dependencies (SQLite is pure Go, <code>CGO_ENABLED=0</code>). Cross-compile and copy it anywhere:</p>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>shell</span></div><pre><code>CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o botIAask .
+scp botIAask config/config.yaml user@host:~/botiaask/</code></pre></div>
+<p>Run it from a directory that contains <code>config/config.yaml</code>; <code>data/</code> and <code>logs/</code> are created next to it on first run.</p>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>/etc/systemd/system/botiaask.service</span></div><pre><code>[Unit]
+Description=botIAask IRC bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/botiaask
+ExecStart=/opt/botiaask/botIAask
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+User=bot
+
+[Install]
+WantedBy=multi-user.target</code></pre></div>
+
+<h2 id="config">Configuration</h2>
+<p>All settings live in <code>config/config.yaml</code>; <a href="config.html">browse or download the full annotated template</a>.</p>
+<div class="tw"><table><thead><tr><th>Section</th><th>What it controls</th></tr></thead><tbody><tr><td><code>irc.networks[]</code></td><td>One entry per network: server, port, TLS, nick, channels (with keys / <code>auto_join</code>), services auth, per-network <code>admins</code>, <code>quit_message</code>, <code>enabled</code>.</td></tr><tr><td><code>ai</code></td><td><code>lm_studio_url</code>, <code>model</code>. 90s HTTP timeout.</td></tr><tr><td><code>bot</code></td><td><code>command_prefix</code> (<code>!</code>), <code>command_name</code> (<code>ask</code>), <code>rate_limiting</code>.</td></tr><tr><td><code>admin.admins</code></td><td>Global admin hostmasks like <code>~nick@user/host</code>.</td></tr><tr><td><code>web</code></td><td><code>enabled</code>, <code>port</code>, <code>host</code>, <code>base_url</code>, <code>auth</code>, weather location.</td></tr><tr><td><code>rss</code></td><td>Feeds, <code>interval_minutes</code>, target channels (<code>network:#chan</code>), <code>announce_to_irc</code>, <code>url_shortener</code>.</td></tr><tr><td><code>github_tracker</code></td><td>Repos, channels, event filters. Tokens are set via the dashboard.</td></tr><tr><td><code>stats</code>, <code>uploads</code>, <code>backup</code></td><td>Retention, upload size cap, scheduled SQLite snapshots.</td></tr><tr><td><code>omdb</code>, <code>github</code></td><td>Optional API keys for <code>!movie</code> and the dashboard changelog.</td></tr></tbody></table></div>
+<div class="note">With more than one network, use <code>network:#channel</code> wherever a channel is expected (RSS, GitHub tracker). A bare <code>#channel</code> falls back to the first network.</div>
+
+<h2 id="cli">CLI flags</h2>
+<div class="tw"><table><thead><tr><th>Flag</th><th>Description</th></tr></thead><tbody><tr><td><code>-dashboard</code></td><td>Daemon mode + web dashboard.</td></tr><tr><td><code>-daemon</code></td><td>Run in the background.</td></tr><tr><td><code>-debug</code></td><td>Verbose console output (default <code>true</code>).</td></tr><tr><td><code>-mode start|stop|restart</code></td><td>Control the daemon explicitly.</td></tr><tr><td><code>-news</code></td><td>Enable the RSS fetcher.</td></tr><tr><td><code>-updatenews [limit]</code></td><td>Backfill the news DB and exit.</td></tr><tr><td><code>-dropnews</code></td><td>Clear the news DB and exit.</td></tr><tr><td><code>-rehash</code></td><td>SIGHUP the PID in <code>daemon.pid</code> to reload config.</td></tr><tr><td><code>-usage</code></td><td>Print the IRC command reference (<code>NO_COLOR=1</code> for plain text).</td></tr><tr><td><code>-version</code> / <code>-about</code></td><td>Version; project details.</td></tr><tr><td><code>-h</code></td><td>Flags only.</td></tr></tbody></table></div>
+
+<h2 id="rehash">Live reload</h2>
+<p>Change <code>config.yaml</code> and reload without dropping the connection using any of: <code>SIGHUP</code>, <code>./botIAask -rehash</code>, <code>!rehash</code> in IRC, or the dashboard's <code>/api/rehash</code>.</p>
+
+<h2 id="commands">IRC commands</h2>
+<p>The prefix is <code>!</code> by default. <code>!help</code> lists everything in IRC and <code>botIAask -usage</code> prints it on the command line.</p>
+<h3>User commands</h3><div class="tw"><table><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody><tr><td><code>!ask &lt;query&gt;</code></td><td>Ask the AI (the trigger name is <code>bot.command_name</code>).</td></tr><tr><td><code>!bc &lt;expr&gt;</code></td><td>Math expression, e.g. <code>5+5</code>.</td></tr><tr><td><code>!news [limit]</code></td><td>Recent RSS items (1–10) in channels where news is on.</td></tr><tr><td><code>!bookmark</code></td><td><code>ADD &lt;URL&gt; [nick]</code> or <code>FIND &lt;text&gt;</code>.</td></tr><tr><td><code>!paste</code> / <code>!upload</code></td><td>Time-limited link to submit text or a file; needs admin approval.</td></tr><tr><td><code>!download [N]</code></td><td>Your approved uploads with URLs.</td></tr><tr><td><code>!euro</code> <code>!peso</code> <code>!crypto</code></td><td>Forex and crypto market views.</td></tr><tr><td><code>!reminder</code></td><td><code>add &lt;note&gt;</code>, <code>del &lt;id&gt;</code>, <code>list</code>.</td></tr><tr><td><code>!chanstats [#chan] [days]</code></td><td>Colored 24h busy-hours bar, busiest hour/day and top talkers from channel logs.</td></tr><tr><td><code>!uptime</code> <code>!spec</code></td><td>Uptime; the AI system prompt.</td></tr><tr><td><code>!help [command]</code></td><td>Alphabetical list, or usage + explanation for one command.</td></tr></tbody></table></div>
+<h3>Admin commands</h3>
+<p>Admins need a matching hostmask <strong>and</strong> an active <code>!admin</code> session.</p><div class="tw"><table><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody><tr><td><code>!admin</code> / <code>!admin off</code></td><td>Start or end an admin session (hostmask must match <code>admin.admins</code>).</td></tr><tr><td><code>!join #chan [key]</code> / <code>!part [#chan]</code></td><td>Join/part; persisted to config.</td></tr><tr><td><code>!say #chan &lt;msg&gt;</code></td><td>Speak in a channel.</td></tr><tr><td><code>!ignore &lt;nick&gt;</code></td><td>Ignore a nick.</td></tr><tr><td><code>!op</code> <code>!deop</code> <code>!voice</code> <code>!devoice</code></td><td>Channel modes, used in a channel.</td></tr><tr><td><code>!news on|off|start|stop</code></td><td>Per-channel toggle, or global RSS announce (persisted).</td></tr><tr><td><code>!stats</code></td><td>Uptime, 24h activity, data counts, host CPU/RAM/heap.</td></tr><tr><td><code>!ticket pending|approve|cancel</code></td><td>Moderate paste and upload tickets.</td></tr><tr><td><code>!gh list|add|del|search</code></td><td>Manage the GitHub tracker.</td></tr><tr><td><code>!rehash</code> / <code>!quit [reason]</code></td><td>Reload config; disconnect.</td></tr></tbody></table></div>
+
+<h2 id="github">GitHub tracker</h2>
+<p>Polls <code>GET /repos/{owner}/{repo}/events</code> and announces pushes, PRs, releases, issues (opened/closed) and branch/tag create/delete, with tags like <code>[PUSH abcd123]</code>, <code>[PR #42]</code>, <code>[RELEASE v1.0]</code>. Links are shortened with the RSS shortener.</p>
+<div class="term"><div class="bar"><i></i><i></i><i></i><span>irc</span></div><pre><code>!gh add gcanosa/botIAask libera:#dev
+!gh list
+!gh search gcanosa/botIAask 42        <span class="c"># PR/issue number</span>
+!gh del gcanosa/botIAask</code></pre></div>
+<div class="tw"><table><thead><tr><th>Repo type</th><th>Token</th></tr></thead><tbody><tr><td>Public</td><td>None needed (a <code>public_repo</code> classic PAT only raises the rate limit).</td></tr><tr><td>Private, classic PAT</td><td><code>repo</code> scope.</td></tr><tr><td>Private, fine-grained PAT</td><td>Read-only <strong>Contents</strong>, <strong>Pull requests</strong> and <strong>Issues</strong>; Metadata is automatic.</td></tr></tbody></table></div>
+<div class="note warn"><code>!gh add … --private</code> only works in a PM over a connection the server confirms as TLS (numeric 671), and the PAT is intercepted before logging. Otherwise use the dashboard. Tokens are encrypted with AES-256-GCM using <code>data/github_secret.key</code>: back it up with <code>data/</code>.</div>
+
+<h2 id="dashboard">Web dashboard</h2>
+<p>Enable with <code>web.enabled: true</code> (or <code>-dashboard</code>) and open <code>http://localhost:3366</code>. It includes live logs, Channel Stats, paste/upload moderation, feature toggles, bookmarks, market view, system stats and the GitHub tracker.</p>
+<ul><li><strong>First login:</strong> if <code>web.auth.password</code> is empty, a random 32-char password is generated and printed <em>once</em> in the log.</li>
+<li><strong>Sessions:</strong> <code>admin_session</code> cookie (HttpOnly, Secure, SameSite=Strict, 24h).</li>
+<li><strong>CSRF:</strong> every mutating request needs <code>X-CSRF-Token</code>.</li>
+<li><strong>Login rate limit:</strong> 5 attempts / 15 min per IP.</li>
+<li><strong>Behind a reverse proxy:</strong> set <code>web.trust_forwarded_for: true</code> only if the proxy is trusted; put TLS in front of it.</li></ul>
+
+<h2 id="data">Data &amp; backups</h2>
+<p>Each subsystem owns a SQLite file in <code>data/</code>, created on first run. Scheduled hot backups (<code>VACUUM INTO data/backups/</code>) are on by default, every 24h, keeping 7 snapshots.</p>
+<div class="tw"><table><thead><tr><th>File</th><th>Owner</th></tr></thead><tbody><tr><td><code>rss_seen.db</code></td><td>RSS dedup and news</td></tr><tr><td><code>stats.db</code></td><td>Stats snapshots + per-channel daily rollups</td></tr><tr><td><code>bookmarks.db</code></td><td>Bookmarks, tells, seen, reminders</td></tr><tr><td><code>uploads.db</code></td><td>Pastes and file uploads</td></tr><tr><td><code>crypto.db</code></td><td>Market history</td></tr><tr><td><code>prog_todos.db</code></td><td>Programmer TODOs</td></tr><tr><td><code>web_auth.db</code></td><td>Dashboard auth, sessions, CSRF</td></tr><tr><td><code>github_seen.db</code></td><td>GitHub event dedup, ETag cache</td></tr></tbody></table></div>
+<p>To back up manually, copy <code>data/</code> (including <code>github_secret.key</code>) and <code>config/config.yaml</code>. Logs live in <code>logs/&lt;server&gt;_&lt;channel&gt;_&lt;date&gt;.log</code> with rotation.</p>
+</article></main>
+<footer><div class="wrap">
+  <span>botIAask v0.4.3 · by Gerardo Canosa · Go &amp; SQLite</span>
+  <nav><a href="docs.html">Docs</a><a href="config.html">Config</a><a href="changelog.html">Changelog</a><a href="https://github.com/gcanosa/botIAask" rel="noopener">GitHub</a><a href="https://hub.docker.com/r/berkelioar/botiaask" rel="noopener">Docker Hub</a></nav>
+</div></footer>
+<script src="assets/app.js"></script>
+</body>
+</html>
