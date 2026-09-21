@@ -1271,6 +1271,7 @@ type ircNetworkRow struct {
 	SASLMechanism string `json:"sasl_mechanism"`
 	HasNickServ   bool   `json:"has_nickserv_password"`
 	CertFP        string `json:"cert_fingerprint,omitempty"`
+	AcctReg       bool   `json:"account_registration"`
 	ChannelCount  int    `json:"channel_count"`
 	Connected     bool   `json:"connected"`
 	Authenticated bool   `json:"authenticated"`
@@ -1884,6 +1885,7 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 			if st, ok := statuses[strings.ToLower(n.Name)]; ok {
 				row.Connected = st.Connected
 				row.Authenticated = st.Authenticated
+				row.AcctReg = st.AccountRegistration
 			}
 			rows = append(rows, row)
 		}

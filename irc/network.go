@@ -170,6 +170,8 @@ type NetworkStatus struct {
 	Authenticated bool   `json:"authenticated"`
 	Nickname      string `json:"nickname"`
 	ChannelCount  int    `json:"channel_count"`
+	// AccountRegistration: server acknowledged IRCv3 draft/account-registration (REGISTER works).
+	AccountRegistration bool `json:"account_registration"`
 }
 
 // NetworkStatuses returns one row per configured network (including any not yet
@@ -188,6 +190,9 @@ func (b *Bot) NetworkStatuses() []NetworkStatus {
 		if net != nil {
 			st.Connected = net.isConnected()
 			st.Authenticated = net.IsAuthenticated()
+			if st.Connected {
+				_, st.AccountRegistration = net.conn.AcknowledgedCaps()[capAccountReg]
+			}
 		}
 		out = append(out, st)
 	}
@@ -387,6 +392,13 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			n.recordNickServ(e.Command + " " + strings.Join(e.Params, " "))
 		})
 	}
+
+	// 401 for NickServ = the network has no NickServ (services use SASL / account registration).
+	n.conn.AddCallback("401", func(e ircmsg.Message) {
+		if len(e.Params) >= 2 && strings.EqualFold(e.Params[1], "NickServ") {
+			n.recordNickServ("This network has no NickServ (401 No such nick).")
+		}
+	})
 
 	n.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("irc[%s]: connected to %s! Joining channels...", n.name, serverAddr)

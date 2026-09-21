@@ -4509,6 +4509,7 @@ function ircAuthRender() {
     const parts = [
         'SASL: ' + (n.sasl_enabled ? (n.sasl_mechanism === 'external' ? 'EXTERNAL' : 'PLAIN') : 'off'),
         'NickServ password: ' + (n.has_nickserv_password ? 'stored (auto-identify when SASL is off)' : 'not stored'),
+        'Account registration: ' + (n.account_registration ? 'supported (IRCv3 REGISTER)' : n.connected ? 'not offered by server' : 'unknown (offline)'),
         'Client cert: ' + (n.cert_fingerprint ? 'SHA-256 ' + n.cert_fingerprint : 'none'),
     ];
     info.textContent = parts.join('  |  ');
