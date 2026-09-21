@@ -46,6 +46,11 @@ type ircNetwork struct {
 	sessionJoins   []config.IRChannel
 	sessionJoinsMu sync.Mutex
 
+	// NickServ notices (see nickserv.go)
+	nsMu      sync.Mutex
+	nsReplies []string
+	nsSeq     int
+
 	authenticated bool
 	authMu        sync.RWMutex
 
@@ -328,7 +333,22 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		n.conn.TLSConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in, e.g. bare-IP servers with no matching SANs
 	}
 
-	if netCfg.Services.Enabled {
+	// Client certificate (CertFP): presented on every TLS connect when configured.
+	if netCfg.UseSSL && netCfg.Services.ClientCert != "" {
+		if pair, err := tls.X509KeyPair([]byte(netCfg.Services.ClientCert), []byte(netCfg.Services.ClientCert)); err != nil {
+			log.Printf("[ERROR] irc[%s]: invalid client certificate: %v", n.name, err)
+		} else {
+			if n.conn.TLSConfig == nil {
+				n.conn.TLSConfig = &tls.Config{}
+			}
+			n.conn.TLSConfig.Certificates = []tls.Certificate{pair}
+		}
+	}
+
+	if netCfg.Services.Enabled && netCfg.Services.SASLExternal() {
+		n.conn.UseSASL = true
+		n.conn.SASLMech = "EXTERNAL"
+	} else if netCfg.Services.Enabled {
 		n.conn.SASLLogin = netCfg.Services.Username
 		n.conn.SASLPassword = netCfg.Services.Password
 		if b.getCfg().Bot.Debug {
@@ -363,6 +383,12 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		n.connectionTime = time.Now()
 		n.connected = true
 		n.statsMu.Unlock()
+		// No SASL: identify with NickServ instead (password read live, never logged here).
+		if svc := n.netCfg().Services; !svc.Enabled && svc.NickServPassword != "" {
+			if err := n.conn.Privmsg("NickServ", "IDENTIFY "+svc.NickServPassword); err != nil {
+				log.Printf("irc[%s]: NickServ identify: %v", n.name, err)
+			}
+		}
 		for _, channel := range n.netCfg().Channels {
 			if !channel.AutoJoinEnabled() {
 				if b.getCfg().Bot.Debug {
@@ -435,6 +461,9 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		sender := e.Nick()
 		if n.handlePingReply(sender, message) {
 			return
+		}
+		if strings.EqualFold(sender, "NickServ") {
+			n.recordNickServ(message)
 		}
 		logger.LogChannelEvent(n.name, target, logger.EventNotice, sender, message, "")
 	})

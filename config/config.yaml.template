@@ -31,6 +31,8 @@ irc:
               enabled: true
               username: registered_nickname
               password: services_password
+              # mechanism: plain        # or "external" (TLS client cert; manage it in the dashboard)
+              # nickserv_password / client_cert are set from the dashboard and stored encrypted.
           # Optional: hostmasks granted admin only on this network, on top of the global
           # admin.admins list below (which grants admin on every network).
           # admins:

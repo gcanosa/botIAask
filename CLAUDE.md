@@ -41,6 +41,10 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 
 All configuration lives in `config/config.yaml` (active) and `config/config.yaml.template` (reference). The config is YAML-only — no `.env` file. Some API keys fall back to environment variables (see `config/config.go`).
 
+**Secrets at rest**: `config/secrets.go` AES-256-GCM-encrypts every secret in `config.yaml` (IRC services/SASL password, channel keys, `web.auth.password`, `flight.api_key`, `omdb.api_key`, `github.token`) as `enc:<base64>`, using `data/github_secret.key` (same key as GitHub PATs). `LoadConfig` decrypts into memory; `SaveConfig` encrypts a copy. Plaintext values are accepted and auto-migrated (file rewritten encrypted) on next load. To change a secret by hand, write it in plaintext and restart. New secret field → add it to `mapSecrets`. Lose the key = re-enter secrets. Also encrypted: `services.nickserv_password` and `services.client_cert` (PEM cert+key).
+
+**IRC network auth** (per network, dashboard-only — no IRC commands, by design): SASL PLAIN or EXTERNAL (`services.mechanism`, needs `use_ssl` + client cert); NickServ `IDENTIFY` on connect when SASL is off and a NickServ password is stored; dashboard "Network authentication" panel does NickServ register/identify (`web/irc_auth.go`, `irc/nickserv.go`) and generates/uploads/removes the client cert (only its SHA-256 fingerprint is ever returned). With `bot.debug: true`, irc-go logs raw sent lines, including IDENTIFY/REGISTER passwords — keep debug off in production.
+
 **Config reload** at runtime: send `SIGHUP` to the process, call `!rehash` in IRC, or use the `/api/rehash` web endpoint.
 
 ---

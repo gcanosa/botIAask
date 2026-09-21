@@ -2543,6 +2543,7 @@ function ircNetworksRender() {
             .concat(lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === selectedIRCConfigAdminNetwork ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`));
         adminsSel.innerHTML = opts.join('');
     }
+    ircAuthPopulate();
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
     if (!lastIRCNetworks.length) {
@@ -2611,6 +2612,8 @@ function ircNetworkEditStart(name) {
     if (saslUserEl) saslUserEl.value = n.sasl_username || '';
     const saslPassEl = document.getElementById('irc-net-sasl-password');
     if (saslPassEl) saslPassEl.value = '';
+    const saslMechEl = document.getElementById('irc-net-sasl-mechanism');
+    if (saslMechEl) saslMechEl.value = n.sasl_mechanism === 'external' ? 'external' : 'plain';
     ircNetworksSetStatus('Editing "' + name + '" — change fields and click Save changes. SASL password left blank keeps the stored one.');
 }
 
@@ -2628,6 +2631,8 @@ function ircNetworkEditCancel() {
     if (saslUserEl) saslUserEl.value = '';
     const saslPassEl = document.getElementById('irc-net-sasl-password');
     if (saslPassEl) saslPassEl.value = '';
+    const saslMechEl = document.getElementById('irc-net-sasl-mechanism');
+    if (saslMechEl) saslMechEl.value = 'plain';
     ircNetworksSetStatus('');
 }
 
@@ -2662,7 +2667,7 @@ async function ircNetworkAdd() {
     // the password is never read back so there's nothing to round-trip here. On add there's
     // no existing password to preserve, so only send it when SASL is actually being set up.
     if (editing || saslEnabled || saslPassword) {
-        body.sasl = { enabled: saslEnabled, username: saslUserEl ? saslUserEl.value.trim() : '', password: saslPassword };
+        body.sasl = { enabled: saslEnabled, username: saslUserEl ? saslUserEl.value.trim() : '', password: saslPassword, mechanism: (document.getElementById('irc-net-sasl-mechanism') || {}).value || 'plain' };
     }
     ircNetworksSetStatus('');
     try {
@@ -4478,4 +4483,87 @@ function renderChanStats(d) {
     document.getElementById('cs-topics').innerHTML = (d.topics || []).length
         ? d.topics.map(t => `<div class="cs-topic">${csEsc(t.text)}<small>${csEsc(t.nick)} · ${csEsc(t.day)} ${csEsc(t.time)}</small></div>`).join('')
         : '<p class="cs-none">No topic changes recorded in this range.</p>';
+}
+
+
+// --- Network authentication panel: NickServ register/identify + client certificate ---
+function ircAuthNetwork() {
+    const el = document.getElementById('irc-auth-network');
+    return el ? el.value : '';
+}
+
+function ircAuthPopulate() {
+    const sel = document.getElementById('irc-auth-network');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}">${ircAutojoinEsc(n.name)}</option>`).join('');
+    if (lastIRCNetworks.some((n) => n.name === cur)) sel.value = cur;
+    ircAuthRender();
+}
+
+function ircAuthRender() {
+    const info = document.getElementById('irc-auth-info');
+    if (!info) return;
+    const n = lastIRCNetworks.find((x) => x.name === ircAuthNetwork());
+    if (!n) { info.textContent = ''; return; }
+    const parts = [
+        'SASL: ' + (n.sasl_enabled ? (n.sasl_mechanism === 'external' ? 'EXTERNAL' : 'PLAIN') : 'off'),
+        'NickServ password: ' + (n.has_nickserv_password ? 'stored (auto-identify when SASL is off)' : 'not stored'),
+        'Client cert: ' + (n.cert_fingerprint ? 'SHA-256 ' + n.cert_fingerprint : 'none'),
+    ];
+    info.textContent = parts.join('  |  ');
+}
+
+async function ircAuthPost(url, body, busyMsg) {
+    const out = document.getElementById('irc-auth-replies');
+    if (out) out.textContent = busyMsg;
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            if (out) out.textContent = 'Error: ' + ((await res.text()) || res.status);
+            return null;
+        }
+        return await res.json();
+    } catch (e) {
+        if (out) out.textContent = 'Error: ' + String(e);
+        return null;
+    }
+}
+
+async function ircNickServ(action) {
+    const network = ircAuthNetwork();
+    if (!network) return;
+    const pwEl = document.getElementById('irc-auth-password');
+    const emailEl = document.getElementById('irc-auth-email');
+    const saveEl = document.getElementById('irc-auth-save');
+    if (action === 'clear' && !confirm('Forget the stored NickServ password for ' + network + '?')) return;
+    const data = await ircAuthPost('/api/irc/networks/nickserv', {
+        network, action,
+        password: pwEl ? pwEl.value : '',
+        email: emailEl ? emailEl.value.trim() : '',
+        save: saveEl ? saveEl.checked : false,
+    }, action === 'register' || action === 'identify' ? 'Sent to NickServ, waiting for reply…' : 'Saving…');
+    if (!data) return;
+    const out = document.getElementById('irc-auth-replies');
+    if (out) out.textContent = data.replies && data.replies.length ? data.replies.join('\n') : (action === 'register' || action === 'identify' ? '(no reply from NickServ)' : 'Done.');
+    if (pwEl) pwEl.value = '';
+    await fetchIRCNetworks();
+}
+
+async function ircCert(action) {
+    const network = ircAuthNetwork();
+    if (!network) return;
+    if (action === 'delete' && !confirm('Remove the client certificate for ' + network + '?')) return;
+    const pemEl = document.getElementById('irc-auth-pem');
+    const data = await ircAuthPost('/api/irc/networks/cert', { network, action, pem: pemEl ? pemEl.value : '' }, 'Working…');
+    if (!data) return;
+    const out = document.getElementById('irc-auth-replies');
+    if (out) out.textContent = data.fingerprint ? 'Certificate set. SHA-256 fingerprint: ' + data.fingerprint : 'Done.';
+    if (pemEl) pemEl.value = '';
+    await fetchIRCNetworks();
 }

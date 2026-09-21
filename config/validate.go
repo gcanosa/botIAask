@@ -24,6 +24,12 @@ func ValidateConfig(cfg *Config) error {
 			return fmt.Errorf("irc: duplicate network name %q", name)
 		}
 		seen[fold] = true
+		if m := strings.ToLower(n.Services.Mechanism); m != "" && m != "plain" && m != "external" {
+			return fmt.Errorf("irc: network %q: unknown SASL mechanism %q (use plain or external)", name, n.Services.Mechanism)
+		}
+		if n.Services.Enabled && n.Services.SASLExternal() && (!n.UseSSL || n.Services.ClientCert == "") {
+			return fmt.Errorf("irc: network %q: SASL EXTERNAL needs use_ssl and a client certificate", name)
+		}
 	}
 	if err := validateNoCrossNetworkChannelOverlap(cfg.IRC.Networks); err != nil {
 		return err

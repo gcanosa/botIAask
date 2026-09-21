@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -100,7 +101,17 @@ type ServicesConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// Mechanism is the SASL mechanism: "" / "plain" (username+password) or "external"
+	// (TLS client certificate / CertFP, needs ClientCert and use_ssl).
+	Mechanism string `yaml:"mechanism,omitempty"`
+	// NickServPassword: if set and SASL is off, the bot sends "NickServ IDENTIFY <pw>" on connect.
+	NickServPassword string `yaml:"nickserv_password,omitempty" json:"-"`
+	// ClientCert is a PEM bundle (certificate + private key) presented on TLS connect. Encrypted at rest.
+	ClientCert string `yaml:"client_cert,omitempty" json:"-"`
 }
+
+// SASLExternal reports whether SASL should use the EXTERNAL (client certificate) mechanism.
+func (s ServicesConfig) SASLExternal() bool { return strings.EqualFold(s.Mechanism, "external") }
 
 // AIConfig holds settings for the LM Studio connection.
 type AIConfig struct {
@@ -222,8 +233,22 @@ func LoadConfig(path string) (*Config, error) {
 	applyOMDBDefaults(&cfg)
 	applyGitHubTrackerDefaults(&cfg)
 
+	sawPlain, err := decryptSecrets(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt config secrets: %w", err)
+	}
+
 	if err := ValidateConfig(&cfg); err != nil {
 		return nil, err
+	}
+
+	// Migrate legacy plaintext secrets: rewriting via SaveConfig encrypts them on disk.
+	if sawPlain && !strings.HasSuffix(path, ".template") {
+		if err := SaveConfig(path, &cfg); err != nil {
+			log.Printf("[SECURITY] could not encrypt plaintext secrets in %s: %v", path, err)
+		} else {
+			log.Printf("[SECURITY] encrypted plaintext secrets in %s", path)
+		}
 	}
 
 	return &cfg, nil
@@ -289,7 +314,11 @@ func SaveConfig(path string, cfg *Config) error {
 		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
 
-	data, err := yaml.Marshal(cfg)
+	enc, err := encryptedCopy(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt config secrets: %w", err)
+	}
+	data, err := yaml.Marshal(enc)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -297,7 +326,7 @@ func SaveConfig(path string, cfg *Config) error {
 	// Write to a temp file in the same directory then rename, so a crash or concurrent
 	// read mid-write never observes a truncated config.yaml.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

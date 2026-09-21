@@ -195,6 +195,8 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/irc/channels/session", s.handleIRCChannelSession)
 	mux.HandleFunc("/api/irc/channels", s.handleIRCChannels)
 	mux.HandleFunc("/api/irc/networks/edit", s.handleIRCNetworkEdit)
+	mux.HandleFunc("/api/irc/networks/nickserv", s.handleIRCNickServ)
+	mux.HandleFunc("/api/irc/networks/cert", s.handleIRCNetworkCert)
 	mux.HandleFunc("/api/irc/networks", s.handleIRCNetworks)
 	mux.HandleFunc("/api/config/irc-admins", s.handleConfigIRCAdmins)
 	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
@@ -1266,6 +1268,9 @@ type ircNetworkRow struct {
 	QuitMessage   string `json:"quit_message"`
 	SASLEnabled   bool   `json:"sasl_enabled"`
 	SASLUsername  string `json:"sasl_username"`
+	SASLMechanism string `json:"sasl_mechanism"`
+	HasNickServ   bool   `json:"has_nickserv_password"`
+	CertFP        string `json:"cert_fingerprint,omitempty"`
 	ChannelCount  int    `json:"channel_count"`
 	Connected     bool   `json:"connected"`
 	Authenticated bool   `json:"authenticated"`
@@ -1869,7 +1874,12 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 				QuitMessage:   n.QuitMessage,
 				SASLEnabled:   n.Services.Enabled,
 				SASLUsername:  n.Services.Username,
+				SASLMechanism: strings.ToLower(n.Services.Mechanism),
+				HasNickServ:   n.Services.NickServPassword != "",
 				ChannelCount:  len(n.Channels),
+			}
+			if n.Services.ClientCert != "" {
+				row.CertFP, _ = config.ClientCertFingerprint(n.Services.ClientCert)
 			}
 			if st, ok := statuses[strings.ToLower(n.Name)]; ok {
 				row.Connected = st.Connected
@@ -1898,9 +1908,10 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 				AutoJoin *bool  `json:"auto_join"`
 			} `json:"channels"`
 			SASL *struct {
-				Enabled  bool   `json:"enabled"`
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Enabled   bool   `json:"enabled"`
+				Username  string `json:"username"`
+				Password  string `json:"password"`
+				Mechanism string `json:"mechanism"`
 			} `json:"sasl"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1931,7 +1942,7 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 			entry.Channels = append(entry.Channels, config.IRChannel{Name: chName, Password: ch.Password, AutoJoin: ch.AutoJoin})
 		}
 		if req.SASL != nil {
-			entry.Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password}
+			entry.Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: req.SASL.Password, Mechanism: strings.ToLower(strings.TrimSpace(req.SASL.Mechanism))}
 		}
 		s.cfgMu.Lock()
 		if _, exists := config.FindIRCNetworkByName(s.cfg.IRC.Networks, name); exists {
@@ -2033,9 +2044,10 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 		Nickname      string  `json:"nickname"`
 		QuitMessage   *string `json:"quit_message"`
 		SASL          *struct {
-			Enabled  bool   `json:"enabled"`
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Enabled   bool   `json:"enabled"`
+			Username  string `json:"username"`
+			Password  string `json:"password"`
+			Mechanism string `json:"mechanism"`
 		} `json:"sasl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2083,7 +2095,16 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 		if password == "" {
 			password = s.cfg.IRC.Networks[ni].Services.Password
 		}
-		s.cfg.IRC.Networks[ni].Services = config.ServicesConfig{Enabled: req.SASL.Enabled, Username: req.SASL.Username, Password: password}
+		// Keep the NickServ password and client cert: they're managed by their own endpoints.
+		svc := s.cfg.IRC.Networks[ni].Services
+		svc.Enabled, svc.Username, svc.Password = req.SASL.Enabled, req.SASL.Username, password
+		svc.Mechanism = strings.ToLower(strings.TrimSpace(req.SASL.Mechanism))
+		s.cfg.IRC.Networks[ni].Services = svc
+	}
+	if err := config.ValidateConfig(s.cfg); err != nil {
+		s.cfgMu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 		s.cfgMu.Unlock()
