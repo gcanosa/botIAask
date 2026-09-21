@@ -44,7 +44,7 @@ func IRCEndpointChangedNetworks(before, after *Config) []string {
 			continue // handled as "added" below
 		}
 		if b.Server != a.Server || b.Port != a.Port || b.Nickname != a.Nickname || b.UseSSL != a.UseSSL ||
-			b.Services != a.Services {
+			stripNickServ(b.Services) != stripNickServ(a.Services) {
 			out = append(out, a.Name)
 		}
 	}
@@ -258,4 +258,11 @@ func stringSliceSetEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// stripNickServ ignores the NickServ password: it is read live at connect time, so changing
+// it must not force a reconnect.
+func stripNickServ(s ServicesConfig) ServicesConfig {
+	s.NickServPassword = ""
+	return s
 }

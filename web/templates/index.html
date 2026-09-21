@@ -927,6 +927,13 @@
                             <input type="checkbox" id="irc-net-sasl-enabled"> SASL
                         </label>
                         <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL mechanism</label>
+                            <select id="irc-net-sasl-mechanism" class="btn btn-ghost" style="margin: 0;" aria-label="SASL mechanism">
+                                <option value="plain">PLAIN (username + password)</option>
+                                <option value="external">EXTERNAL (client certificate)</option>
+                            </select>
+                        </div>
+                        <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL username</label>
                             <input type="text" id="irc-net-sasl-username" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="registered_nickname" autocomplete="off" aria-label="SASL username">
                         </div>
@@ -935,6 +942,44 @@
                             <input type="password" id="irc-net-sasl-password" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="(leave blank to keep current)" autocomplete="new-password" aria-label="SASL password">
                         </div>
                         <span class="mono" style="font-size: 0.7rem; color: var(--text-muted);">Password is write-only — never shown back. Leave blank on edit to keep the stored one.</span>
+                    </div>
+                    <div style="margin-bottom: 1rem; padding: 0.75rem 0; border-top: 1px dashed var(--glass-border);">
+                        <div class="card-title" style="margin-bottom: 0.5rem;">Network authentication (NickServ / client certificate)</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem;">
+                            <div>
+                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
+                                <select id="irc-auth-network" class="btn btn-ghost" style="margin: 0;" onchange="ircAuthRender()" aria-label="Network"></select>
+                            </div>
+                            <div>
+                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">NickServ password</label>
+                                <input type="password" id="irc-auth-password" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="(blank = use stored)" autocomplete="new-password" aria-label="NickServ password">
+                            </div>
+                            <div>
+                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Email (register only)</label>
+                                <input type="email" id="irc-auth-email" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="you@example.com" autocomplete="off" aria-label="Email for NickServ register">
+                            </div>
+                            <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
+                                <input type="checkbox" id="irc-auth-save" checked> Save for auto-identify
+                            </label>
+                            <button type="button" class="btn btn-primary" style="padding: 0.5rem 1rem;" onclick="ircNickServ('identify')">Identify</button>
+                            <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('register')">Register nick</button>
+                            <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('save')">Save password only</button>
+                            <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.5rem 1rem;" onclick="ircNickServ('clear')">Forget password</button>
+                        </div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start;">
+                            <div>
+                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Client certificate (PEM cert + private key)</label>
+                                <textarea id="irc-auth-pem" rows="4" class="mono" style="min-width: 22rem; font-size: 0.7rem;" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----BEGIN PRIVATE KEY-----&#10;..." aria-label="Client certificate PEM"></textarea>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                <button type="button" class="btn btn-ghost" style="padding: 0.4rem 0.8rem;" onclick="ircCert('upload')">Upload pasted PEM</button>
+                                <button type="button" class="btn btn-ghost" style="padding: 0.4rem 0.8rem;" onclick="ircCert('generate')">Generate self-signed</button>
+                                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.4rem 0.8rem;" onclick="ircCert('delete')">Remove certificate</button>
+                            </div>
+                        </div>
+                        <div id="irc-auth-info" class="mono" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
+                        <div id="irc-auth-replies" class="mono" style="font-size: 0.75rem; white-space: pre-wrap; margin-top: 0.35rem;"></div>
+                        <span class="mono" style="font-size: 0.7rem; color: var(--text-muted);">Secrets are encrypted in config.yaml and never shown back. After generating a cert, identify, then register its fingerprint with NickServ (e.g. <code>/msg NickServ CERT ADD</code>) and choose SASL EXTERNAL above.</span>
                     </div>
                     <div class="data-table-wrap" style="overflow-x: auto;">
                         <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
