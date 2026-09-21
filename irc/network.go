@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type ircNetwork struct {
 	nsMu      sync.Mutex
 	nsReplies []string
 	nsSeq     int
+	nsCapture bool
 
 	authenticated bool
 	authMu        sync.RWMutex
@@ -191,7 +193,7 @@ func (b *Bot) NetworkStatuses() []NetworkStatus {
 			st.Connected = net.isConnected()
 			st.Authenticated = net.IsAuthenticated()
 			if st.Connected {
-				_, st.AccountRegistration = net.conn.AcknowledgedCaps()[capAccountReg]
+				st.AccountRegistration = net.hasAccountReg()
 			}
 		}
 		out = append(out, st)
@@ -328,7 +330,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		RealName:      netCfg.Nickname,
 		UseTLS:        netCfg.UseSSL,
 		Debug:         b.getCfg().Bot.Debug,
-		RequestCaps:   []string{"server-time", "message-tags", "sasl", capAccountReg},
+		RequestCaps:   []string{"server-time", "message-tags", "sasl", capAccountReg, capAccountRegFinal},
 		ReconnectFreq: 30 * time.Second,
 		KeepAlive:     60 * time.Second,
 		Timeout:       30 * time.Second,
@@ -391,6 +393,14 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			}
 			n.recordNickServ(e.Command + " " + strings.Join(e.Params, " "))
 		})
+	}
+
+	// ircevent has no wildcard callback: hook the error (4xx/5xx) and login (9xx) numerics.
+	for c := 400; c <= 599; c++ {
+		n.conn.AddCallback(strconv.Itoa(c), n.recordServerReply)
+	}
+	for c := 900; c <= 908; c++ {
+		n.conn.AddCallback(strconv.Itoa(c), n.recordServerReply)
 	}
 
 	// 401 for NickServ = the network has no NickServ (services use SASL / account registration).
@@ -487,6 +497,8 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 		if strings.EqualFold(sender, "NickServ") {
 			n.recordNickServ(message)
+		} else {
+			n.recordServerReply(e)
 		}
 		logger.LogChannelEvent(n.name, target, logger.EventNotice, sender, message, "")
 	})

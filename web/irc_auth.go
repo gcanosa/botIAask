@@ -55,6 +55,7 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Email    string `json:"email"`
 		Code     string `json:"code"`
+		Method   string `json:"method"` // register only: "" auto, "nickserv", "server"
 		Save     bool   `json:"save"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
@@ -110,7 +111,7 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		}
 		var ok bool
 		var err error
-		replies, ok, err = s.bot.NickServCommand(network, req.Action, pw, strings.TrimSpace(req.Email), strings.TrimSpace(req.Code))
+		replies, ok, err = s.bot.NickServCommand(network, req.Action, req.Method, pw, strings.TrimSpace(req.Email), strings.TrimSpace(req.Code))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

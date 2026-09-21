@@ -967,6 +967,11 @@
                             </label>
                             <button type="button" class="btn btn-primary" style="padding: 0.5rem 1rem;" onclick="ircNickServ('identify')">Identify</button>
                             <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('register')">Register nick</button>
+                            <select id="irc-auth-method" class="btn btn-ghost" style="margin: 0;" aria-label="Register method" title="How to create the account">
+                                <option value="">Auto (IRCv3 → NickServ)</option>
+                                <option value="server">Server: REGISTER &lt;account&gt; &lt;password&gt;</option>
+                                <option value="nickserv">NickServ REGISTER</option>
+                            </select>
                             <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('verify')">Verify</button>
                             <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('save')">Save password only</button>
                             <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.5rem 1rem;" onclick="ircNickServ('clear')">Forget password</button>
