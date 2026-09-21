@@ -4548,6 +4548,7 @@ async function ircNickServ(action) {
         password: pwEl ? pwEl.value : '',
         email: emailEl ? emailEl.value.trim() : '',
         code: (document.getElementById('irc-auth-code') || {}).value || '',
+        method: (document.getElementById('irc-auth-method') || {}).value || '',
         save: saveEl ? saveEl.checked : false,
     }, action === 'register' || action === 'identify' || action === 'verify' ? 'Sent, waiting for the server’s reply…' : 'Saving…');
     if (!data) return;
