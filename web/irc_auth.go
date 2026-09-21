@@ -54,6 +54,7 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		Action   string `json:"action"`
 		Password string `json:"password"`
 		Email    string `json:"email"`
+		Code     string `json:"code"`
 		Save     bool   `json:"save"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
@@ -91,7 +92,7 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		if !persist(req.Password) {
 			return
 		}
-	case "register", "identify":
+	case "register", "identify", "verify":
 		if s.bot == nil {
 			http.Error(w, "Bot not running", http.StatusServiceUnavailable)
 			return
@@ -107,11 +108,28 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		if req.Save && req.Password != "" && !persist(req.Password) {
 			return
 		}
+		var ok bool
 		var err error
-		replies, err = s.bot.NickServCommand(network, req.Action, pw, strings.TrimSpace(req.Email))
+		replies, ok, err = s.bot.NickServCommand(network, req.Action, pw, strings.TrimSpace(req.Email), strings.TrimSpace(req.Code))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		// Networks without NickServ log in via SASL: once the account exists, switch the
+		// network to SASL PLAIN (account = the bot's nick) so the next connect authenticates.
+		if ok && req.Action == "register" && req.Save && req.Password != "" {
+			s.cfgMu.RLock()
+			n, _ := config.FindIRCNetworkByName(s.cfg.IRC.Networks, network)
+			s.cfgMu.RUnlock()
+			if code, err := s.updateNetworkServices(network, func(v *config.ServicesConfig) error {
+				v.Enabled, v.Mechanism, v.Username, v.Password = true, "plain", n.Nickname, req.Password
+				return nil
+			}); err != nil {
+				http.Error(w, "Registered, but enabling SASL failed: "+err.Error(), code)
+				return
+			}
+			replies = append(replies, "SASL PLAIN enabled for this network; reconnecting to authenticate.")
+			defer func() { _ = s.runFullRehashFromWeb("web (sasl after register)") }()
 		}
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
