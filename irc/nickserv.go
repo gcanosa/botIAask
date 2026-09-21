@@ -33,41 +33,76 @@ func (n *ircNetwork) nickServSince(seq int) []string {
 	return append([]string(nil), n.nsReplies[len(n.nsReplies)-fresh:]...)
 }
 
-// NickServCommand sends "REGISTER <password> <email>" or "IDENTIFY <password>" to NickServ on
-// the named network and returns NickServ's replies (waits ~3s). Dashboard-only by design.
-func (b *Bot) NickServCommand(network, action, password, email string) ([]string, error) {
+const capAccountReg = "draft/account-registration"
+
+// NickServCommand runs an account action on the named network and returns the server's
+// replies (waits ~3s). ok is true when the server confirmed account creation/verification.
+// register uses the IRCv3 REGISTER command when the network offers draft/account-registration
+// (networks without NickServ), else "NickServ REGISTER". verify (IRCv3 only) confirms an emailed
+// code. Dashboard-only by design.
+func (b *Bot) NickServCommand(network, action, password, email, code string) (replies []string, ok bool, err error) {
 	n := b.network(network)
 	if n == nil {
-		return nil, fmt.Errorf("unknown network %q", network)
+		return nil, false, fmt.Errorf("unknown network %q", network)
 	}
 	n.statsMu.Lock()
 	connected := n.connected
 	n.statsMu.Unlock()
 	if !connected {
-		return nil, fmt.Errorf("network %q is not connected", network)
+		return nil, false, fmt.Errorf("network %q is not connected", network)
 	}
 	// Reject anything that could inject extra IRC parameters or lines.
-	if password == "" || strings.ContainsAny(password, " \r\n\x00") {
-		return nil, fmt.Errorf("password is required and must not contain spaces or control characters")
-	}
-	var line string
+	bad := func(v string) bool { return v == "" || strings.ContainsAny(v, " \r\n\x00") }
+	_, ircv3 := n.conn.AcknowledgedCaps()[capAccountReg]
+	nick := n.netCfg().Nickname
+
+	var send func() error
 	switch action {
 	case "identify":
-		line = "IDENTIFY " + password
-	case "register":
-		if email == "" || strings.ContainsAny(email, " \r\n\x00") {
-			return nil, fmt.Errorf("a valid email is required to register")
+		if bad(password) {
+			return nil, false, fmt.Errorf("password is required and must not contain spaces or control characters")
 		}
-		line = "REGISTER " + password + " " + email
+		send = func() error { return n.conn.Privmsg("NickServ", "IDENTIFY "+password) }
+	case "register":
+		if bad(password) {
+			return nil, false, fmt.Errorf("password is required and must not contain spaces or control characters")
+		}
+		if ircv3 {
+			if email == "" {
+				email = "*" // no email (only if the network doesn't require one)
+			} else if bad(email) {
+				return nil, false, fmt.Errorf("invalid email")
+			}
+			send = func() error { return n.conn.Send("REGISTER", "*", email, password) }
+		} else {
+			if bad(email) {
+				return nil, false, fmt.Errorf("a valid email is required to register")
+			}
+			send = func() error { return n.conn.Privmsg("NickServ", "REGISTER "+password+" "+email) }
+		}
+	case "verify":
+		if !ircv3 {
+			return nil, false, fmt.Errorf("network does not support IRCv3 account registration; verify via NickServ from another client")
+		}
+		if bad(code) {
+			return nil, false, fmt.Errorf("verification code required (no spaces)")
+		}
+		send = func() error { return n.conn.Send("VERIFY", nick, code) }
 	default:
-		return nil, fmt.Errorf("unknown action %q", action)
+		return nil, false, fmt.Errorf("unknown action %q", action)
 	}
 	n.nsMu.Lock()
 	seq := n.nsSeq
 	n.nsMu.Unlock()
-	if err := n.conn.Privmsg("NickServ", line); err != nil {
-		return nil, err
+	if err := send(); err != nil {
+		return nil, false, err
 	}
 	time.Sleep(3 * time.Second)
-	return n.nickServSince(seq), nil
+	replies = n.nickServSince(seq)
+	for _, r := range replies {
+		if strings.HasPrefix(r, "REGISTER SUCCESS") || strings.HasPrefix(r, "VERIFY SUCCESS") {
+			ok = true
+		}
+	}
+	return replies, ok, nil
 }

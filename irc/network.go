@@ -323,7 +323,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		RealName:      netCfg.Nickname,
 		UseTLS:        netCfg.UseSSL,
 		Debug:         b.getCfg().Bot.Debug,
-		RequestCaps:   []string{"server-time", "message-tags", "sasl"},
+		RequestCaps:   []string{"server-time", "message-tags", "sasl", capAccountReg},
 		ReconnectFreq: 30 * time.Second,
 		KeepAlive:     60 * time.Second,
 		Timeout:       30 * time.Second,
@@ -376,6 +376,17 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 	n.conn.AddCallback("902", authFail)
 	n.conn.AddCallback("904", authFail)
 	n.conn.AddCallback("905", authFail)
+
+	// IRCv3 account-registration replies (REGISTER/VERIFY results and FAIL) feed the same
+	// reply buffer as NickServ notices so the dashboard can show them.
+	for _, cmd := range []string{"REGISTER", "VERIFY", "FAIL"} {
+		n.conn.AddCallback(cmd, func(e ircmsg.Message) {
+			if e.Command == "FAIL" && (len(e.Params) == 0 || (e.Params[0] != "REGISTER" && e.Params[0] != "VERIFY")) {
+				return
+			}
+			n.recordNickServ(e.Command + " " + strings.Join(e.Params, " "))
+		})
+	}
 
 	n.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("irc[%s]: connected to %s! Joining channels...", n.name, serverAddr)

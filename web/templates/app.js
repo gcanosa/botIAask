@@ -4546,11 +4546,12 @@ async function ircNickServ(action) {
         network, action,
         password: pwEl ? pwEl.value : '',
         email: emailEl ? emailEl.value.trim() : '',
+        code: (document.getElementById('irc-auth-code') || {}).value || '',
         save: saveEl ? saveEl.checked : false,
-    }, action === 'register' || action === 'identify' ? 'Sent to NickServ, waiting for reply…' : 'Saving…');
+    }, action === 'register' || action === 'identify' || action === 'verify' ? 'Sent, waiting for the server’s reply…' : 'Saving…');
     if (!data) return;
     const out = document.getElementById('irc-auth-replies');
-    if (out) out.textContent = data.replies && data.replies.length ? data.replies.join('\n') : (action === 'register' || action === 'identify' ? '(no reply from NickServ)' : 'Done.');
+    if (out) out.textContent = data.replies && data.replies.length ? data.replies.join('\n') : (action === 'register' || action === 'identify' ? '(no reply — network may have neither NickServ nor account registration; use SASL with an existing account)' : 'Done.');
     if (pwEl) pwEl.value = '';
     await fetchIRCNetworks();
 }
