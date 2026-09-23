@@ -97,6 +97,10 @@ func TestCleanupPerSource(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Rows seen in a live feed within 2 days are protected from pruning; age them first.
+	if _, err := db.db.Exec(`UPDATE seen_news SET last_seen = datetime('now','-3 days'), added_at = datetime('now','-3 days', '+' || rowid || ' seconds')`); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.CleanupPerSource(2); err != nil {
 		t.Fatal(err)
 	}

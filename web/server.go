@@ -2161,6 +2161,10 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		if req.IntervalMinutes <= 0 {
+			http.Error(w, "interval_minutes must be positive", http.StatusBadRequest)
+			return
+		}
 
 		s.cfgMu.Lock()
 		oldInterval := s.cfg.RSS.IntervalMinutes
@@ -2191,9 +2195,9 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			s.rssFetcher.SetConfig(s.cfg)
 		}
 
-		// Always trigger cleanup if retention changed
+		// Prune per source (never the global newest-N: that would wipe other feeds' history and re-announce it).
 		if req.RetentionCount > 0 {
-			s.rssFetcher.GetDB().Cleanup(req.RetentionCount)
+			s.rssFetcher.GetDB().CleanupPerSource(req.RetentionCount)
 		}
 
 		w.WriteHeader(http.StatusOK)
