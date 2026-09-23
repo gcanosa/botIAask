@@ -85,6 +85,9 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("failed to migrate bookmarks table: %w", err)
 	}
 
+	// After the v2 migration (which recreates the table) so the index survives it.
+	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_bookmarks_timestamp ON bookmarks(timestamp)`)
+
 	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS reminders (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

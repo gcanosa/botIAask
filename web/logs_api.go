@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"botIAask/config"
 	"botIAask/logger"
 )
 
@@ -40,6 +41,25 @@ type logChannelEntry struct {
 type logCatalogResponse struct {
 	Calendar logCalendarMeta   `json:"calendar"`
 	Channels []logChannelEntry `json:"channels"`
+}
+
+// validLogTarget guards the public log endpoints. The channel must be a real channel name:
+// anything else maps (via logger.ChannelFileKey) to the bot's private-message log, which is
+// not meant to be public. The network, if given, must be a configured one so it can't be used
+// to walk out of logs/ ("../").
+func validLogTarget(cfg *config.Config, channel, network string) bool {
+	if channel == "" || (channel[0] != '#' && channel[0] != '&') {
+		return false
+	}
+	if network == "" {
+		return true
+	}
+	for _, n := range cfg.IRC.Networks {
+		if n.Name == network {
+			return true
+		}
+	}
+	return false
 }
 
 func parseLogBaseName(name string) (channelKey, date string, ok bool) {
@@ -256,6 +276,10 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !validLogTarget(s.getConfig(), channel, strings.TrimSpace(r.URL.Query().Get("network"))) {
+		http.Error(w, "invalid channel or network", http.StatusBadRequest)
+		return
+	}
 	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
 		http.Error(w, "invalid date", http.StatusBadRequest)
 		return

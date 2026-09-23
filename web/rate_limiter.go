@@ -89,11 +89,11 @@ func (l *LoginRateLimiter) cleanupLoop() {
 func GetClientIP(r *http.Request, trustForwarded bool) string {
 	if trustForwarded {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Rightmost entry: appended by our own trusted proxy. Earlier entries are whatever
+			// the client sent, so trusting them would let an attacker rotate IPs past the login limiter.
 			ips := strings.Split(xff, ",")
-			if len(ips) > 0 {
-				if ip := strings.TrimSpace(ips[0]); ip != "" {
-					return ip
-				}
+			if ip := strings.TrimSpace(ips[len(ips)-1]); ip != "" {
+				return ip
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {

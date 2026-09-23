@@ -210,3 +210,6 @@ func (b *ircNetwork) handleCryptoCommand(target string) {
 	msg := fmt.Sprintf("\x0313,01[CRYPTO]\x03 %s", strings.Join(resultParts, " | "))
 	b.sendPrivmsg(target, msg)
 }
+
+// CachedFetchRates is the exported, cache-backed variant of FetchRates for callers outside irc (web dashboard).
+func CachedFetchRates(base string) (*ExchangeRates, error) { return cachedFetchRates(base) }

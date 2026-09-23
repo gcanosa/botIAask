@@ -1111,6 +1111,19 @@ async function toggleGitHub() {
 }
 
 // FINANCE
+// safeHref returns an HTML-escaped URL for href attributes, or '#' unless it is http(s):
+// stops javascript:/data: URLs coming from RSS feeds or IRC users from running on click.
+function safeHref(u) {
+    const s = String(u == null ? '' : u).trim();
+    return /^https?:\/\//i.test(s) ? financeEscapeHtml(s) : '#';
+}
+
+// jsq encodes a value for embedding inside a single-quoted JS string in an inline handler:
+// encodeURIComponent leaves ' unescaped, which would break out of the string.
+function jsq(v) {
+    return encodeURIComponent(String(v == null ? '' : v)).replace(/'/g, '%27');
+}
+
 function financeEscapeHtml(str) {
     if (str == null) return '';
     return String(str)
@@ -1869,13 +1882,13 @@ async function fetchBookmarks(page) {
 
         list.innerHTML = data.bookmarks.map(b => `
             <tr style="border-bottom: 1px solid var(--glass-border);">
-                <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${b.nickname}</td>
+                <td style="padding: 1rem; color: var(--primary); font-weight: 700;">${financeEscapeHtml(b.nickname)}</td>
                 <td style="padding: 1rem;">
                     <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
-                        <a href="${b.url}" target="_blank" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
-                            ${b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url}
+                        <a href="${safeHref(b.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--text-main); text-decoration: none; border-bottom: 1px dashed var(--glass-border);">
+                            ${financeEscapeHtml(b.url.length > 50 ? b.url.substring(0, 47) + '...' : b.url)}
                         </a>
-                        <button type="button" onclick="copyBookmarkUrl(decodeURIComponent('${encodeURIComponent(b.url)}'))" title="Copy URL" class="row-action" aria-label="Copy URL">
+                        <button type="button" onclick="copyBookmarkUrl(decodeURIComponent('${jsq(b.url)}'))" title="Copy URL" class="row-action" aria-label="Copy URL">
                             ${rowIcons.copy}
                         </button>
                     </div>
@@ -2381,11 +2394,11 @@ async function fetchNews(page) {
                     <div class="news-item-head">
                         <div class="news-item-head__main">
                             ${newsSourceBadgeFor(n.Source, n.SourceIcon)}
-                            <div class="news-item-head__title">${n.Title}</div>
+                            <div class="news-item-head__title">${financeEscapeHtml(n.Title)}</div>
                         </div>
                         <div class="row-action-group">
-                            <a href="${n.Link}" target="_blank" rel="noopener" class="row-action row-action--primary" title="Open article" aria-label="Open article">${rowIcons.globe}</a>
-                            ${n.ShortLink ? `<a href="${n.ShortLink}" target="_blank" rel="noopener" class="row-action row-action--accent" title="Short link" aria-label="Short link">${rowIcons.linkChain}</a>` : ''}
+                            <a href="${safeHref(n.Link)}" target="_blank" rel="noopener" class="row-action row-action--primary" title="Open article" aria-label="Open article">${rowIcons.globe}</a>
+                            ${n.ShortLink ? `<a href="${safeHref(n.ShortLink)}" target="_blank" rel="noopener" class="row-action row-action--accent" title="Short link" aria-label="Short link">${rowIcons.linkChain}</a>` : ''}
                         </div>
                     </div>
                 </td>
@@ -2395,7 +2408,7 @@ async function fetchNews(page) {
                 ${lastIsAdmin ? `
                 <td class="news-td news-td--actions" data-label="Actions" style="padding: 1rem; text-align: right;">
                     <div class="row-action-group" style="justify-content: flex-end;">
-                        <button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete news item" onclick="deleteNews('${n.GUID}')">${rowIcons.trash}</button>
+                        <button type="button" class="row-action row-action--danger" title="Delete" aria-label="Delete news item" onclick="deleteNews(decodeURIComponent('${jsq(n.GUID)}'))">${rowIcons.trash}</button>
                     </div>
                 </td>` : '<td class="news-td news-td--actions hidden"></td>'}
             </tr>
@@ -3048,8 +3061,8 @@ async function fetchUsers() {
     document.getElementById('users-list').innerHTML = users.map(u => `
         <tr style="border-bottom: 1px solid var(--glass-border);">
             <td style="padding: 1rem;">${u.id}</td>
-            <td style="padding: 1rem;" class="font-bold">${u.username}</td>
-            <td style="padding: 1rem;"><span class="badge badge-admin">${u.role}</span></td>
+            <td style="padding: 1rem;" class="font-bold">${financeEscapeHtml(u.username)}</td>
+            <td style="padding: 1rem;"><span class="badge badge-admin">${financeEscapeHtml(u.role)}</span></td>
             <td style="padding: 1rem; color: var(--text-muted); font-size: 0.8rem;">${fmtLogin(u)}</td>
             <td style="padding: 1rem; text-align: right;">
                 <div class="row-action-group" style="justify-content: flex-end;">

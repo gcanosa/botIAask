@@ -106,6 +106,9 @@ func (f *Fetcher) FetchAndSave() error {
 	if err := f.db.CleanupMarketHistory(cutoff); err != nil {
 		log.Printf("Failed to cleanup market history: %v", err)
 	}
+	if err := f.db.CleanupPrices(time.Now().AddDate(0, 0, -30)); err != nil {
+		log.Printf("Failed to cleanup price snapshots: %v", err)
+	}
 
 	return nil
 }

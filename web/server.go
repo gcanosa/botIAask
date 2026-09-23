@@ -58,6 +58,9 @@ type Server struct {
 	progtodoDB       *progtodo.Database
 	githubFetcher    *github.Fetcher
 	templates        *template.Template
+	changelogMu      sync.Mutex
+	changelog        map[int]changelogEntry
+	forexMu          sync.Mutex // guards the three forex fields below
 	forexCache       map[string]float64
 	forexUpdate      time.Time
 	forexLastAttempt time.Time // set on every fetch attempt, even a failed one, to cool down retries
@@ -256,7 +259,13 @@ func (s *Server) Start() error {
 	cfg := s.getConfig()
 	addr := fmt.Sprintf("%s:%d", cfg.Web.Host, cfg.Web.Port)
 	mux := s.newServeMux()
-	srv := &http.Server{Addr: addr, Handler: mux}
+	// No WriteTimeout: /api/logs/stream is a long-lived SSE response.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           secure(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	s.httpSvr = srv
 	s.httpSvrMu.Unlock()
 
@@ -784,22 +793,43 @@ func (s *Server) handleChangelog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cfg := s.getConfig()
-	var commits []map[string]interface{}
-
-	// Use GitHub API if configured, otherwise fall back to local git
-	if cfg.GitHub.Owner != "" && cfg.GitHub.Repo != "" {
-		commits = fetchFromGitHub(cfg.GitHub, limit)
-	} else {
-		gitLog := executeGitLog(limit)
-		commits = parseGitLog(gitLog)
-	}
+	// Public endpoint: each miss hits the GitHub API (burning its rate limit) or spawns `git log`,
+	// so serve a short-lived cached copy per limit.
+	commits := s.changelogCached(limit)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"commits": commits,
 		"total":   len(commits),
 	})
+}
+
+const changelogTTL = 5 * time.Minute
+
+type changelogEntry struct {
+	at      time.Time
+	commits []map[string]interface{}
+}
+
+func (s *Server) changelogCached(limit int) []map[string]interface{} {
+	s.changelogMu.Lock()
+	defer s.changelogMu.Unlock()
+	if e, ok := s.changelog[limit]; ok && time.Since(e.at) < changelogTTL {
+		return e.commits
+	}
+	cfg := s.getConfig()
+	var commits []map[string]interface{}
+	// Use GitHub API if configured, otherwise fall back to local git
+	if cfg.GitHub.Owner != "" && cfg.GitHub.Repo != "" {
+		commits = fetchFromGitHub(cfg.GitHub, limit)
+	} else {
+		commits = parseGitLog(executeGitLog(limit))
+	}
+	if s.changelog == nil {
+		s.changelog = make(map[int]changelogEntry)
+	}
+	s.changelog[limit] = changelogEntry{at: time.Now(), commits: commits} // ponytail: limit is capped at 200 so the map stays tiny
+	return commits
 }
 
 func executeGitLog(limit int) string {
@@ -958,6 +988,10 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	if !validLogTarget(s.getConfig(), channel, network) {
+		http.Error(w, "invalid channel or network", http.StatusBadRequest)
+		return
+	}
 	if network == "" {
 		if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
 			network = nets[0].Name
@@ -2478,9 +2512,16 @@ func (s *Server) sessionStaffInfo(r *http.Request) (sessionOK, staffAdmin bool, 
 	return true, isPrivilegedAdminRole(role), needs
 }
 
+// staffAdminFromRequest reports whether the request carries a valid privileged dashboard session.
+// Mutating methods additionally require a valid CSRF token, so every handler that gates on this
+// is CSRF-protected without having to remember requireAdminCSRF.
 func (s *Server) staffAdminFromRequest(r *http.Request) bool {
 	_, staff, _ := s.sessionStaffInfo(r)
-	return staff
+	if !staff {
+		return false
+	}
+	cookie, err := r.Cookie("admin_session")
+	return err == nil && s.csrfValid(r, cookie.Value)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -2581,7 +2622,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("admin_session")
 	if err == nil {
 		s.authDB.DeleteSession(cookie.Value)
-		s.authDB.DeleteCSRFToken(cookie.Value)
 	}
 
 	secure := true
@@ -2703,6 +2743,8 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
+	// A leaked/old password must not keep other sessions alive.
+	s.authDB.DeleteOtherSessions(userID, cookie.Value)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -3009,6 +3051,10 @@ func (s *Server) handleUploadCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimSpace(r.FormValue("token"))
 	username, channel, network, err := s.uploadsDB.CancelUploadByToken(token)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "Nothing to cancel (unknown token or already submitted)", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "Error cancelling", http.StatusInternalServerError)
 		return
@@ -3269,22 +3315,13 @@ func (s *Server) handlePasteReject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
-	data := map[string]interface{}{}
+// forexSnapshot returns a copy of the cached forex rates and their update time, refreshing them
+// when stale (1 hour). forexMu is held across the refresh, so concurrent dashboard loads share one
+// upstream fetch instead of each firing their own (and racing on the cache fields).
+func (s *Server) forexSnapshot() (map[string]float64, time.Time) {
+	s.forexMu.Lock()
+	defer s.forexMu.Unlock()
 
-	// Get Crypto Prices
-	data["crypto"] = []crypto.PriceEntry{}
-	var cryptoLastUpdate time.Time
-	if s.cryptoDB != nil {
-		prices, err := s.cryptoDB.GetLatestPrices()
-		if err == nil && len(prices) > 0 {
-			data["crypto"] = prices
-			cryptoLastUpdate = prices[0].FetchedAt
-		}
-	}
-	data["crypto_last_update"] = cryptoLastUpdate.Format(time.RFC3339)
-
-	// Get Forex Rates with simple server-side caching (1 hour).
 	// If cache is empty, retry — but only once per minute, so a persistently failing/
 	// rate-limited upstream doesn't turn every dashboard page load into a fresh API hit.
 	cacheEmpty := s.forexCache == nil || len(s.forexCache) == 0
@@ -3293,14 +3330,14 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 		forex := map[string]float64{}
 
 		// EUR to USD
-		if eurRates, err := irc.FetchRates("EUR"); err == nil {
+		if eurRates, err := irc.CachedFetchRates("EUR"); err == nil {
 			if rate, ok := eurRates.Rates["USD"]; ok {
 				forex["eur_usd"] = rate
 			}
 		}
 
 		// USD to ARS (Official)
-		if usdRates, err := irc.FetchRates("USD"); err == nil {
+		if usdRates, err := irc.CachedFetchRates("USD"); err == nil {
 			if rate, ok := usdRates.Rates["ARS"]; ok {
 				forex["usd_ars"] = rate
 			}
@@ -3334,12 +3371,29 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	forexOut := map[string]float64{}
-	if s.forexCache != nil {
-		for k, v := range s.forexCache {
-			forexOut[k] = v
+	out := make(map[string]float64, len(s.forexCache))
+	for k, v := range s.forexCache {
+		out[k] = v
+	}
+	return out, s.forexUpdate
+}
+
+func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{}
+
+	// Get Crypto Prices
+	data["crypto"] = []crypto.PriceEntry{}
+	var cryptoLastUpdate time.Time
+	if s.cryptoDB != nil {
+		prices, err := s.cryptoDB.GetLatestPrices()
+		if err == nil && len(prices) > 0 {
+			data["crypto"] = prices
+			cryptoLastUpdate = prices[0].FetchedAt
 		}
 	}
+	data["crypto_last_update"] = cryptoLastUpdate.Format(time.RFC3339)
+
+	forexOut, forexUpdate := s.forexSnapshot()
 	// Fill gaps (e.g. official USD/ARS) from DB when the live API omits a key but history exists.
 	if s.cryptoDB != nil {
 		if dbFX, err := s.cryptoDB.GetLatestForexPerKey(); err == nil {
@@ -3351,7 +3405,7 @@ func (s *Server) handleFinance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data["forex"] = forexOut
-	data["forex_last_update"] = s.forexUpdate.Format(time.RFC3339)
+	data["forex_last_update"] = forexUpdate.Format(time.RFC3339)
 
 	// % change vs previous stored snapshot (second-latest row per key), not 24h — matches "last fetch" up/down.
 	forexChange := map[string]float64{}
