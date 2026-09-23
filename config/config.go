@@ -271,6 +271,10 @@ func applyRSSDefaults(cfg *Config) {
 		t := true
 		cfg.RSS.AnnounceToIRC = &t
 	}
+	// A zero/negative interval would panic time.NewTicker and silently kill the fetch loop.
+	if cfg.RSS.IntervalMinutes <= 0 {
+		cfg.RSS.IntervalMinutes = 30
+	}
 }
 
 func applyWebDefaults(cfg *Config) {

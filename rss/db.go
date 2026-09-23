@@ -60,10 +60,22 @@ func NewDatabase(dbPath string) (*Database, error) {
 	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN dedup_key TEXT")
 	_, _ = sqldb.Exec("UPDATE seen_news SET link_normalized = '' WHERE link_normalized IS NULL")
 	_, _ = sqldb.Exec("UPDATE seen_news SET dedup_key = '' WHERE dedup_key IS NULL")
+	// last_seen: refreshed whenever an item is still present in a live feed, so pruning
+	// never drops rows the feed would immediately re-offer as "new".
+	_, _ = sqldb.Exec("ALTER TABLE seen_news ADD COLUMN last_seen DATETIME")
 
 	d := &Database{db: sqldb}
 	if err := d.backfillDedupColumns(); err != nil {
 		return nil, err
+	}
+	// Created after backfill so the column values the indexes cover are already populated.
+	for _, ddl := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_seen_news_dedup_key ON seen_news(dedup_key)",
+		"CREATE INDEX IF NOT EXISTS idx_seen_news_link_norm ON seen_news(link_normalized)",
+	} {
+		if _, err := sqldb.Exec(ddl); err != nil {
+			return nil, fmt.Errorf("failed to create index: %w", err)
+		}
 	}
 
 	return d, nil
@@ -130,18 +142,22 @@ func (d *Database) IsSeen(guid string) (bool, error) {
 }
 
 // NewsItemDuplicate reports whether this item is already stored (by row id, dedup hash, or normalized link).
+// It also stamps last_seen on the matching row, so one indexed query both checks and marks the item as
+// still present in the live feed (see CleanupPerSource).
 func (d *Database) NewsItemDuplicate(guid, dedupKey, linkNormalized string) (bool, error) {
 	guid = strings.TrimSpace(guid)
 	dedupKey = strings.TrimSpace(dedupKey)
 	linkNormalized = strings.TrimSpace(linkNormalized)
-	var exists bool
-	err := d.db.QueryRow(`
-		SELECT EXISTS(
-			SELECT 1 FROM seen_news WHERE guid = ?
-			OR (TRIM(COALESCE(dedup_key, '')) != '' AND dedup_key = ?)
-			OR (TRIM(COALESCE(link_normalized, '')) != '' AND link_normalized = ?)
-		)`, guid, dedupKey, linkNormalized).Scan(&exists)
-	return exists, err
+	// NULLIF: an empty key must never match (NULL = anything is not true).
+	res, err := d.db.Exec(`
+		UPDATE seen_news SET last_seen = CURRENT_TIMESTAMP
+		WHERE guid = ? OR dedup_key = NULLIF(?, '') OR link_normalized = NULLIF(?, '')`,
+		guid, dedupKey, linkNormalized)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (d *Database) MarkSeen(entry NewsEntry) error {
@@ -151,7 +167,7 @@ func (d *Database) MarkSeen(entry NewsEntry) error {
 	if strings.TrimSpace(entry.DedupKey) == "" {
 		return fmt.Errorf("cannot mark news as seen with empty dedup key")
 	}
-	_, err := d.db.Exec(`INSERT INTO seen_news (guid, title, link, short_link, pub_date, source, source_icon, link_normalized, dedup_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := d.db.Exec(`INSERT INTO seen_news (guid, title, link, short_link, pub_date, source, source_icon, link_normalized, dedup_key, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		entry.GUID, entry.Title, entry.Link, entry.ShortLink, entry.PubDate, entry.Source, entry.SourceIcon, entry.LinkNormalized, entry.DedupKey)
 	return err
 }
@@ -220,19 +236,11 @@ func (d *Database) DeleteEntry(guid string) error {
 	return err
 }
 
-func (d *Database) Cleanup(keep int) error {
-	_, err := d.db.Exec(`
-		DELETE FROM seen_news 
-		WHERE guid NOT IN (
-			SELECT guid FROM seen_news 
-			ORDER BY added_at DESC 
-			LIMIT ?
-		)
-	`, keep)
-	return err
-}
-
 // CleanupPerSource retains the newest keepPerSource rows per source bucket (empty source groups legacy rows together).
+// Rows seen in a live feed within the last 2 days are never deleted, even beyond the cap: a feed longer than
+// keepPerSource would otherwise have its tail pruned and re-announced as new on the next cycle.
+// Rows seen in a live feed within the last 2 days are never deleted, even beyond the cap: a feed longer than
+// keepPerSource would otherwise have its tail pruned and re-announced as new on the next cycle.
 func (d *Database) CleanupPerSource(keepPerSource int) error {
 	if keepPerSource <= 0 {
 		return nil
@@ -260,7 +268,7 @@ func (d *Database) CleanupPerSource(keepPerSource int) error {
 				WHERE `+sourceBucketExpr()+` = ?
 				ORDER BY datetime(added_at) DESC
 				LIMIT -1 OFFSET ?
-			)`, src, keepPerSource)
+			) AND COALESCE(last_seen, added_at) < datetime('now', '-2 days')`, src, keepPerSource)
 		if err != nil {
 			return err
 		}

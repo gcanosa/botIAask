@@ -6,12 +6,14 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"botIAask/config"
 	"botIAask/internal/guard"
+	"botIAask/meta"
 	"github.com/mmcdole/gofeed"
 )
 
@@ -40,6 +42,30 @@ type lastFeedFetch struct {
 // stall the rest of the cycle (gofeed's own default client has no timeout).
 var feedHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+const (
+	// seedAnnounce: when a feed has no known items at all (new feed / wiped DB), only its newest
+	// N items are announced; the rest are recorded silently so adding a feed can't flood channels.
+	seedAnnounce = 3
+	// maxAnnouncePerCycle caps IRC output per fetch cycle; leftovers stay unseen and go out next cycle.
+	maxAnnouncePerCycle = 10
+	// maxFeedBytes bounds a single feed download.
+	maxFeedBytes = 10 << 20
+	// conditionalMaxAge: force a full download at least this often even if the server keeps
+	// answering 304, so last_seen keeps being refreshed for every item still in the feed.
+	conditionalMaxAge = 12 * time.Hour
+)
+
+// Package-level so tests can run without sleeping or hitting real shorteners.
+var (
+	announceDelay = 3 * time.Second
+	shortenURL    = ShortenURLWithService
+)
+
+type feedValidators struct {
+	etag, lastModified string
+	fullAt             time.Time
+}
+
 type Fetcher struct {
 	cfg        *config.Config
 	bot        BotInterface
@@ -51,16 +77,21 @@ type Fetcher struct {
 	lfMu       sync.RWMutex
 	feedLast   map[string]lastFeedFetch
 	feedLastMu sync.RWMutex
+	// fetchMu serialises Fetch/Backfill (ticker, "fetch now", config restarts) so one item is never
+	// announced twice; validators is only touched while it is held.
+	fetchMu    sync.Mutex
+	validators map[string]feedValidators
 }
 
 func NewFetcher(cfg *config.Config, bot BotInterface, db *Database) *Fetcher {
 	return &Fetcher{
-		cfg:      cfg,
-		bot:      bot,
-		db:       db,
-		enabled:  cfg.RSS.Enabled,
-		stopChan: make(chan struct{}),
-		feedLast: make(map[string]lastFeedFetch),
+		cfg:        cfg,
+		bot:        bot,
+		db:         db,
+		enabled:    cfg.RSS.Enabled,
+		stopChan:   make(chan struct{}),
+		feedLast:   make(map[string]lastFeedFetch),
+		validators: make(map[string]feedValidators),
 	}
 }
 
@@ -76,6 +107,10 @@ func (f *Fetcher) Start() {
 	stop := f.stopChan
 	intervalMin := f.cfg.RSS.IntervalMinutes
 	f.mu.Unlock()
+	if intervalMin <= 0 {
+		log.Printf("[RSS] interval_minutes=%d is invalid, using 30", intervalMin)
+		intervalMin = 30
+	}
 
 	ticker := time.NewTicker(time.Duration(intervalMin) * time.Minute)
 	defer ticker.Stop()
@@ -214,10 +249,93 @@ func feedDisplayLabel(feedURL string, feed *gofeed.Feed) string {
 	return FeedLabelFallback(feedURL)
 }
 
+// fetchFeed downloads and parses one feed with an identifying User-Agent, conditional GET
+// (ETag / Last-Modified) when conditional is set, and a body size cap. notModified is true on 304.
+// Callers must hold fetchMu (validators map).
+func (f *Fetcher) fetchFeed(fp *gofeed.Parser, feedURL string, conditional bool) (feed *gofeed.Feed, notModified bool, err error) {
+	req, err := http.NewRequest(http.MethodGet, feedURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("User-Agent", meta.Name+"/"+meta.Version+" (+RSS reader)")
+	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8")
+	if v, ok := f.validators[feedURL]; conditional && ok && time.Since(v.fullAt) < conditionalMaxAge {
+		if v.etag != "" {
+			req.Header.Set("If-None-Match", v.etag)
+		}
+		if v.lastModified != "" {
+			req.Header.Set("If-Modified-Since", v.lastModified)
+		}
+	}
+	resp, err := feedHTTPClient.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, true, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, false, fmt.Errorf("http status %d", resp.StatusCode)
+	}
+	feed, err = fp.Parse(io.LimitReader(resp.Body, maxFeedBytes))
+	if err != nil {
+		return nil, false, err
+	}
+	f.validators[feedURL] = feedValidators{
+		etag:         resp.Header.Get("ETag"),
+		lastModified: resp.Header.Get("Last-Modified"),
+		fullAt:       time.Now(),
+	}
+	return feed, false, nil
+}
+
+// newEntriesFrom returns the feed items not yet stored (touching last_seen on the known ones).
+// A feed with items but none known (new feed / wiped DB) is "seeded": everything except the
+// newest seedAnnounce items is recorded silently, and only those are returned for announcing.
+func (f *Fetcher) newEntriesFrom(feed *gofeed.Feed, feedURL string) []NewsEntry {
+	src := FeedSourceKeyFromFeed(feedURL, feed)
+	srcIcon := SourceIconForFeedURL(feed, feedURL)
+	var fresh []NewsEntry
+	known := 0
+	for _, item := range feed.Items {
+		entry, ok := EntryFromFeedItem(item, src, srcIcon)
+		if !ok {
+			continue
+		}
+		dup, err := f.db.NewsItemDuplicate(entry.GUID, entry.DedupKey, entry.LinkNormalized)
+		if err != nil {
+			log.Printf("[RSS] DB Error: %v", err)
+			continue
+		}
+		if dup {
+			known++
+			continue
+		}
+		fresh = append(fresh, entry)
+	}
+	if known == 0 && len(fresh) > seedAnnounce {
+		sort.SliceStable(fresh, func(i, j int) bool { return fresh[i].PubDate.Before(fresh[j].PubDate) })
+		silent := fresh[:len(fresh)-seedAnnounce]
+		for _, e := range silent {
+			if err := f.db.MarkSeen(e); err != nil {
+				log.Printf("[RSS] Failed to seed entry: %v", err)
+			}
+		}
+		log.Printf("[RSS] Feed %s is new: recorded %d items silently, announcing newest %d", feedURL, len(silent), seedAnnounce)
+		fresh = fresh[len(fresh)-seedAnnounce:]
+	}
+	return fresh
+}
+
 func (f *Fetcher) Fetch() {
 	if !f.bot.IsConnected() {
 		return
 	}
+	if !f.fetchMu.TryLock() {
+		return // a cycle is already running
+	}
+	defer f.fetchMu.Unlock()
 
 	f.mu.Lock()
 	cfg := f.cfg
@@ -228,7 +346,6 @@ func (f *Fetcher) Fetch() {
 	f.lfMu.Unlock()
 
 	fp := gofeed.NewParser()
-	fp.Client = feedHTTPClient
 	var newEntries []NewsEntry
 	perFeed := make(map[string]lastFeedFetch, len(cfg.RSS.FeedURLs))
 
@@ -236,58 +353,59 @@ func (f *Fetcher) Fetch() {
 		if feedURL == "" {
 			continue
 		}
-		feed, err := fp.ParseURL(feedURL)
+		feed, notModified, err := f.fetchFeed(fp, feedURL, true)
 		at := time.Now()
 		if err != nil {
 			log.Printf("[RSS] Error fetching feed %s: %v", feedURL, err)
 			perFeed[feedURL] = lastFeedFetch{OK: false, Err: err.Error(), Label: FeedLabelFallback(feedURL), At: at}
 			continue
 		}
+		if notModified {
+			f.feedLastMu.RLock()
+			prev, had := f.feedLast[feedURL]
+			f.feedLastMu.RUnlock()
+			label := FeedLabelFallback(feedURL)
+			if had && prev.Label != "" {
+				label = prev.Label
+			}
+			perFeed[feedURL] = lastFeedFetch{OK: true, Label: label, At: at}
+			continue
+		}
 
 		perFeed[feedURL] = lastFeedFetch{OK: true, Label: feedDisplayLabel(feedURL, feed), At: at}
-
-		src := FeedSourceKeyFromFeed(feedURL, feed)
-		srcIcon := SourceIconForFeedURL(feed, feedURL)
-		for _, item := range feed.Items {
-			entry, ok := EntryFromFeedItem(item, src, srcIcon)
-			if !ok {
-				continue
-			}
-			dup, err := f.db.NewsItemDuplicate(entry.GUID, entry.DedupKey, entry.LinkNormalized)
-			if err != nil {
-				log.Printf("[RSS] DB Error: %v", err)
-				continue
-			}
-			if !dup {
-				newEntries = append(newEntries, entry)
-			}
-		}
+		newEntries = append(newEntries, f.newEntriesFrom(feed, feedURL)...)
 	}
 
 	f.feedLastMu.Lock()
 	f.feedLast = perFeed
 	f.feedLastMu.Unlock()
 
-	// Send new entries to IRC with anti-spam delay
-	// Sort by PubDate to send oldest first among the new ones
-	// Actually we might want to sort all newEntries by PubDate if they come from different feeds
+	// Oldest first across all feeds; announced items are limited per cycle (leftovers stay
+	// unseen and are picked up next cycle).
+	sort.SliceStable(newEntries, func(i, j int) bool { return newEntries[i].PubDate.Before(newEntries[j].PubDate) })
+	announce := cfg.RSS.AnnounceToIRCEnabled()
+	if announce && len(newEntries) > maxAnnouncePerCycle {
+		log.Printf("[RSS] %d new items; announcing %d now, rest next cycle", len(newEntries), maxAnnouncePerCycle)
+		newEntries = newEntries[:maxAnnouncePerCycle]
+	}
 
-	for i := len(newEntries) - 1; i >= 0; i-- {
-		entry := newEntries[i]
+	for _, entry := range newEntries {
+		// Don't burn items while IRC is down: they stay unseen and are announced after reconnect.
+		if announce && !f.bot.IsConnected() {
+			log.Printf("[RSS] IRC disconnected mid-announce; deferring remaining items")
+			break
+		}
+		entry.ShortLink = shortenURL(entry.Link, cfg.RSS.URLShortener)
 
-		// Shorten link and store it in entry
-		entry.ShortLink = ShortenURLWithService(entry.Link, cfg.RSS.URLShortener)
-
-		// Mark as seen FIRST so we don't retry if broadcast fails for some reason
+		if announce {
+			f.bot.Broadcast(cfg.RSS.Channels, FormatIRCNewsLine(entry, entry.ShortLink))
+		}
 		if err := f.db.MarkSeen(entry); err != nil {
 			log.Printf("[RSS] Failed to mark seen: %v", err)
 			continue
 		}
-
-		if cfg.RSS.AnnounceToIRCEnabled() {
-			msg := FormatIRCNewsLine(entry, entry.ShortLink)
-			f.bot.Broadcast(cfg.RSS.Channels, msg)
-			time.Sleep(3 * time.Second)
+		if announce {
+			time.Sleep(announceDelay)
 		}
 	}
 
@@ -303,16 +421,18 @@ func (f *Fetcher) Fetch() {
 
 // Backfill populates the database with the latest X items without broadcasting them.
 func (f *Fetcher) Backfill(limit int) int {
+	f.fetchMu.Lock()
+	defer f.fetchMu.Unlock()
+
 	f.mu.Lock()
 	cfg := f.cfg
 	f.mu.Unlock()
 
 	fp := gofeed.NewParser()
-	fp.Client = feedHTTPClient
 	totalAdded := 0
 
 	for _, feedURL := range cfg.RSS.FeedURLs {
-		feed, err := fp.ParseURL(feedURL)
+		feed, _, err := f.fetchFeed(fp, feedURL, false)
 		if err != nil {
 			log.Printf("[RSS] Error fetching feed %s for backfill: %v", feedURL, err)
 			continue
@@ -339,7 +459,7 @@ func (f *Fetcher) Backfill(limit int) int {
 			if dup {
 				continue
 			}
-			entry.ShortLink = ShortenURLWithService(entry.Link, cfg.RSS.URLShortener)
+			entry.ShortLink = shortenURL(entry.Link, cfg.RSS.URLShortener)
 			if err := f.db.MarkSeen(entry); err != nil {
 				log.Printf("[RSS] Failed to save backfill entry: %v", err)
 				continue
