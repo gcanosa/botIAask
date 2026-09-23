@@ -55,7 +55,7 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 
 | File | Owner |
 |------|-------|
-| `rss_seen.db` | `rss` package |
+| `rss_seen.db` | `rss` package (`last_seen` keeps rows still in a live feed from being pruned/re-announced; new feeds announce only their newest 3 items, max 10 announcements per cycle) |
 | `stats.db` | `stats` package (`bot_stats` snapshots + `chan_activity` per-channel daily rollups for web Channel Stats, built from `logs/` by `stats.RunChanRollup`; `logger.ParseDayLog` is the parser) |
 | `bookmarks.db` | `bookmarks` package |
 | `uploads.db` | `uploads` package |
@@ -101,7 +101,10 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 - Session cookies: `admin_session` (HttpOnly, Secure, SameSite=Strict, 24h TTL)
 - CSRF: every mutating request (POST/PUT/PATCH/DELETE) must include `X-CSRF-Token` header or `csrf_token` form field. The CSRF token is returned at login.
 - `requireAdminCSRF(r)` — use this instead of `checkAuth(r)` for any handler that mutates state.
-- `csrfValid(r, sessionToken)` — use this when session is already validated separately (e.g. `staffAdminFromRequest` handlers).
+- `csrfValid(r, sessionToken)` — use this when session is already validated separately. `staffAdminFromRequest(r)` already enforces CSRF on mutating methods.
+- `web/middleware.go` `secure()` wraps the mux: `nosniff`/`X-Frame-Options`/`Referrer-Policy` headers and a 1 MiB body cap (all routes except `/upload`). No CSP yet (dashboard uses inline `onclick`).
+- In `web/templates/app.js`, never interpolate IRC/feed/user text into `innerHTML` raw: use `financeEscapeHtml()`, `safeHref()` for `href`, and `jsq()` inside single-quoted inline-handler strings.
+- `/api/logs/*` accept only `#`/`&` channels and configured networks (non-`#` names map to the private-message log).
 - Initial admin password: if `web.auth.password` is empty in config, a random 32-char hex password is generated and printed once to the log.
 
 ---

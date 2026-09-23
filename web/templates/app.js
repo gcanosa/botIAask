@@ -2456,26 +2456,108 @@ function changeNewsPage(d) {
 }
 
 // AUTH & ADMIN
-function showLogin() { 
+function showLogin() {
+    ['adduser-modal', 'force-password-modal', 'progtodo-add-modal', 'upload-detail-modal'].forEach((id) => {
+        document.getElementById(id)?.classList.add('hidden');
+    });
+    resetLoginForm();
     document.getElementById('modal-overlay').classList.remove('hidden');
-    document.getElementById('login-modal').classList.remove('hidden'); 
+    document.getElementById('login-modal').classList.remove('hidden');
+    document.getElementById('login-username').focus();
 }
-function hideLogin() { 
+function hideLogin() {
+    resetLoginForm();
     document.getElementById('modal-overlay').classList.add('hidden');
-    document.getElementById('login-modal').classList.add('hidden'); 
+    document.getElementById('login-modal').classList.add('hidden');
 }
 
-async function login() {
-    const u = document.getElementById('login-username').value;
-    const p = document.getElementById('login-password').value;
-    const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: u, password: p })
-    });
-    if (res.ok) { hideLogin(); fetchStatus(); }
-    else document.getElementById('login-error').classList.remove('hidden');
+function resetLoginForm() {
+    document.getElementById('login-modal').reset();
+    setLoginError('');
+    setLoginBusy(false);
+    setLoginPasswordVisible(false);
+    document.getElementById('login-caps').classList.add('hidden');
 }
+function setLoginError(msg) {
+    const el = document.getElementById('login-error');
+    el.textContent = msg;
+    el.classList.toggle('hidden', !msg);
+}
+function setLoginBusy(busy) {
+    const btn = document.getElementById('login-submit');
+    btn.disabled = busy;
+    btn.classList.toggle('is-loading', busy);
+    document.getElementById('login-submit-label').textContent = busy ? 'Signing in…' : 'Sign in';
+}
+function setLoginPasswordVisible(visible) {
+    const input = document.getElementById('login-password');
+    const toggle = document.getElementById('login-pw-toggle');
+    input.type = visible ? 'text' : 'password';
+    toggle.setAttribute('aria-pressed', String(visible));
+    toggle.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+    toggle.querySelector('.icon-eye').classList.toggle('hidden', visible);
+    toggle.querySelector('.icon-eye-off').classList.toggle('hidden', !visible);
+}
+
+async function login(ev) {
+    if (ev) ev.preventDefault();
+    const uEl = document.getElementById('login-username');
+    const pEl = document.getElementById('login-password');
+    const u = uEl.value.trim();
+    const p = pEl.value;
+    if (!u || !p) {
+        setLoginError('Enter your username and password.');
+        (u ? pEl : uEl).focus();
+        return;
+    }
+    setLoginError('');
+    setLoginBusy(true);
+    try {
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p })
+        });
+        if (res.ok) {
+            hideLogin();
+            fetchStatus();
+            return;
+        }
+        let msg = res.status === 401 ? 'Invalid username or password.' : `Sign-in failed (HTTP ${res.status}).`;
+        if (res.status === 429) {
+            msg = (await res.text()).trim() || 'Too many attempts. Try again later.';
+        }
+        setLoginError(msg);
+        pEl.value = '';
+        pEl.focus();
+    } catch (e) {
+        setLoginError('Cannot reach the server. Check your connection and try again.');
+    } finally {
+        setLoginBusy(false);
+    }
+}
+
+(function initLoginForm() {
+    const form = document.getElementById('login-modal');
+    const overlay = document.getElementById('modal-overlay');
+    if (!form || !overlay) return;
+    document.getElementById('login-pw-toggle').addEventListener('click', () => {
+        const input = document.getElementById('login-password');
+        setLoginPasswordVisible(input.type === 'password');
+        input.focus();
+    });
+    const caps = document.getElementById('login-caps');
+    const pw = document.getElementById('login-password');
+    const syncCaps = (e) => caps.classList.toggle('hidden', !(e.getModifierState && e.getModifierState('CapsLock')));
+    pw.addEventListener('keydown', syncCaps);
+    pw.addEventListener('keyup', syncCaps);
+    pw.addEventListener('blur', () => caps.classList.add('hidden'));
+    form.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideLogin(); });
+    // Click on the dimmed backdrop (not on the card) closes the dialog.
+    overlay.addEventListener('mousedown', (e) => {
+        if (e.target === overlay && !form.classList.contains('hidden')) hideLogin();
+    });
+})();
 
 async function logout() { await fetch('/api/logout', { method: 'POST' }); location.reload(); }
 
@@ -3186,8 +3268,15 @@ function showForcePassword() {
     document.getElementById('force-password-modal').classList.remove('hidden');
 }
 
-async function updatePassword() {
+async function updatePassword(ev) {
+    if (ev) ev.preventDefault();
+    const errEl = document.getElementById('force-password-error');
     const p = document.getElementById('new-password-input').value;
+    if (!p) {
+        errEl.textContent = 'Enter a new password.';
+        errEl.classList.remove('hidden');
+        return;
+    }
     const res = await fetch('/api/users/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3196,10 +3285,12 @@ async function updatePassword() {
     if (res.ok) {
         document.getElementById('modal-overlay').classList.add('hidden');
         document.getElementById('force-password-modal').classList.add('hidden');
+        document.getElementById('new-password-input').value = '';
+        errEl.classList.add('hidden');
         fetchStatus();
     } else {
-        document.getElementById('force-password-error').textContent = "Update failed";
-        document.getElementById('force-password-error').classList.remove('hidden');
+        errEl.textContent = 'Update failed. Please try again.';
+        errEl.classList.remove('hidden');
     }
 }
 
