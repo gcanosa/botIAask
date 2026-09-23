@@ -174,7 +174,21 @@ func (a *AuthDatabase) ValidateSession(token string) (int, bool, error) {
 
 func (a *AuthDatabase) DeleteSession(token string) error {
 	_, err := a.db.Exec("DELETE FROM web_sessions WHERE token = ?", token)
+	// csrf_tokens is keyed by session_token; drop it with the session.
+	_, _ = a.db.Exec("DELETE FROM csrf_tokens WHERE session_token = ?", token)
 	return err
+}
+
+// revokeSessions deletes a user's sessions (and their CSRF tokens), optionally keeping one token.
+func (a *AuthDatabase) revokeSessions(userID any, keepToken string) {
+	_, _ = a.db.Exec(`DELETE FROM csrf_tokens WHERE session_token IN
+		(SELECT token FROM web_sessions WHERE user_id = ? AND token != ?)`, userID, keepToken)
+	_, _ = a.db.Exec("DELETE FROM web_sessions WHERE user_id = ? AND token != ?", userID, keepToken)
+}
+
+// DeleteOtherSessions signs a user out everywhere except the session identified by keepToken.
+func (a *AuthDatabase) DeleteOtherSessions(userID int, keepToken string) {
+	a.revokeSessions(userID, keepToken)
 }
 
 // ActiveSessionUsernames returns distinct usernames with a valid, non-expired web admin session.
@@ -276,10 +290,14 @@ func (a *AuthDatabase) UpdateUserPassword(id string, newPassword string) error {
 	}
 
 	_, err = a.db.Exec("UPDATE web_users SET password_hash = ? WHERE id = ?", string(hash), id)
+	if err == nil {
+		a.revokeSessions(id, "")
+	}
 	return err
 }
 
 func (a *AuthDatabase) RemoveUser(id string) error {
+	a.revokeSessions(id, "")
 	_, err := a.db.Exec("DELETE FROM web_users WHERE id = ?", id)
 	return err
 }

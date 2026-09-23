@@ -40,6 +40,8 @@ func NewDatabase(dbPath string) (*Database, error) {
 	// Migration: Ensure change_24h column exists
 	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
 	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN gecko_id TEXT DEFAULT '';")
+	// GetLatestPrices runs MAX(fetched_at) + an equality filter on every dashboard/health hit.
+	_, _ = sqldb.Exec("CREATE INDEX IF NOT EXISTS idx_crypto_prices_fetched_at ON crypto_prices(fetched_at)")
 
 	_, err = sqldb.Exec(`
 		CREATE TABLE IF NOT EXISTS forex_rates (
@@ -354,6 +356,12 @@ func (d *Database) GetMarketHistoryForCoin(geckoID string, since time.Time) ([][
 func (d *Database) CleanupMarketHistory(keepSince time.Time) error {
 	sinceMs := keepSince.UnixMilli()
 	_, err := d.db.Exec("DELETE FROM crypto_market_history WHERE timestamp_ms < ?", sinceMs)
+	return err
+}
+
+// CleanupPrices removes price snapshots older than keepSince (crypto_prices otherwise grows forever).
+func (d *Database) CleanupPrices(keepSince time.Time) error {
+	_, err := d.db.Exec("DELETE FROM crypto_prices WHERE fetched_at < ?", keepSince)
 	return err
 }
 

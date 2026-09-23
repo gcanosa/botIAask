@@ -354,8 +354,16 @@ func (d *Database) CancelUploadByToken(token string) (username, channel, network
 	if err != nil {
 		return "", "", "", err
 	}
-	_, err = d.db.Exec(`UPDATE uploads SET status = 'cancelled' WHERE token = ?`, token)
-	return username, channel, network, err
+	// Only a not-yet-submitted upload can be cancelled by its token; an approved/pending item
+	// must go through admin moderation (the token may have leaked).
+	res, err := d.db.Exec(`UPDATE uploads SET status = 'cancelled' WHERE token = ? AND status = 'pending_form'`, token)
+	if err != nil {
+		return "", "", "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", "", "", sql.ErrNoRows
+	}
+	return username, channel, network, nil
 }
 
 func (d *Database) ApproveTicket(ticketID string) error {
