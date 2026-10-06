@@ -27,3 +27,14 @@ func TestValidLogTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNetworkLogKey(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.IRC.Networks = []config.IRCNetworkConfig{{Name: "irc.libera.chat"}}
+	if !isNetworkLogKey(cfg, "irc.libera.chat") {
+		t.Fatal("network name is the PM log key and must be refused as a channel fallback")
+	}
+	if isNetworkLogKey(cfg, "go") {
+		t.Fatal("ordinary channel key misclassified")
+	}
+}

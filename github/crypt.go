@@ -5,8 +5,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 )
@@ -27,12 +29,18 @@ func NewCryptor(keyPath string) (*Cryptor, error) {
 	if err == nil && len(key) == secretKeyLen {
 		return &Cryptor{key: key}, nil
 	}
+	if err == nil {
+		return nil, fmt.Errorf("github: secret key %s has %d bytes, want %d (fix or restore it; not regenerating)", keyPath, len(key), secretKeyLen)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("github: read secret key %s: %w", keyPath, err)
+	}
 
 	key = make([]byte, secretKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("github: generate secret key: %w", err)
 	}
-	if err := os.WriteFile(keyPath, key, 0600); err != nil {
+	if err := writeKeyExcl(keyPath, key); err != nil {
 		return nil, fmt.Errorf("github: persist secret key: %w", err)
 	}
 	log.Printf("[SECURITY] Generated GitHub tracker PAT encryption key at %s (mode 0600) — back this up; losing it makes stored tokens unrecoverable (re-enter them via the dashboard)", keyPath)
@@ -87,4 +95,16 @@ func (c *Cryptor) Decrypt(encoded string) (string, error) {
 		return "", fmt.Errorf("github: decrypt: %w", err)
 	}
 	return string(plaintext), nil
+}
+
+func writeKeyExcl(path string, key []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(key); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

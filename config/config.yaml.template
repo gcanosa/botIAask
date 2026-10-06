@@ -58,7 +58,7 @@ ai:
 bot:
     command_prefix: '!'
     command_name: ask
-    debug: true
+    debug: false
     rate_limiting:
         enabled: true
         limit: 3

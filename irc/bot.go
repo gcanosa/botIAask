@@ -390,11 +390,28 @@ func (b *Bot) limiter() *RateLimiter {
 // IsAdmin checks if a given hostmask or account matches the admin list.
 func (b *Bot) IsAdmin(fullHostmask string) bool {
 	for _, admin := range b.getCfg().Admin.Admins {
-		if strings.Contains(fullHostmask, admin) {
+		if matchAdmin(fullHostmask, admin) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchAdmin compares an admin entry against a nick!user@host source exactly
+// (case-insensitive). An entry without "!" (e.g. ~user@user/account) is compared to the
+// user@host part. A substring match would let "~eth@user/eth2" or "1.2.3.45" pass for
+// "~eth@user/eth" / "1.2.3.4".
+func matchAdmin(source, entry string) bool {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return false
+	}
+	if !strings.Contains(entry, "!") {
+		if i := strings.IndexByte(source, '!'); i >= 0 {
+			source = source[i+1:]
+		}
+	}
+	return strings.EqualFold(source, entry)
 }
 
 func (b *ircNetwork) rejoinSessionChannels() {

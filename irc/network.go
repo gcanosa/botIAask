@@ -110,7 +110,7 @@ func (b *ircNetwork) IsAdmin(fullHostmask string) bool {
 		return true
 	}
 	for _, admin := range b.netCfg().Admins {
-		if strings.Contains(fullHostmask, admin) {
+		if matchAdmin(fullHostmask, admin) {
 			return true
 		}
 	}
@@ -448,15 +448,15 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		message := e.Params[1]
 		sender := e.Nick()
 
-		if b.getCfg().Bot.Debug {
-			log.Printf("[DEBUG] irc[%s]: PRIVMSG received - Sender: %s, Target: %s, Content: %s", n.name, sender, target, message)
-		}
-
 		// A pending "!gh add --private" token reply must never reach logs/, !seen, or
 		// !tell — checked and consumed here, before any of that, rather than inside
 		// dispatchCommand (which runs after the normal logging call below).
 		if n.tryConsumePendingGitHubToken(target, message, sender) {
 			return
+		}
+
+		if b.getCfg().Bot.Debug {
+			log.Printf("[DEBUG] irc[%s]: PRIVMSG received - Sender: %s, Target: %s, Content: %s", n.name, sender, target, message)
 		}
 
 		if strings.HasPrefix(message, "\x01") && strings.HasSuffix(message, "\x01") {
