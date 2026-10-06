@@ -136,6 +136,10 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 				have[n+"\x00"+c+"\x00"+day] = true
 			}
 		}
+		if err := rows.Err(); err != nil {
+			// Partial "have" set would just re-roll some days (idempotent upsert); log and go on.
+			log.Printf("stats: chan_activity existing-days scan: %v", err)
+		}
 		rows.Close()
 	}
 	cutoff := time.Now().AddDate(0, 0, -(recentDays - 1)).Format("2006-01-02")

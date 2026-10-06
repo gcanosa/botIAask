@@ -71,9 +71,6 @@ type Server struct {
 	forexChartCache map[string]cryptoChartCacheEntry
 	forexChartMu    sync.Mutex
 
-	marketChartRawMu    sync.Mutex
-	marketChartRawCache map[string]marketChartRawCacheEntry
-
 	weatherMu     sync.Mutex
 	weatherCache  []byte
 	weatherAt     time.Time
@@ -89,15 +86,6 @@ type Server struct {
 
 	httpSvr   *http.Server
 	httpSvrMu sync.Mutex
-}
-
-type marketChartRawCacheEntry struct {
-	at  time.Time
-	pts [][2]float64
-}
-
-func marketChartRawKey(geckoID, days string) string {
-	return geckoID + ":" + days
 }
 
 type cryptoChartCacheEntry struct {
@@ -2602,28 +2590,6 @@ func isLocalhost(host string) bool {
 	return strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "[::1]")
 }
 
-// validateCSRFAndGetSessionToken validates the CSRF token from request and returns the session token if valid.
-func (s *Server) validateCSRFAndGetSessionToken(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie("admin_session")
-	if err != nil {
-		return "", false
-	}
-
-	var csrfToken string
-	if r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
-		csrfToken = r.Header.Get("X-CSRF-Token")
-		if csrfToken == "" {
-			csrfToken = r.FormValue("csrf_token")
-		}
-	}
-
-	if csrfToken == "" || !s.authDB.ValidateCSRFToken(csrfToken, cookie.Value) {
-		return "", false
-	}
-
-	return cookie.Value, true
-}
-
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("admin_session")
 	if err == nil {
@@ -3276,6 +3242,10 @@ func (s *Server) handlePasteApprove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.uploadsDB.ApproveTicket(ticketID); err != nil {
+		if errors.Is(err, uploads.ErrNotPending) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

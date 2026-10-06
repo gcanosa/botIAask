@@ -459,7 +459,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			log.Printf("[DEBUG] irc[%s]: PRIVMSG received - Sender: %s, Target: %s, Content: %s", n.name, sender, target, message)
 		}
 
-		if strings.HasPrefix(message, "\x01") && strings.HasSuffix(message, "\x01") {
+		if len(message) >= 2 && strings.HasPrefix(message, "\x01") && strings.HasSuffix(message, "\x01") {
 			ctcpContent := message[1 : len(message)-1]
 			if strings.HasPrefix(ctcpContent, "ACTION ") {
 				actionMsg := ctcpContent[7:]
@@ -628,6 +628,12 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			delete(members, sender)
 		}
 		n.membersMu.Unlock()
+
+		// A quit ends the admin session: whoever takes the nick next must not inherit it
+		// (admin notices, "logged-in admin" stats).
+		b.loginsMu.Lock()
+		delete(b.loggedInAdmins, adminSessionKey(n.name, sender))
+		b.loginsMu.Unlock()
 
 		if b.tracker != nil {
 			b.tracker.LogPart(n.name)

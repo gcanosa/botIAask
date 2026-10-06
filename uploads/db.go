@@ -387,10 +387,21 @@ func (d *Database) CancelUploadByToken(token string) (username, channel, network
 }
 
 func (d *Database) ApproveTicket(ticketID string) error {
-	q := `UPDATE uploads SET status = 'approved', approved_at = ? WHERE ticket_id = ?`
-	_, err := d.db.Exec(q, time.Now(), ticketID)
-	return err
+	// Only a pending ticket can be approved: an already approved one would get its expiry clock
+	// reset, and a rejected/cancelled one has had its file deleted.
+	q := `UPDATE uploads SET status = 'approved', approved_at = ? WHERE ticket_id = ? AND status = 'pending_approval'`
+	res, err := d.db.Exec(q, time.Now(), ticketID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotPending
+	}
+	return nil
 }
+
+// ErrNotPending means the ticket doesn't exist or isn't awaiting approval.
+var ErrNotPending = errors.New("ticket not found or not pending approval")
 
 func (d *Database) CancelTicket(ticketID string) error {
 	var contentPath string

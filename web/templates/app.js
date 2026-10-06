@@ -15,14 +15,27 @@ async function ensureCSRFToken() {
     window.fetch = async function (input, init) {
         init = init || {};
         const method = (init.method || 'GET').toUpperCase();
-        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-            const token = await ensureCSRFToken();
-            if (token) {
-                init.headers = Object.assign({}, init.headers, { 'X-CSRF-Token': token });
+        const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        let sentToken = null;
+        if (mutating) {
+            sentToken = await ensureCSRFToken();
+            if (sentToken) {
+                init.headers = Object.assign({}, init.headers, { 'X-CSRF-Token': sentToken });
             }
         }
-        const res = await nativeFetch(input, init);
+        let res = await nativeFetch(input, init);
         if (res.status === 401) csrfToken = null; // stale/expired, refetch next attempt
+        // The server keeps one CSRF token per session, so another tab (or an expired token)
+        // can invalidate ours: refresh once and retry instead of failing the user's action.
+        if (mutating && sentToken && (res.status === 401 || res.status === 403) && !url.includes('/api/login')) {
+            csrfToken = null;
+            const fresh = await ensureCSRFToken();
+            if (fresh && fresh !== sentToken) {
+                init.headers = Object.assign({}, init.headers, { 'X-CSRF-Token': fresh });
+                res = await nativeFetch(input, init);
+            }
+        }
         return res;
     };
 })();

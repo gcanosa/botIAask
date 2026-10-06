@@ -328,6 +328,38 @@ func (f *Fetcher) newEntriesFrom(feed *gofeed.Feed, feedURL string) []NewsEntry 
 	return fresh
 }
 
+// dedupeBatch drops entries that repeat an earlier one in the same cycle (same item listed in two
+// feeds, or twice in one): the DB duplicate check only sees rows from previous cycles, since
+// MarkSeen runs after each announcement.
+func dedupeBatch(in []NewsEntry) []NewsEntry {
+	seen := make(map[string]struct{}, len(in)*3)
+	out := in[:0:0]
+	for _, e := range in {
+		keys := []string{"g\x00" + e.GUID}
+		if e.DedupKey != "" {
+			keys = append(keys, "d\x00"+e.DedupKey)
+		}
+		if e.LinkNormalized != "" {
+			keys = append(keys, "l\x00"+e.LinkNormalized)
+		}
+		dup := false
+		for _, k := range keys {
+			if _, ok := seen[k]; ok {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		for _, k := range keys {
+			seen[k] = struct{}{}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func (f *Fetcher) Fetch() {
 	if !f.bot.IsConnected() {
 		return
@@ -379,6 +411,8 @@ func (f *Fetcher) Fetch() {
 	f.feedLastMu.Lock()
 	f.feedLast = perFeed
 	f.feedLastMu.Unlock()
+
+	newEntries = dedupeBatch(newEntries)
 
 	// Oldest first across all feeds; announced items are limited per cycle (leftovers stay
 	// unseen and are picked up next cycle).
@@ -518,7 +552,7 @@ func doShorten(apiURL string) (string, error) {
 		return "", fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", err
 	}

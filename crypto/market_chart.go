@@ -62,10 +62,16 @@ func (e *rateLimitError) Error() string {
 	return fmt.Sprintf("429 Too Many Requests: %s", e.status)
 }
 
+// maxRetryAfter caps the server-requested backoff.
+const maxRetryAfter = 60 * time.Second
+
 // retryAfterDuration parses a Retry-After header (seconds), defaulting to 10s if absent/invalid.
 func retryAfterDuration(header string) time.Duration {
 	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
-		return time.Duration(secs) * time.Second
+		if d := time.Duration(secs) * time.Second; d < maxRetryAfter {
+			return d
+		}
+		return maxRetryAfter // a hostile/buggy "Retry-After: 3600" must not park the crypto loop
 	}
 	return 10 * time.Second
 }

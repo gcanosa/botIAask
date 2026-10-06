@@ -66,7 +66,7 @@ func evalAst(expr ast.Expr) (float64, error) {
 			}
 			return left / right, nil
 		case token.REM:
-			if right == 0 {
+			if int64(right) == 0 { // not just right == 0: 0.5 truncates to 0 and would panic
 				return 0, fmt.Errorf("modulo by zero")
 			}
 			return float64(int64(left) % int64(right)), nil

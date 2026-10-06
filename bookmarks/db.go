@@ -335,7 +335,7 @@ func (d *Database) GetBookmarks(limit, offset int, query string) ([]Bookmark, er
 		}
 		bookmarks = append(bookmarks, b)
 	}
-	return bookmarks, nil
+	return bookmarks, rows.Err()
 }
 
 // FindBookmarksByURLContains returns network's bookmarks whose URL contains pattern
