@@ -15,7 +15,6 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +45,7 @@ var templatesFS embed.FS
 
 // Server handles the web dashboard
 type Server struct {
+	compressing      sync.Map // ticketID -> struct{}: in-flight compress jobs
 	cfgMu            sync.RWMutex
 	cfg              *config.Config
 	bot              *irc.Bot
@@ -997,6 +997,10 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 			network = nets[0].Name
 		}
 	}
+	if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	date := strings.TrimSpace(r.URL.Query().Get("date"))
 	localToday := time.Now().Format("2006-01-02")
@@ -1015,7 +1019,6 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -2304,7 +2307,6 @@ func (s *Server) handleStatsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -2473,6 +2475,10 @@ func (s *Server) requireAdminCSRF(r *http.Request) (bool, bool) {
 			return false, false
 		}
 	}
+	if needsChange {
+		// Forced password change: nothing but handlePasswordUpdate/logout may run until it is done.
+		return false, true
+	}
 	return true, needsChange
 }
 
@@ -2516,8 +2522,8 @@ func (s *Server) sessionStaffInfo(r *http.Request) (sessionOK, staffAdmin bool, 
 // Mutating methods additionally require a valid CSRF token, so every handler that gates on this
 // is CSRF-protected without having to remember requireAdminCSRF.
 func (s *Server) staffAdminFromRequest(r *http.Request) bool {
-	_, staff, _ := s.sessionStaffInfo(r)
-	if !staff {
+	_, staff, needsChange := s.sessionStaffInfo(r)
+	if !staff || needsChange {
 		return false
 	}
 	cookie, err := r.Cookie("admin_session")
@@ -2765,18 +2771,7 @@ func (s *Server) maxUploadBytes() int64 {
 const multipartSlack int64 = 1 << 20
 
 func (s *Server) clientHostFromRequest(r *http.Request) string {
-	if s.getConfig().Web.TrustForwardedFor {
-		xff := r.Header.Get("X-Forwarded-For")
-		if xff != "" {
-			parts := strings.Split(xff, ",")
-			return strings.TrimSpace(parts[0])
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return GetClientIP(r, s.getConfig().Web.TrustForwardedFor)
 }
 
 func (s *Server) pathWithinDir(path, dir string) bool {
@@ -2805,6 +2800,9 @@ func parseUploadToken(r *http.Request) string {
 	}
 	return raw
 }
+
+// maxPasteFormBytes caps a pasted-text submission (body + form overhead).
+const maxPasteFormBytes = 2 << 20
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if s.uploadsDB == nil {
@@ -2857,6 +2855,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		// /upload is exempt from secure()'s body cap (file uploads); pastes are text, so cap here.
+		r.Body = http.MaxBytesReader(w, r.Body, maxPasteFormBytes)
+		if err := r.ParseMultipartForm(maxPasteFormBytes); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+			http.Error(w, "Paste too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		title := r.FormValue("title")
 		desc := r.FormValue("description")
 		content := r.FormValue("content")
@@ -4006,30 +4010,39 @@ func (s *Server) handleUploadFileCompress(w http.ResponseWriter, r *http.Request
 	}
 	newName := baseName + ".tgz"
 	newPath := filepath.Join(filesDir, ticketID+".tgz")
+	// One compress per ticket at a time: a double-click must not race on newPath/oldPath.
+	if _, busy := s.compressing.LoadOrStore(ticketID, struct{}{}); busy {
+		http.Error(w, "Compression already in progress", http.StatusConflict)
+		return
+	}
+	defer s.compressing.Delete(ticketID)
 	if err := writeSingleFileTgz(newPath, oldPath, memberName); err != nil {
 		log.Printf("compress %s: %v", ticketID, err)
+		_ = os.Remove(newPath)
 		http.Error(w, "Compress failed", http.StatusInternalServerError)
 		return
 	}
-	if err := os.Remove(oldPath); err != nil {
-		log.Printf("compress remove old %s: %v", ticketID, err)
-		_ = os.Remove(newPath)
-		http.Error(w, "Could not replace original file", http.StatusInternalServerError)
-		return
-	}
+	// Point the DB at the archive first, and only then drop the original, so a failure at any
+	// step never leaves the ticket without a file.
 	mdH, shH, err := uploads.HexMD5SHA256FromFile(newPath)
 	if err != nil {
+		_ = os.Remove(newPath)
 		http.Error(w, "Hash error", http.StatusInternalServerError)
 		return
 	}
 	st, err := os.Stat(newPath)
 	if err != nil {
+		_ = os.Remove(newPath)
 		http.Error(w, "Stat error", http.StatusInternalServerError)
 		return
 	}
 	if err := s.uploadsDB.ReplaceApprovedFileContent(ticketID, newPath, newName, "application/gzip", st.Size(), mdH, shH); err != nil {
+		_ = os.Remove(newPath)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if err := os.Remove(oldPath); err != nil {
+		log.Printf("compress remove old %s: %v", ticketID, err)
 	}
 	u2, err := s.uploadsDB.GetUploadByTicketID(ticketID)
 	if err != nil {

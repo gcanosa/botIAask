@@ -38,3 +38,17 @@ func TestIsNetworkLogKey(t *testing.T) {
 		t.Fatal("ordinary channel key misclassified")
 	}
 }
+
+func TestIsKeyedChannel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.IRC.Networks = []config.IRCNetworkConfig{
+		{Name: "a", Channels: []config.IRChannel{{Name: "#pub"}, {Name: "#staff", Password: "k"}}},
+		{Name: "b", Channels: []config.IRChannel{{Name: "#staff"}}},
+	}
+	if !isKeyedChannel(cfg, "#staff", "a") || !isKeyedChannel(cfg, "#STAFF", "") {
+		t.Fatal("keyed channel not detected")
+	}
+	if isKeyedChannel(cfg, "#staff", "b") || isKeyedChannel(cfg, "#pub", "a") {
+		t.Fatal("unkeyed channel misclassified")
+	}
+}

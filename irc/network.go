@@ -480,7 +480,12 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			}
 			ch, reply := seenTargets(target, sender)
 			n.recordSeen(sender, ch, "message", message)
-			n.dispatchCommand(target, message, sender, e.Source)
+			// In a PM, Params[0] is the bot's own nick: replies must go back to the sender.
+			cmdTarget := target
+			if !ircChannelTarget(target) {
+				cmdTarget = sender
+			}
+			n.dispatchCommand(cmdTarget, message, sender, e.Source)
 			n.deliverTells(sender, reply)
 		}
 	})

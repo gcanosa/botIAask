@@ -143,10 +143,10 @@ func runRotationIfEnabled() {
 	rotateLogs(d)
 }
 
+// rotateLogs deliberately does not take mu: only files older than the retention window are
+// touched, and those are never being appended to (an append refreshes the mtime), so holding
+// the global writer lock for the whole compression pass would just stall every LogChannelEvent.
 func rotateLogs(days int) {
-	mu.Lock()
-	defer mu.Unlock()
-
 	entries, err := os.ReadDir(logsDir)
 	if err != nil {
 		fmt.Printf("Error reading logs directory for rotation: %v\n", err)
@@ -187,25 +187,27 @@ func compressAndMoveLog(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	defer in.Close()
 
 	out, err := os.Create(dst)
 	if err != nil {
-		in.Close()
 		return err
 	}
 
 	gz := gzip.NewWriter(out)
-
-	if _, err := io.Copy(gz, in); err != nil {
-		gz.Close()
-		out.Close()
-		in.Close()
+	_, err = io.Copy(gz, in)
+	// Every close must succeed before the original is deleted: a failed flush leaves a
+	// truncated archive, and removing src then would lose the log.
+	if cerr := gz.Close(); err == nil {
+		err = cerr
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(dst)
 		return err
 	}
-
-	gz.Close()
-	out.Close()
-	in.Close()
 
 	return os.Remove(src)
 }

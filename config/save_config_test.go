@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -53,5 +54,32 @@ func TestSaveConfig_AtomicWrite(t *testing.T) {
 	}
 	if len(loaded.IRC.Networks) != 1 || loaded.IRC.Networks[0].Name != "alpha" {
 		t.Fatalf("round-trip mismatch: %+v", loaded.IRC.Networks)
+	}
+}
+
+func TestSaveConfig_ConcurrentLeavesValidFileAndNoTemps(t *testing.T) {
+	d := t.TempDir()
+	old, oldBuf, oldFor := SecretKeyPath, keyBuf, keyFor
+	t.Cleanup(func() { SecretKeyPath, keyBuf, keyFor = old, oldBuf, oldFor })
+	keyBuf, keyFor = nil, ""
+	SecretKeyPath = filepath.Join(d, "data", "k.key")
+	path := filepath.Join(d, "config.yaml")
+	cfg := &Config{IRC: IRCConfig{Networks: []IRCNetworkConfig{{Name: "n", Server: "s", Port: 6667, Nickname: "bot"}}}}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := SaveConfig(path, cfg); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("config unreadable after concurrent saves: %v", err)
+	}
+	if m, _ := filepath.Glob(path + ".tmp*"); len(m) != 0 {
+		t.Fatalf("stray temp files: %v", m)
 	}
 }

@@ -366,6 +366,19 @@ func main() {
 		githubFetcher: githubFetcher,
 		webMu:         &webServerMu,
 		webRef:        &webServerRef,
+		// CLI flags are in-memory only; re-apply after every reload so a rehash/SIGHUP doesn't
+		// silently stop the dashboard or RSS fetcher the operator started with -dashboard/-news.
+		cliOverrides: func(c *config.Config) {
+			if *debug {
+				c.Bot.Debug = true
+			}
+			if *dashboard {
+				c.Web.Enabled = true
+			}
+			if *news {
+				c.RSS.Enabled = true
+			}
+		},
 	}
 	var applyRehash func(string, bool) error
 	rstate.startWeb = func(cfg *config.Config) {

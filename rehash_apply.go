@@ -29,9 +29,13 @@ type rehashState struct {
 	webMu         *sync.Mutex
 	webRef        **web.Server
 	startWeb      func(cfg *config.Config)
+	cliOverrides  func(cfg *config.Config)
+	mu            sync.Mutex // serialises reloads (IRC, web and SIGHUP can all trigger one)
 }
 
 func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	before, err := config.CloneConfig(s.bot.GetConfig())
 	if err != nil {
 		return err
@@ -39,6 +43,9 @@ func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
 	newCfg, err := config.LoadConfig(s.configPath)
 	if err != nil {
 		return err
+	}
+	if s.cliOverrides != nil {
+		s.cliOverrides(newCfg)
 	}
 	diff := config.RehashDiff(before, newCfg)
 	t := time.Now().Format(time.RFC3339)
