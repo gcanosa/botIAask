@@ -97,6 +97,11 @@ func (b *ircNetwork) recordSeen(nick, channel, action, message string) {
 
 // --- !tell delivery ---
 
+const (
+	maxTellsPerTarget = 5 // pending !tell cap per recipient, so one user can't queue a flood
+	tellDeliveryPace  = 500 * time.Millisecond
+)
+
 // deliverTells flushes any pending !tell messages for nick (on this network) to
 // replyTarget (the channel they spoke/joined in, or their nick for a PM).
 func (b *ircNetwork) deliverTells(nick, replyTarget string) {
@@ -109,7 +114,10 @@ func (b *ircNetwork) deliverTells(nick, replyTarget string) {
 		return
 	}
 	b.clearPendingTell(b.name, nick)
-	for _, t := range tells {
+	for i, t := range tells {
+		if i > 0 {
+			time.Sleep(tellDeliveryPace) // stay under the server's flood limit
+		}
 		b.sendPrivmsg(replyTarget, fmt.Sprintf("%s: %s left a message %s ago: %s",
 			nick, t.FromNick, humanizeSince(t.CreatedAt), t.Message))
 	}
@@ -140,6 +148,14 @@ func (b *ircNetwork) handleTellCommand(target, sender, message string) {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: Talking to yourself? Use %sreminder.", sender, b.pfx()))
 		return
 	}
+
+	if n, err := b.bookmarksDB.CountTellsFor(b.name, toNick); err == nil && n >= maxTellsPerTarget {
+		b.sendPrivmsg(target, fmt.Sprintf("@%s: %s already has %d messages waiting.", sender, toNick, n))
+		return
+	}
+	// Delivery is one PRIVMSG: keep the whole line well under the 512-byte IRC limit (longer
+	// lines are dropped by the client library, after the tell was already consumed).
+	note = strings.ToValidUTF8(truncateReminderNotice(note, 300), "")
 
 	if _, err := b.bookmarksDB.AddTell(b.name, sender, toNick, note); err != nil {
 		b.sendPrivmsg(target, fmt.Sprintf("@%s: Error storing message: %v", sender, err))

@@ -74,3 +74,32 @@ func TestCSRFTokenEndpointUnblocksMutatingSaves(t *testing.T) {
 		t.Fatal("expected requireAdminCSRF to succeed with a valid CSRF token")
 	}
 }
+
+// A session whose user still has needs_password_change=1 must not pass admin checks.
+func TestForcedPasswordChangeBlocksAdminAPIs(t *testing.T) {
+	authDB, err := NewAuthDatabase(filepath.Join(t.TempDir(), "web_auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authDB.Close()
+	if err := authDB.AddUser("admin", "hunter2pass"); err != nil {
+		t.Fatal(err)
+	}
+	userID, _, _ := authDB.Authenticate("admin", "hunter2pass")
+	if _, err := authDB.db.Exec("UPDATE web_users SET needs_password_change = 1 WHERE id = ?", userID); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := authDB.CreateSession(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{authDB: authDB}
+	req := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+	req.AddCookie(&http.Cookie{Name: "admin_session", Value: tok})
+	if ok, _ := s.requireAdminCSRF(req); ok {
+		t.Fatal("requireAdminCSRF must refuse while a password change is pending")
+	}
+	if s.staffAdminFromRequest(req) {
+		t.Fatal("staffAdminFromRequest must refuse while a password change is pending")
+	}
+}

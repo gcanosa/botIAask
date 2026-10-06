@@ -49,6 +49,8 @@ type Fetcher struct {
 
 	repoStatus   map[string]RepoStatus
 	repoStatusMu sync.RWMutex
+
+	fetchMu sync.Mutex // one Fetch at a time: a restarted loop must not re-announce an in-flight pass
 }
 
 func NewFetcher(cfg *config.Config, bot BotInterface, db *Database, cryptor *Cryptor) *Fetcher {
@@ -76,6 +78,9 @@ func (f *Fetcher) Start() {
 	intervalMin := f.cfg.GitHubTracker.IntervalMinutes
 	f.mu.Unlock()
 
+	if intervalMin <= 0 {
+		intervalMin = 10 // NewTicker panics on <=0; mirrors applyGitHubTrackerDefaults
+	}
 	ticker := time.NewTicker(time.Duration(intervalMin) * time.Minute)
 	defer ticker.Stop()
 
@@ -209,6 +214,11 @@ func (f *Fetcher) Fetch() {
 		return
 	}
 
+	if !f.fetchMu.TryLock() {
+		return
+	}
+	defer f.fetchMu.Unlock()
+
 	f.mu.Lock()
 	cfg := f.cfg
 	f.mu.Unlock()
@@ -217,52 +227,8 @@ func (f *Fetcher) Fetch() {
 	f.lastFetch = time.Now()
 	f.lfMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
 	for _, r := range cfg.GitHubTracker.Repos {
-		repoKey := r.FullName()
-
-		etag, err := f.db.GetETag(repoKey)
-		if err != nil {
-			log.Printf("[GITHUB] Failed to read ETag for %s: %v", repoKey, err)
-		}
-		token, err := f.cryptor.Decrypt(r.TokenEncrypted)
-		if err != nil {
-			log.Printf("[GITHUB] Failed to decrypt token for %s: %v", repoKey, err)
-			f.setRepoStatus(repoKey, RepoStatus{OK: false, Error: "token decrypt failed"})
-			continue
-		}
-
-		result, err := FetchRepoEvents(ctx, r.Owner, r.Repo, token, etag)
-		if err != nil {
-			log.Printf("[GITHUB] Failed to fetch events for %s: %v", repoKey, err)
-			rateRemaining := -1
-			if result != nil {
-				rateRemaining = result.RateRemaining
-			}
-			f.setRepoStatus(repoKey, RepoStatus{OK: false, Error: err.Error(), RateRemaining: rateRemaining})
-			continue
-		}
-
-		if result.ETag != "" && result.ETag != etag {
-			if err := f.db.SetETag(repoKey, result.ETag); err != nil {
-				log.Printf("[GITHUB] Failed to store ETag for %s: %v", repoKey, err)
-			}
-		}
-
-		if result.NotModified {
-			f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
-			continue
-		}
-
-		f.announceNewEvents(r, token, result.RateRemaining, result.Events)
-		f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
-
-		// The poll interval is the backoff: stop working through the rest of the repo
-		// list this cycle if the budget is nearly spent, and let the next tick resume.
-		if result.RateRemaining >= 0 && result.RateRemaining <= 1 {
-			log.Printf("[GITHUB] Rate limit nearly exhausted (%d remaining), pausing further repos until next cycle", result.RateRemaining)
+		if f.pollRepo(r) {
 			break
 		}
 	}
@@ -270,6 +236,59 @@ func (f *Fetcher) Fetch() {
 	if err := f.db.CleanupOlderThan(seenEventRetentionDays); err != nil {
 		log.Printf("[GITHUB] Cleanup error: %v", err)
 	}
+}
+
+// pollRepo fetches and announces one repo under its own 60s deadline (a shared deadline would
+// starve repos late in the list when announcements are paced). It reports whether the caller
+// should stop working through the repo list this cycle.
+func (f *Fetcher) pollRepo(r config.GitHubTrackerRepoConfig) (stop bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	repoKey := r.FullName()
+
+	etag, err := f.db.GetETag(repoKey)
+	if err != nil {
+		log.Printf("[GITHUB] Failed to read ETag for %s: %v", repoKey, err)
+	}
+	token, err := f.cryptor.Decrypt(r.TokenEncrypted)
+	if err != nil {
+		log.Printf("[GITHUB] Failed to decrypt token for %s: %v", repoKey, err)
+		f.setRepoStatus(repoKey, RepoStatus{OK: false, Error: "token decrypt failed"})
+		return false
+	}
+
+	result, err := FetchRepoEvents(ctx, r.Owner, r.Repo, token, etag)
+	if err != nil {
+		log.Printf("[GITHUB] Failed to fetch events for %s: %v", repoKey, err)
+		rateRemaining := -1
+		if result != nil {
+			rateRemaining = result.RateRemaining
+		}
+		f.setRepoStatus(repoKey, RepoStatus{OK: false, Error: err.Error(), RateRemaining: rateRemaining})
+		return false
+	}
+
+	if result.ETag != "" && result.ETag != etag {
+		if err := f.db.SetETag(repoKey, result.ETag); err != nil {
+			log.Printf("[GITHUB] Failed to store ETag for %s: %v", repoKey, err)
+		}
+	}
+
+	if result.NotModified {
+		f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
+		return false
+	}
+
+	f.announceNewEvents(r, token, result.RateRemaining, result.Events)
+	f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
+
+	// The poll interval is the backoff: stop working through the rest of the repo
+	// list this cycle if the budget is nearly spent, and let the next tick resume.
+	if result.RateRemaining >= 0 && result.RateRemaining <= 1 {
+		log.Printf("[GITHUB] Rate limit nearly exhausted (%d remaining), pausing further repos until next cycle", result.RateRemaining)
+		return true
+	}
+	return false
 }
 
 // DB exposes the fetcher's database for "!gh search" (irc/ has no other path to it —

@@ -372,11 +372,13 @@ func (d *Database) FindBookmarksByURLContains(network, pattern string, limit int
 
 // CountUserBookmarksSince is used for the !bookmark add rate limit; scoped to network so an
 // active nick on one IRC network doesn't spuriously exhaust the same-named nick's quota on
-// another network.
+// another network. timestamp holds CURRENT_TIMESTAMP text (UTC, "YYYY-MM-DD HH:MM:SS"), so
+// since is bound in that exact format; a raw time.Time binds as a local-zone string that
+// sorts wrongly against it.
 func (d *Database) CountUserBookmarksSince(network, nickname string, since time.Time) (int, error) {
 	var count int
 	err := d.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE network = ? AND nickname = ? AND timestamp > ?",
-		network, nickname, since).Scan(&count)
+		network, nickname, since.UTC().Format("2006-01-02 15:04:05")).Scan(&count)
 	return count, err
 }
 

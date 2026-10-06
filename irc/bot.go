@@ -289,11 +289,15 @@ func (b *ircNetwork) addIRCChannelToConfig(entry config.IRChannel) error {
 				if existing.Password == entry.Password && boolPtrEqualIR(existing.AutoJoin, entry.AutoJoin) {
 					return nil
 				}
-				nets[ni].Channels[i] = entry
+				updated := append([]config.IRChannel(nil), nets[ni].Channels...)
+				updated[i] = entry
+				nets[ni].Channels = updated
 				return b.persistIRCChannelsToDisk()
 			}
 		}
-		nets[ni].Channels = append(nets[ni].Channels, entry)
+		// ponytail: copy-on-write of the slice only; the Channels field assignment itself is
+		// still unsynchronised with readers. Full fix = swap a cloned *Config atomically.
+		nets[ni].Channels = append(append([]config.IRChannel(nil), nets[ni].Channels...), entry)
 		return b.persistIRCChannelsToDisk()
 	}
 	return fmt.Errorf("unknown network %q", b.name)
@@ -305,7 +309,9 @@ func (b *ircNetwork) removeIRCChannelFromConfig(ch string) error {
 		if !strings.EqualFold(nets[ni].Name, b.name) {
 			continue
 		}
-		out := nets[ni].Channels[:0]
+		// Fresh slice (not Channels[:0]): concurrent readers ranging the old backing array must
+		// never see entries shifted under them.
+		out := make([]config.IRChannel, 0, len(nets[ni].Channels))
 		for _, existing := range nets[ni].Channels {
 			if !strings.EqualFold(existing.Name, ch) {
 				out = append(out, existing)
@@ -491,6 +497,21 @@ func (b *ircNetwork) listSessionChannels() []config.IRChannel {
 	return append([]config.IRChannel(nil), b.sessionJoins...)
 }
 
+// rateLimited applies the per-sender limiter (when enabled) and tells the sender on refusal.
+// The budget is per network+sender (target "" ), so hopping channels/PMs doesn't reset it.
+func (b *ircNetwork) rateLimited(target, sender string) bool {
+	rl := b.limiter()
+	if rl == nil {
+		return false
+	}
+	cfg := b.getCfg().Bot.RateLimiting
+	if rl.Allow(b.name, sender, "", cfg.Limit, cfg.Burst) {
+		return false
+	}
+	b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))
+	return true
+}
+
 // dispatchCommand runs handleCommand off the ircevent read goroutine so a slow
 // HTTP/AI-bound command can't stall PING/PONG and get the bot ping-timed-out.
 // cmdSem bounds concurrency; the semaphore is acquired inside the goroutine so
@@ -500,8 +521,16 @@ func (b *ircNetwork) dispatchCommand(target, message, sender, source string) {
 	if !strings.HasPrefix(message, b.pfx()) {
 		return
 	}
+	// Take a slot before spawning: when all slots are busy the command is dropped silently
+	// (a reply per flooded line would only amplify the flood) instead of parking an unbounded
+	// goroutine per line.
+	select {
+	case b.cmdSem <- struct{}{}:
+	default:
+		log.Printf("irc[%s]: command from %s dropped: all %d command slots busy", b.name, sender, cap(b.cmdSem))
+		return
+	}
 	guard.Go("handleCommand", func() {
-		b.cmdSem <- struct{}{}
 		defer func() { <-b.cmdSem }()
 		b.handleCommand(target, message, sender, source)
 	})
@@ -834,12 +863,18 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !crypto command
 	if strings.HasPrefix(message, b.pfx()+"crypto") {
+		if b.rateLimited(target, sender) {
+			return
+		}
 		b.handleCryptoCommand(target)
 		return
 	}
 
 	// Handle !flight <IATA> [YYYY-MM-DD] (AirLabs v9; api_key; date queries /schedules instead of live /flight)
 	if strings.HasPrefix(message, b.pfx()+"flight") {
+		if b.rateLimited(target, sender) {
+			return
+		}
 		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"flight"))
 		if rest == "" {
 			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sflight <IATA> [YYYY-MM-DD] — e.g. %sflight AA100", b.pfx(), b.pfx()))
@@ -851,6 +886,9 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !weather <place> (Open-Meteo; comma in place is OK)
 	if strings.HasPrefix(message, b.pfx()+"weather") {
+		if b.rateLimited(target, sender) {
+			return
+		}
 		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"weather"))
 		if rest == "" {
 			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sweather <place> — e.g. %sweather Barcelona, Spain", b.pfx(), b.pfx()))
@@ -862,6 +900,9 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
+		if b.rateLimited(target, sender) {
+			return
+		}
 		rest := strings.TrimSpace(strings.TrimPrefix(message, b.pfx()+"movie"))
 		b.handleMovieCommand(target, sender, rest)
 		return
@@ -1140,7 +1181,8 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				if r.DueAt != nil {
 					when = "due in " + humanizeDuration(time.Until(*r.DueAt))
 				}
-				b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] (%s) %s", sender, r.PublicID, when, note))
+				// NOTICE to the owner only: reminder text must not be printed into the channel.
+				b.sendNotice(sender, fmt.Sprintf("[%s] (%s) %s", r.PublicID, when, note))
 			}
 		case "read":
 			fields := strings.Fields(rest)
@@ -1158,7 +1200,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				b.sendPrivmsg(target, fmt.Sprintf("@%s: No reminder with that id, or not yours.", sender))
 				return
 			}
-			b.sendPrivmsg(target, fmt.Sprintf("@%s: [%s] %s", sender, r.PublicID, r.Note))
+			b.sendNotice(sender, fmt.Sprintf("[%s] %s", r.PublicID, truncateReminderNotice(r.Note, 400)))
 		default:
 			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sreminder add <time> <note> | %sreminder del <id> | %sreminder list | %sreminder read <id>", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
 		}
@@ -1173,6 +1215,9 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 
 	// !chanstats [#chan] [days] — busiest hours / top talkers from the channel logs
 	if message == b.pfx()+"chanstats" || strings.HasPrefix(message, b.pfx()+"chanstats ") {
+		if b.rateLimited(target, sender) {
+			return
+		}
 		b.handleChanStatsCommand(target, sender, message)
 		return
 	}

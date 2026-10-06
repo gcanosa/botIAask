@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -313,6 +315,9 @@ func applyGitHubTrackerDefaults(cfg *Config) {
 // must surface the returned error rather than ignore it: without this check a runtime
 // mutation (e.g. !join on a channel name already used by another network) could write a
 // config that LoadConfig/ValidateConfig then rejects at the next start, bricking the daemon.
+// saveMu serialises SaveConfig across the web dashboard and IRC commands.
+var saveMu sync.Mutex
+
 func SaveConfig(path string, cfg *Config) error {
 	if err := ValidateConfig(cfg); err != nil {
 		return fmt.Errorf("refusing to save invalid config: %w", err)
@@ -327,11 +332,28 @@ func SaveConfig(path string, cfg *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Write to a temp file in the same directory then rename, so a crash or concurrent
-	// read mid-write never observes a truncated config.yaml.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	// Serialise writers (web + IRC both save), write a unique temp file in the same directory,
+	// fsync it, then rename, so a crash or concurrent save never leaves a truncated config.yaml.
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0600)
+	}
+	if werr != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to write config file: %w", werr)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

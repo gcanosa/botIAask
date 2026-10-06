@@ -62,6 +62,23 @@ func validLogTarget(cfg *config.Config, channel, network string) bool {
 	return false
 }
 
+// isKeyedChannel reports whether channel is configured with a password (+k) on the given
+// network (any network when network is ""). Such logs are admin-only: the key is treated as a
+// secret everywhere else, so the conversation must not be world-readable either.
+func isKeyedChannel(cfg *config.Config, channel, network string) bool {
+	for _, n := range cfg.IRC.Networks {
+		if network != "" && n.Name != network {
+			continue
+		}
+		for _, ch := range n.Channels {
+			if ch.Password != "" && strings.EqualFold(ch.Name, channel) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isNetworkLogKey reports whether a bare log key is a configured network name: that file is
 // the bot's private-message log (logs/<network>_<date>.log), never a channel.
 func isNetworkLogKey(cfg *config.Config, key string) bool {
@@ -109,6 +126,7 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	localToday := now.Format("2006-01-02")
 	maxDate := localToday
 	cfg := s.getConfig()
+	isAdmin := s.staffAdminFromRequest(r)
 	rotationDays := cfg.Logger.RotationDays
 
 	var minDate string
@@ -232,6 +250,9 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if !isAdmin && isKeyedChannel(cfg, info.label, info.network) {
+			continue
+		}
 		dateSet := diskDates[fileKey]
 		dates := make([]string, 0, len(dateSet))
 		for d := range dateSet {
@@ -289,6 +310,10 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 
 	if !validLogTarget(s.getConfig(), channel, strings.TrimSpace(r.URL.Query().Get("network"))) {
 		http.Error(w, "invalid channel or network", http.StatusBadRequest)
+		return
+	}
+	if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
