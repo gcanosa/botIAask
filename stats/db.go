@@ -160,6 +160,9 @@ func (d *Database) GetRecentStats(limit int, network string) ([]StatEntry, error
 		e.Network = network
 		entries = append(entries, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	// Query is DESC (newest first); reverse once to return chronological order.
 	slices.Reverse(entries)
 	return entries, nil
@@ -201,7 +204,7 @@ func (d *Database) GetStatsSince(since time.Time, network string) ([]StatEntry, 
 		e.Network = network
 		entries = append(entries, e)
 	}
-	return entries, nil
+	return entries, rows.Err()
 }
 
 func (d *Database) Cleanup(days int) error {

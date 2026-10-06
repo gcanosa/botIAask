@@ -44,6 +44,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 		)
 	`)
 	if err != nil {
+		sqldb.Close()
 		return nil, fmt.Errorf("failed to create table: %w", err)
 	}
 
@@ -66,6 +67,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 
 	d := &Database{db: sqldb}
 	if err := d.backfillDedupColumns(); err != nil {
+		sqldb.Close()
 		return nil, err
 	}
 	// Created after backfill so the column values the indexes cover are already populated.
@@ -74,6 +76,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 		"CREATE INDEX IF NOT EXISTS idx_seen_news_link_norm ON seen_news(link_normalized)",
 	} {
 		if _, err := sqldb.Exec(ddl); err != nil {
+			sqldb.Close()
 			return nil, fmt.Errorf("failed to create index: %w", err)
 		}
 	}
@@ -189,7 +192,7 @@ func (d *Database) GetLastNews(limit int) ([]NewsEntry, error) {
 		e.SourceIcon = strings.TrimSpace(e.SourceIcon)
 		entries = append(entries, e)
 	}
-	return entries, nil
+	return entries, rows.Err()
 }
 
 func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, error) {
@@ -220,6 +223,9 @@ func (d *Database) GetNews(limit, offset int, query string) ([]NewsEntry, int, e
 		e.Source = strings.TrimSpace(e.Source)
 		e.SourceIcon = strings.TrimSpace(e.SourceIcon)
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
 	return entries, total, nil
 }

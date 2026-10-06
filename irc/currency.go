@@ -4,6 +4,7 @@ import (
 	"botIAask/crypto"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func FetchRates(base string) (*ExchangeRates, error) {
 	}
 
 	var rates ExchangeRates
-	if err := json.NewDecoder(resp.Body).Decode(&rates); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rates); err != nil {
 		return nil, err
 	}
 	return &rates, nil

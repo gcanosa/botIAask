@@ -37,6 +37,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
+	if err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("failed to create crypto_prices: %w", err)
+	}
 	// Migration: Ensure change_24h column exists
 	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN change_24h REAL DEFAULT 0;")
 	_, _ = sqldb.Exec("ALTER TABLE crypto_prices ADD COLUMN gecko_id TEXT DEFAULT '';")
@@ -71,6 +75,18 @@ func NewDatabase(dbPath string) (*Database, error) {
 	}
 	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_gecko_id ON crypto_market_history(gecko_id)`)
 	_, _ = sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_market_history_timestamp ON crypto_market_history(timestamp_ms)`)
+	// One row per (coin, point): SaveMarketHistory re-fetches overlapping 7-day windows, which
+	// used to insert every point ~56 times. One-time dedupe (keep newest), then enforce it.
+	var haveUnique int
+	_ = sqldb.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_market_history_point'`).Scan(&haveUnique)
+	if haveUnique == 0 {
+		if _, err := sqldb.Exec(`DELETE FROM crypto_market_history WHERE id NOT IN (SELECT MAX(id) FROM crypto_market_history GROUP BY gecko_id, timestamp_ms)`); err != nil {
+			return nil, fmt.Errorf("failed to dedupe crypto_market_history: %w", err)
+		}
+		if _, err := sqldb.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_market_history_point ON crypto_market_history(gecko_id, timestamp_ms)`); err != nil {
+			return nil, fmt.Errorf("failed to index crypto_market_history: %w", err)
+		}
+	}
 
 	return &Database{db: sqldb}, nil
 }
@@ -239,7 +255,10 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 		}
 		entries = append(entries, e)
 	}
-	
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	// If we don't have exactly "same second" fetches, this might return empty or partial.
 	// Fallback: get last 10 unique symbols
 	if len(entries) == 0 {
@@ -264,6 +283,9 @@ func (d *Database) GetLatestPrices() ([]PriceEntry, error) {
 				return nil, err
 			}
 			entries = append(entries, e)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 	}
 	
@@ -311,7 +333,8 @@ func (d *Database) SaveMarketHistory(geckoID, symbol string, points [][2]float64
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT INTO crypto_market_history (gecko_id, symbol, price_usd, timestamp_ms, fetched_at) VALUES (?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare(`INSERT INTO crypto_market_history (gecko_id, symbol, price_usd, timestamp_ms, fetched_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(gecko_id, timestamp_ms) DO UPDATE SET price_usd = excluded.price_usd, symbol = excluded.symbol, fetched_at = excluded.fetched_at`)
 	if err != nil {
 		return err
 	}
