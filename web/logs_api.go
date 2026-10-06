@@ -62,6 +62,17 @@ func validLogTarget(cfg *config.Config, channel, network string) bool {
 	return false
 }
 
+// isNetworkLogKey reports whether a bare log key is a configured network name: that file is
+// the bot's private-message log (logs/<network>_<date>.log), never a channel.
+func isNetworkLogKey(cfg *config.Config, key string) bool {
+	for _, n := range cfg.IRC.Networks {
+		if strings.EqualFold(n.Name, key) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseLogBaseName(name string) (channelKey, date string, ok bool) {
 	base := strings.TrimSuffix(name, ".log")
 	if base == name {
@@ -287,7 +298,10 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 
 	// Try the current network-prefixed key first, falling back to the legacy bare-channel
 	// key so dates logged before multi-network support stay viewable.
-	keys := []string{logger.ChannelFileKey(channel, network), logger.ChannelFileKey(channel, "")}
+	keys := []string{logger.ChannelFileKey(channel, network)}
+	if legacy := logger.ChannelFileKey(channel, ""); !isNetworkLogKey(s.getConfig(), legacy) {
+		keys = append(keys, legacy)
+	}
 
 	var reader io.ReadCloser
 	archived := false

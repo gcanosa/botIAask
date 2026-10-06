@@ -5,8 +5,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +38,14 @@ func secretKey() ([]byte, error) {
 		return keyBuf, nil
 	}
 	key, err := os.ReadFile(SecretKeyPath)
-	if err != nil || len(key) != secretKeyLen {
+	if err == nil && len(key) != secretKeyLen {
+		// Never overwrite an existing key: a stray newline or truncation must not destroy the only copy.
+		return nil, fmt.Errorf("secret key %s has %d bytes, want %d (fix or restore it; not regenerating)", SecretKeyPath, len(key), secretKeyLen)
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read secret key %s: %w", SecretKeyPath, err)
+	}
+	if err != nil {
 		key = make([]byte, secretKeyLen)
 		if _, err := rand.Read(key); err != nil {
 			return nil, err
@@ -44,7 +53,7 @@ func secretKey() ([]byte, error) {
 		if err := os.MkdirAll(filepath.Dir(SecretKeyPath), 0700); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(SecretKeyPath, key, 0600); err != nil {
+		if err := writeNewKey(SecretKeyPath, key); err != nil {
 			return nil, err
 		}
 	}
@@ -140,4 +149,17 @@ func decryptSecrets(cfg *Config) (sawPlain bool, err error) {
 		return err
 	})
 	return
+}
+
+// writeNewKey creates the key file exclusively so an existing key is never clobbered.
+func writeNewKey(path string, key []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(key); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

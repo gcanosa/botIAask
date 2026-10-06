@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -337,16 +338,35 @@ func (d *Database) SubmitUpload(token, ticketID, title, description, content str
 	kind := ClassifyPasteText(body)
 
 	q := `UPDATE uploads SET ticket_id = ?, title = ?, description = ?, content_path = ?, expires_in_days = ?, status = 'pending_approval', upload_type = ?,
-		size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ?, paste_kind = ? WHERE token = ?`
-	_, err := d.db.Exec(q, ticketID, title, description, filePath, expiresInDays, TypePaste, size, clientHost, mdH, shH, kind, token)
+		size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ?, paste_kind = ? WHERE token = ? AND status = 'pending_form'`
+	res, err := d.db.Exec(q, ticketID, title, description, filePath, expiresInDays, TypePaste, size, clientHost, mdH, shH, kind, token)
+	if err == nil {
+		err = requireOneRow(res)
+	}
+	if err != nil {
+		os.Remove(filePath)
+	}
 	return err
 }
 
 func (d *Database) SubmitFileUpload(token, ticketID, title, description string, expiresInDays int, diskPath, originalFilename, contentType string, sizeBytes int64, clientHost, md5Hex, sha256Hex string) error {
 	q := `UPDATE uploads SET ticket_id = ?, title = ?, description = ?, content_path = ?, expires_in_days = ?, status = 'pending_approval',
-		upload_type = ?, original_filename = ?, content_type = ?, size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ? WHERE token = ?`
-	_, err := d.db.Exec(q, ticketID, title, description, diskPath, expiresInDays, TypeFile, originalFilename, contentType, sizeBytes, clientHost, md5Hex, sha256Hex, token)
-	return err
+		upload_type = ?, original_filename = ?, content_type = ?, size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ? WHERE token = ? AND status = 'pending_form'`
+	res, err := d.db.Exec(q, ticketID, title, description, diskPath, expiresInDays, TypeFile, originalFilename, contentType, sizeBytes, clientHost, md5Hex, sha256Hex, token)
+	if err != nil {
+		return err
+	}
+	return requireOneRow(res)
+}
+
+// ErrTokenUsed means the upload token was already submitted/cancelled (or is unknown).
+var ErrTokenUsed = errors.New("upload token already used")
+
+func requireOneRow(res sql.Result) error {
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrTokenUsed
+	}
+	return nil
 }
 
 func (d *Database) CancelUploadByToken(token string) (username, channel, network string, err error) {

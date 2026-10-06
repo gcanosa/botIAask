@@ -97,3 +97,23 @@ func TestIgnoreList_PerNetworkIsolation(t *testing.T) {
 		t.Fatal("unignore on alpha did not clear the entry")
 	}
 }
+
+func TestMatchAdmin_NoSubstringLookalikes(t *testing.T) {
+	cases := []struct {
+		src, entry string
+		want       bool
+	}{
+		{"x!~ethernet@user/ethernet", "~ethernet@user/ethernet", true},
+		{"X!~Ethernet@user/Ethernet", "~ethernet@user/ethernet", true},
+		{"x!~ethernet@user/ethernet2", "~ethernet@user/ethernet", false},
+		{"x!~eth@1.2.3.45", "~eth@1.2.3.4", false},
+		{"nick!u@h", "nick!u@h", true},
+		{"other!u@h", "nick!u@h", false},
+		{"x!u@h", "", false},
+	}
+	for _, c := range cases {
+		if got := matchAdmin(c.src, c.entry); got != c.want {
+			t.Errorf("matchAdmin(%q,%q)=%v want %v", c.src, c.entry, got, c.want)
+		}
+	}
+}

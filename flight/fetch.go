@@ -3,6 +3,7 @@ package flight
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -263,7 +264,12 @@ func getJSON(ctx context.Context, client *http.Client, base, path, key string, q
 	req.Header.Set("User-Agent", userAgent)
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		// *url.Error text embeds the full URL, including the API key in the query string.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))

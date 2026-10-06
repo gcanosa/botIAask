@@ -256,6 +256,11 @@ function isSafeImageSrc(url) {
     }
 }
 
+/** Normalized, attribute-safe image URL (new URL().href percent-encodes quotes/spaces) or ''. */
+function safeImageHref(url) {
+    return isSafeImageSrc(url) ? new URL(String(url).trim()).href : '';
+}
+
 /** RSS source key from API + optional icon URL from feed → mark before title */
 function newsSourceBadgeFor(source, sourceIcon) {
     const s = source != null ? String(source).trim() : '';
@@ -269,8 +274,8 @@ function newsSourceBadgeFor(source, sourceIcon) {
     const displaySource = s.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ') || s;
     const titleAttr = financeEscapeHtml(displaySource);
     if (isSafeImageSrc(sourceIcon)) {
-        const srcJson = JSON.stringify(String(sourceIcon).trim());
-        return `<span class="news-source-badge news-source-badge--img" title="${titleAttr}" aria-label="Source: ${titleAttr}"><img class="news-source-badge__img" src=${srcJson} alt="" width="20" height="20" loading="lazy" decoding="async" /></span>`;
+        const srcAttr = JSON.stringify(safeImageHref(sourceIcon)).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        return `<span class="news-source-badge news-source-badge--img" title="${titleAttr}" aria-label="Source: ${titleAttr}"><img class="news-source-badge__img" src=${srcAttr} alt="" width="20" height="20" loading="lazy" decoding="async" /></span>`;
     }
     const abbrH = financeEscapeHtml(abbr);
     return `<span class="news-source-badge news-source-badge--txt" title="${titleAttr}" aria-label="Source: ${titleAttr}"><span class="news-source-badge__txt" aria-hidden="true">${abbrH}</span></span>`;

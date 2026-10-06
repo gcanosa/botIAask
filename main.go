@@ -34,7 +34,7 @@ import (
 func main() {
 	// Command-line flags
 	daemon := flag.Bool("daemon", false, "Run bot in daemon mode")
-	debug := flag.Bool("debug", true, "Enable debug mode with console output")
+	debug := flag.Bool("debug", false, "Enable debug mode with console output (logs raw IRC lines incl. credentials)")
 	dashboard := flag.Bool("dashboard", false, "Run in daemon mode and enable web dashboard")
 	mode := flag.String("mode", "", "Operation mode: start, stop, restart, or empty for foreground")
 	version := flag.Bool("version", false, "Show version information")

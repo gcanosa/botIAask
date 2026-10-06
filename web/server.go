@@ -2868,6 +2868,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		ticketID := generateHex(4)
 
 		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays, s.clientHostFromRequest(r))
+		if errors.Is(err, uploads.ErrTokenUsed) {
+			http.Error(w, "This upload link was already used", http.StatusConflict)
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -3025,6 +3029,10 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 	err = s.uploadsDB.SubmitFileUpload(token, ticketID, title, desc, expiresDays, diskPath, hdr.Filename, ctype, n, s.clientHostFromRequest(r), mdH, shH)
 	if err != nil {
 		os.Remove(diskPath)
+		if errors.Is(err, uploads.ErrTokenUsed) {
+			http.Error(w, "This upload link was already used", http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
