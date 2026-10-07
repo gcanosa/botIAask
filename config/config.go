@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,30 @@ type Config struct {
 	GitHub        GitHubConfig        `yaml:"github,omitempty"`
 	GitHubTracker GitHubTrackerConfig `yaml:"github_tracker,omitempty"`
 	Backup        BackupConfig        `yaml:"backup,omitempty"`
+	ShortLinks    ShortLinksConfig    `yaml:"short_links,omitempty"`
+}
+
+// ShortLinksConfig controls the private shortener served by the dashboard at <web.base_url>/r/<code>.
+// The "self" service must also be reachable from the internet; HTTPS only overrides the scheme of
+// web.base_url (set it only if a TLS proxy fronts that host, the dashboard itself speaks plain HTTP).
+type ShortLinksConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	HTTPS   bool `yaml:"https,omitempty" json:"https"`
+	// ExpireDays deletes links neither created nor opened for this many days. 0 = default (90), <0 = never.
+	ExpireDays int `yaml:"expire_days,omitempty" json:"expire_days"`
+}
+
+const defaultShortLinkExpireDays = 90
+
+// ExpireAfter returns the idle lifetime of a link, or 0 when links never expire.
+func (c ShortLinksConfig) ExpireAfter() time.Duration {
+	switch {
+	case c.ExpireDays < 0:
+		return 0
+	case c.ExpireDays == 0:
+		return defaultShortLinkExpireDays * 24 * time.Hour
+	}
+	return time.Duration(c.ExpireDays) * 24 * time.Hour
 }
 
 // BackupConfig controls scheduled hot backups of the SQLite databases in data/.

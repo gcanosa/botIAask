@@ -4045,8 +4045,20 @@ async function fetchRSSSettings() {
         const currentShortener = data.url_shortener || '';
 
         shortenerSelect.innerHTML = availableShorteners.map(s =>
-            `<option value="${s}" ${s === currentShortener ? 'selected' : ''}>${s || 'default (is.gd)'}</option>`
+            `<option value="${s}" ${s === currentShortener ? 'selected' : ''}>${s === 'self' ? 'self (private, this dashboard)' : (s || 'default (is.gd)')}</option>`
         ).join('');
+
+        const sl = data.short_links || {};
+        const slEn = document.getElementById('short-links-enabled');
+        const slHttps = document.getElementById('short-links-https');
+        const slEx = document.getElementById('short-links-example');
+        if (slEn) slEn.checked = !!sl.enabled;
+        if (slHttps) slHttps.checked = !!sl.https;
+        const slExp = document.getElementById('short-links-expire');
+        if (slExp) slExp.value = sl.expire_days || 90;
+        if (slEx) slEx.textContent = data.short_link_example && data.short_link_example !== '/r/Ab3dE9x'
+            ? 'Private links look like: ' + data.short_link_example
+            : 'Set web.base_url in config.yaml to use the private shortener';
 
         renderRssFeedStatusList(data.feed_status);
     } catch (e) { console.error("Failed to fetch RSS settings", e); }
@@ -4073,7 +4085,12 @@ async function saveRSSSettings() {
                 retention_count: retention,
                 feed_urls: urls,
                 announce_to_irc,
-                url_shortener: urlShortener
+                url_shortener: urlShortener,
+                short_links: {
+                    enabled: !!(document.getElementById('short-links-enabled') || {}).checked,
+                    https: !!(document.getElementById('short-links-https') || {}).checked,
+                    expire_days: parseInt((document.getElementById('short-links-expire') || {}).value) || 0
+                }
             })
         });
 
