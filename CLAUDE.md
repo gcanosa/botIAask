@@ -25,6 +25,7 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `crypto/` | CoinGecko price fetching, market history DB |
 | `stats/` | Activity tracking, SQLite persistence |
 | `bookmarks/` | URL bookmark DB |
+| `shortlinks/` | Private URL shortener store (code ↔ URL, `data/shortlinks.db`) |
 | `logger/` | Channel event logging, log rotation, `ChannelActivity` (log parsing for `!chanstats`) |
 | `flight/` | OpenSky/AirLabs flight tracking |
 | `weather/` | Open-Meteo weather data |
@@ -58,6 +59,7 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 | `rss_seen.db` | `rss` package (`last_seen` keeps rows still in a live feed from being pruned/re-announced; new feeds announce only their newest 3 items, max 10 announcements per cycle) |
 | `stats.db` | `stats` package (`bot_stats` snapshots + `chan_activity` per-channel daily rollups for web Channel Stats, built from `logs/` by `stats.RunChanRollup`; `logger.ParseDayLog` is the parser) |
 | `bookmarks.db` | `bookmarks` package |
+| `shortlinks.db` | `shortlinks` package (private shortener; losing it breaks every `/r/<code>` link already announced) |
 | `uploads.db` | `uploads` package |
 | `crypto.db` | `crypto` package |
 | `prog_todos.db` | `progtodo` package |
@@ -106,6 +108,12 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 - In `web/templates/app.js`, never interpolate IRC/feed/user text into `innerHTML` raw: use `financeEscapeHtml()`, `safeHref()` for `href`, and `jsq()` inside single-quoted inline-handler strings.
 - `/api/logs/*` accept only `#`/`&` channels and configured networks (non-`#` names map to the private-message log).
 - Initial admin password: if `web.auth.password` is empty in config, a random 32-char hex password is generated and printed once to the log.
+
+---
+
+## URL Shorteners
+
+`rss.ShortenURLWithService` (used by RSS, GitHub tracker, IRC) tries the preferred service, then the chain `self`, is.gd, tinyurl, v.gd, clck.ru, da.gd. `self` is the private shortener: links are `<web.base_url>/r/<code>` (public, no-auth `handleShortRedirect` in `web/shortlinks.go`, 302), enabled/HTTPS-forced via `short_links:` in config or the dashboard RSS settings. It only works while the dashboard is running and reachable from the internet; `https: true` only rewrites the scheme of `web.base_url` (the app itself serves plain HTTP, so use it only behind a TLS proxy). Only http(s) URLs are accepted; existing links keep resolving even if the feature is switched off. Links expire after `short_links.expire_days` (default 90, -1 = never) without being created/opened (`last_used`, updated at most daily); a daily goroutine in `web/shortlinks.go` purges them.
 
 ---
 

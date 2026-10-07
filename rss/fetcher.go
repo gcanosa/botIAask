@@ -1,6 +1,7 @@
 package rss
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"botIAask/config"
@@ -517,11 +519,31 @@ var shortenerServices = []struct {
 	name string
 	fn   func(string) (string, error)
 }{
+	// self is first so the fallback chain prefers our own links when the private shortener is enabled.
+	{"self", shortenWithSelf},
 	{"is.gd", shortenWithIsGd},
 	{"tinyurl", shortenWithTinyURL},
 	{"v.gd", shortenWithVGd},
 	{"clck.ru", shortenWithClckRu},
 	{"da.gd", shortenWithDaGd},
+}
+
+// ErrSelfDisabled means the private shortener is off or not wired; the chain skips it silently.
+var ErrSelfDisabled = errors.New("private shortener disabled")
+
+// selfShortener is installed by the web server (it owns the links DB); atomic because RSS/GitHub
+// goroutines read it while the server starts.
+var selfShortener atomic.Pointer[func(string) (string, error)]
+
+// SetSelfShortener installs the private shortener ("self" service).
+func SetSelfShortener(fn func(string) (string, error)) { selfShortener.Store(&fn) }
+
+func shortenWithSelf(longURL string) (string, error) {
+	fn := selfShortener.Load()
+	if fn == nil {
+		return "", ErrSelfDisabled
+	}
+	return (*fn)(longURL)
 }
 
 // parseShortURL reads a plain-text shortener response and validates it looks like a URL.
@@ -599,7 +621,9 @@ func ShortenURLWithService(longURL string, preferredService string) string {
 					log.Printf("[RSS] Shortened URL using %s", svc.name)
 					return shortURL
 				}
-				log.Printf("[RSS] Failed to shorten with %s: %v", svc.name, err)
+				if !errors.Is(err, ErrSelfDisabled) {
+					log.Printf("[RSS] Failed to shorten with %s: %v", svc.name, err)
+				}
 				break
 			}
 		}
@@ -611,6 +635,9 @@ func ShortenURLWithService(longURL string, preferredService string) string {
 		if err == nil {
 			log.Printf("[RSS] Shortened URL using %s", svc.name)
 			return shortURL
+		}
+		if errors.Is(err, ErrSelfDisabled) {
+			continue
 		}
 		log.Printf("[RSS] Fallback %s failed: %v", svc.name, err)
 	}

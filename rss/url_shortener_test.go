@@ -57,6 +57,7 @@ func contains(slice []string, item string) bool {
 
 func TestAllShortenerServicesAvailable(t *testing.T) {
 	expected := []string{
+		"self",
 		"is.gd",
 		"tinyurl",
 		"v.gd",
@@ -103,5 +104,13 @@ func TestShortenersHaveValidNames(t *testing.T) {
 		if strings.TrimSpace(svc.name) == "" {
 			t.Errorf("Service has empty name")
 		}
+	}
+}
+
+func TestSelfShortenerHook(t *testing.T) {
+	SetSelfShortener(func(u string) (string, error) { return "https://me.example/r/abc", nil })
+	defer SetSelfShortener(func(string) (string, error) { return "", ErrSelfDisabled })
+	if got := ShortenURLWithService("https://example.com/x", "self"); got != "https://me.example/r/abc" {
+		t.Errorf("got %q", got)
 	}
 }

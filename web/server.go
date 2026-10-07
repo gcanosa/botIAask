@@ -35,6 +35,7 @@ import (
 	"botIAask/meta"
 	"botIAask/progtodo"
 	"botIAask/rss"
+	"botIAask/shortlinks"
 	"botIAask/stats"
 	"botIAask/uploads"
 	"botIAask/weather"
@@ -56,6 +57,7 @@ type Server struct {
 	uploadsDB        *uploads.Database
 	cryptoDB         *crypto.Database
 	progtodoDB       *progtodo.Database
+	shortlinks       *shortlinks.Store
 	githubFetcher    *github.Fetcher
 	templates        *template.Template
 	changelogMu      sync.Mutex
@@ -140,7 +142,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		log.Printf("Warning: failed to seed initial admin: %v", err)
 	}
 
-	return &Server{
+	srv := &Server{
 		cfg:              cfg,
 		bot:              bot,
 		rssFetcher:       rssFetcher,
@@ -159,6 +161,8 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 			Timeout: 22 * time.Second,
 		},
 	}
+	srv.initShortLinks()
+	return srv
 }
 
 // newServeMux builds the HTTP route table (reused on hot rebind after Shutdown).
@@ -226,6 +230,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	// Upload/Paste routes
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/upload/cancel", s.handleUploadCancel)
+	mux.HandleFunc("/r/", s.handleShortRedirect)
 	mux.HandleFunc("/f/", s.handleFileDownload)
 	mux.HandleFunc("/p/", s.handlePasteView)
 
@@ -2162,6 +2167,8 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 			"announce_to_irc":      s.getConfig().RSS.AnnounceToIRCEnabled(),
 			"url_shortener":        s.getConfig().RSS.URLShortener,
 			"available_shorteners": rss.AvailableShorteners(),
+			"short_links":          s.getConfig().ShortLinks,
+			"short_link_example":   shortLinkBase(s.getConfig()) + "/r/Ab3dE9x",
 		}
 		if s.rssFetcher != nil {
 			response["feed_status"] = s.rssFetcher.FeedStatuses()
@@ -2175,11 +2182,12 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			IntervalMinutes int      `json:"interval_minutes"`
-			RetentionCount  int      `json:"retention_count"`
-			FeedURLs        []string `json:"feed_urls"`
-			AnnounceToIRC   *bool    `json:"announce_to_irc,omitempty"`
-			URLShortener    string   `json:"url_shortener,omitempty"`
+			IntervalMinutes int                      `json:"interval_minutes"`
+			RetentionCount  int                      `json:"retention_count"`
+			FeedURLs        []string                 `json:"feed_urls"`
+			AnnounceToIRC   *bool                    `json:"announce_to_irc,omitempty"`
+			URLShortener    string                   `json:"url_shortener,omitempty"`
+			ShortLinks      *config.ShortLinksConfig `json:"short_links,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2202,6 +2210,9 @@ func (s *Server) handleRSSSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.URLShortener != "" {
 			s.cfg.RSS.URLShortener = req.URLShortener
+		}
+		if req.ShortLinks != nil {
+			s.cfg.ShortLinks = *req.ShortLinks
 		}
 		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
 			s.cfgMu.Unlock()
