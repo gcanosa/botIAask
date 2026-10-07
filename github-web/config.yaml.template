@@ -31,6 +31,8 @@ irc:
               enabled: true
               username: registered_nickname
               password: services_password
+              # mechanism: plain        # or "external" (TLS client cert; manage it in the dashboard)
+              # nickserv_password / client_cert are set from the dashboard and stored encrypted.
           # Optional: hostmasks granted admin only on this network, on top of the global
           # admin.admins list below (which grants admin on every network).
           # admins:
@@ -56,7 +58,7 @@ ai:
 bot:
     command_prefix: '!'
     command_name: ask
-    debug: true
+    debug: false
     rate_limiting:
         enabled: true
         limit: 3
@@ -100,7 +102,7 @@ rss:
         - https://news.ycombinator.com/rss
     announce_to_irc: true
     # url_shortener: preferred service. Available options:
-    # is.gd, tinyurl, v.gd, clck.ru, da.gd
+    # self (private, see short_links below), is.gd, tinyurl, v.gd, clck.ru, da.gd
     # Defaults to is.gd with automatic fallback chain if preferred service fails.
     url_shortener: is.gd
 # github_tracker: announces pushes/PRs/releases from tracked GitHub repos to IRC. Distinct
@@ -143,3 +145,10 @@ uploads:
 #     enabled: true          # set false to disable
 #     interval_hours: 24     # how often to snapshot (default 24)
 #     keep: 7                # snapshots to retain per database (default 7)
+
+# Private URL shortener: links are <web.base_url>/r/<code>, stored in data/shortlinks.db.
+# Needs the dashboard (-dashboard) running and reachable from the internet. Also in the dashboard RSS settings.
+# short_links:
+#     enabled: false
+#     https: false   # force https in links; only if a TLS proxy fronts web.base_url
+#     expire_days: 90  # delete links neither created nor opened in this many days; -1 = never
