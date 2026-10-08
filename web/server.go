@@ -121,9 +121,20 @@ func (s *Server) clearWeatherCache() {
 // SetConfig replaces the in-memory config after a live reload (shared pointer with IRC/RSS).
 func (s *Server) SetConfig(cfg *config.Config) {
 	s.cfgMu.Lock()
-	s.cfg = cfg
+	s.cfg = ownConfig(cfg)
 	s.cfgMu.Unlock()
 	s.clearWeatherCache()
+}
+
+// ownConfig returns a private copy of cfg for the web server. Handlers mutate s.cfg in
+// place and then trigger a rehash; if s.cfg were the pointer the bot is running on, the
+// rehash diff would compare the already-edited config with itself and miss every change
+// (e.g. an edited IRC server/port never reconnected). Falls back to cfg if cloning fails.
+func ownConfig(cfg *config.Config) *config.Config {
+	if c, err := config.CloneConfig(cfg); err == nil {
+		return c
+	}
+	return cfg
 }
 
 // NewServer creates a new web server instance
@@ -143,7 +154,7 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 	}
 
 	srv := &Server{
-		cfg:              cfg,
+		cfg:              ownConfig(cfg),
 		bot:              bot,
 		rssFetcher:       rssFetcher,
 		statsTracker:     statsTracker,
@@ -1294,6 +1305,7 @@ type ircNetworkRow struct {
 	Port          int    `json:"port"`
 	UseSSL        bool   `json:"use_ssl"`
 	TLSSkipVerify bool   `json:"tls_skip_verify"`
+	BotMode       bool   `json:"bot_mode"`
 	Nickname      string `json:"nickname"`
 	QuitMessage   string `json:"quit_message"`
 	SASLEnabled   bool   `json:"sasl_enabled"`
