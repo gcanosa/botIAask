@@ -2713,6 +2713,8 @@ function ircNetworkEditStart(name) {
     if (sslEl) sslEl.checked = !!n.use_ssl;
     const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
     if (tlsSkipEl) tlsSkipEl.checked = !!n.tls_skip_verify;
+    const botModeEl = document.getElementById('irc-net-bot-mode');
+    if (botModeEl) botModeEl.checked = !!n.bot_mode;
     const enabledEl = document.getElementById('irc-net-enabled');
     if (enabledEl) enabledEl.checked = n.enabled !== false;
     const nickEl = document.getElementById('irc-net-nick');
@@ -2738,6 +2740,8 @@ function ircNetworkEditCancel() {
     if (quitEl) quitEl.value = '';
     const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
     if (tlsSkipEl) tlsSkipEl.checked = false;
+    const botModeEl = document.getElementById('irc-net-bot-mode');
+    if (botModeEl) botModeEl.checked = false;
     const saslEnEl = document.getElementById('irc-net-sasl-enabled');
     if (saslEnEl) saslEnEl.checked = false;
     const saslUserEl = document.getElementById('irc-net-sasl-username');
@@ -2770,6 +2774,7 @@ async function ircNetworkAdd() {
         port: parseInt(portEl.value, 10) || 0,
         use_ssl: sslEl ? sslEl.checked : true,
         tls_skip_verify: tlsSkipEl ? tlsSkipEl.checked : false,
+        bot_mode: (document.getElementById('irc-net-bot-mode') || {}).checked || false,
         nickname: nickEl.value.trim(),
         quit_message: quitEl ? quitEl.value.trim() : '',
     };

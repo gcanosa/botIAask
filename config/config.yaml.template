@@ -16,6 +16,8 @@ irc:
           # with no matching SAN). Only relevant when use_ssl is true. Leave off/false when
           # the server has a proper cert.
           # tls_skip_verify: true
+          # Set user mode +B (bot flag) after connecting. Default false.
+          # bot_mode: true
           nickname: Nickname
           # Channels: plain strings, or a mapping for +k. Optional: auto_join: false (default true) to store the row without auto-joining.
           #   - name: '##locked'

@@ -1913,6 +1913,7 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 				Port:          n.Port,
 				UseSSL:        n.UseSSL,
 				TLSSkipVerify: n.TLSSkipVerify,
+				BotMode:       n.BotMode,
 				Nickname:      n.Nickname,
 				QuitMessage:   n.QuitMessage,
 				SASLEnabled:   n.Services.Enabled,
@@ -1943,6 +1944,7 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 			Port          int      `json:"port"`
 			UseSSL        bool     `json:"use_ssl"`
 			TLSSkipVerify bool     `json:"tls_skip_verify"`
+			BotMode       bool     `json:"bot_mode"`
 			Nickname      string   `json:"nickname"`
 			QuitMessage   string   `json:"quit_message"`
 			Admins        []string `json:"admins"`
@@ -1975,7 +1977,7 @@ func (s *Server) handleIRCNetworks(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := config.IRCNetworkConfig{
 			Name: name, Enabled: req.Enabled, Server: server, Port: req.Port, UseSSL: req.UseSSL,
-			TLSSkipVerify: req.TLSSkipVerify, Nickname: nickname, QuitMessage: strings.TrimSpace(req.QuitMessage),
+			TLSSkipVerify: req.TLSSkipVerify, BotMode: req.BotMode, Nickname: nickname, QuitMessage: strings.TrimSpace(req.QuitMessage),
 			Admins: req.Admins,
 		}
 		for _, ch := range req.Channels {
@@ -2085,6 +2087,7 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 		// — this is the fix for a real bug where the dashboard's edit form used to erase
 		// quit_message on every save because it never sent that field at all.
 		TLSSkipVerify *bool   `json:"tls_skip_verify"`
+		BotMode       *bool   `json:"bot_mode"`
 		Nickname      string  `json:"nickname"`
 		QuitMessage   *string `json:"quit_message"`
 		SASL          *struct {
@@ -2126,6 +2129,9 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 	s.cfg.IRC.Networks[ni].UseSSL = req.UseSSL
 	if req.TLSSkipVerify != nil {
 		s.cfg.IRC.Networks[ni].TLSSkipVerify = *req.TLSSkipVerify
+	}
+	if req.BotMode != nil {
+		s.cfg.IRC.Networks[ni].BotMode = *req.BotMode
 	}
 	s.cfg.IRC.Networks[ni].Nickname = nickname
 	if req.QuitMessage != nil {
