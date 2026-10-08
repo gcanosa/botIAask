@@ -86,6 +86,17 @@ func (b *ircNetwork) netCfg() config.IRCNetworkConfig {
 	return nc
 }
 
+// setBotMode sets or clears user mode +B on our own nick.
+func (b *ircNetwork) setBotMode(on bool) {
+	flag := "-B"
+	if on {
+		flag = "+B"
+	}
+	if err := b.conn.SendRaw("MODE " + b.conn.CurrentNick() + " " + flag); err != nil {
+		log.Printf("irc[%s]: MODE %s: %v", b.name, flag, err)
+	}
+}
+
 func (b *ircNetwork) isConnected() bool {
 	b.statsMu.Lock()
 	defer b.statsMu.Unlock()
@@ -410,12 +421,29 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 	})
 
+	// Server verdict on our own user modes: MODE echo = accepted, 501 = unknown flag (no +B).
+	n.conn.AddCallback("MODE", func(e ircmsg.Message) {
+		if len(e.Params) >= 2 && strings.EqualFold(e.Params[0], n.conn.CurrentNick()) {
+			if on, ok := botFlagChange(e.Params[1]); ok {
+				log.Printf("irc[%s]: server accepted bot mode change (+B now %v)", n.name, on)
+			}
+		}
+	})
+	n.conn.AddCallback("501", func(e ircmsg.Message) {
+		if n.netCfg().BotMode || len(e.Params) < 2 {
+			log.Printf("irc[%s]: server rejected user mode (501: %s); this network may not support +B", n.name, strings.Join(e.Params[1:], " "))
+		}
+	})
+
 	n.conn.AddConnectCallback(func(e ircmsg.Message) {
 		log.Printf("irc[%s]: connected to %s! Joining channels...", n.name, serverAddr)
 		n.statsMu.Lock()
 		n.connectionTime = time.Now()
 		n.connected = true
 		n.statsMu.Unlock()
+		if n.netCfg().BotMode {
+			n.setBotMode(true)
+		}
 		// No SASL: identify with NickServ instead (password read live, never logged here).
 		if svc := n.netCfg().Services; !svc.Enabled && svc.NickServPassword != "" {
 			if err := n.conn.Privmsg("NickServ", "IDENTIFY "+svc.NickServPassword); err != nil {
@@ -747,6 +775,9 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 		if net == nil || !net.isConnected() {
 			continue
 		}
+		if oldN.BotMode != newN.BotMode {
+			net.setBotMode(newN.BotMode)
+		}
 		oldAuto := config.IRChannelNamesAutoJoin(oldN.Channels)
 		newAuto := config.IRChannelNamesAutoJoin(newN.Channels)
 		for _, ch := range channelListDifference(oldAuto, newAuto) {
@@ -987,4 +1018,21 @@ func (b *Bot) NotifyLoggedInAdminsRehashSummary(source, timeRFC3339 string, diff
 			b.NotifyLoggedInAdminsNotice(chunk)
 		}
 	}
+}
+
+// botFlagChange parses a user-mode string like "+iB" or "-B+w" and reports whether B was
+// set (on=true) or cleared (on=false); ok is false when B is not mentioned.
+func botFlagChange(modes string) (on, ok bool) {
+	add := true
+	for _, c := range modes {
+		switch c {
+		case '+':
+			add = true
+		case '-':
+			add = false
+		case 'B':
+			on, ok = add, true
+		}
+	}
+	return
 }

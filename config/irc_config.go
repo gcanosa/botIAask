@@ -25,9 +25,12 @@ type IRCNetworkConfig struct {
 	UseSSL  bool   `yaml:"use_ssl"`
 	// TLSSkipVerify disables TLS certificate verification (self-signed certs, bare-IP
 	// servers without matching SANs). Only takes effect when UseSSL is true.
-	TLSSkipVerify bool        `yaml:"tls_skip_verify,omitempty"`
-	Nickname      string      `yaml:"nickname"`
-	Channels      []IRChannel `yaml:"channels"`
+	TLSSkipVerify bool `yaml:"tls_skip_verify,omitempty"`
+	// BotMode sets user mode +B (bot flag) on this network after connecting. Off by default;
+	// servers without +B reject it harmlessly.
+	BotMode  bool        `yaml:"bot_mode,omitempty"`
+	Nickname string      `yaml:"nickname"`
+	Channels []IRChannel `yaml:"channels"`
 	// QuitMessage: optional QUIT reason. Empty uses default: "<app name> <version> Uptime: <uptime>".
 	// If set, expand placeholders: {name}, {version}, {uptime}, {nickname}.
 	QuitMessage string         `yaml:"quit_message,omitempty"`
