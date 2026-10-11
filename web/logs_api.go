@@ -135,8 +135,11 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// file_key -> set of dates
+	// Keys are case-folded: the logger names files after the channel as the server spelled it,
+	// so "#News" and "#news" on the same network are one channel split across files.
 	diskDates := make(map[string]map[string]struct{})
 	addDate := func(key, date string) {
+		key = strings.ToLower(key)
 		if diskDates[key] == nil {
 			diskDates[key] = make(map[string]struct{})
 		}
@@ -197,9 +200,9 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	legacyKeyOf := make(map[string]string)
 	for _, net := range cfg.IRC.Networks {
 		for _, ch := range net.Channels {
-			newKey := logger.ChannelFileKey(ch.Name, net.Name)
+			newKey := strings.ToLower(logger.ChannelFileKey(ch.Name, net.Name))
 			joinedByKey[newKey] = joinedInfo{label: ch.Name, network: net.Name}
-			legacyKeyOf[logger.ChannelFileKey(ch.Name, "")] = newKey
+			legacyKeyOf[strings.ToLower(logger.ChannelFileKey(ch.Name, ""))] = newKey
 		}
 	}
 	for legacyKey, newKey := range legacyKeyOf {
@@ -224,7 +227,7 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 	// of the channel browser instead of showing them as bogus "#NetworkName" rows.
 	networkNames := make(map[string]struct{})
 	for _, net := range cfg.IRC.Networks {
-		networkNames[net.Name] = struct{}{}
+		networkNames[strings.ToLower(net.Name)] = struct{}{}
 	}
 
 	keysSorted := make([]string, 0, len(allKeys))
@@ -244,7 +247,7 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 			// entry no longer exists: match the fileKey's network-name prefix.
 			info = joinedInfo{label: "#" + fileKey}
 			for _, net := range cfg.IRC.Networks {
-				if prefix := net.Name + "_"; strings.HasPrefix(fileKey, prefix) {
+				if prefix := strings.ToLower(net.Name) + "_"; strings.HasPrefix(fileKey, prefix) {
 					info = joinedInfo{label: "#" + strings.TrimPrefix(fileKey, prefix), network: net.Name}
 					break
 				}
@@ -256,7 +259,15 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		dateSet := diskDates[fileKey]
 		dates := make([]string, 0, len(dateSet))
 		for d := range dateSet {
-			dates = append(dates, d)
+			// Days before the retention window can't be picked in the calendar anyway.
+			if d >= minDate {
+				dates = append(dates, d)
+			}
+		}
+		// A channel the bot no longer sits in drops off the list once its last day ages out
+		// of retention (the files stay on disk under logs/archive/).
+		if !joined && len(dates) == 0 {
+			continue
 		}
 		sort.Strings(dates)
 		channels = append(channels, logChannelEntry{
@@ -331,8 +342,8 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	var reader io.ReadCloser
 	archived := false
 	for _, key := range keys {
-		activePath := filepath.Join(logsDir, fmt.Sprintf("%s_%s.log", key, date))
-		archivePath := filepath.Join(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
+		activePath := findFold(logsDir, fmt.Sprintf("%s_%s.log", key, date))
+		archivePath := findFold(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
 		if f, err := os.Open(activePath); err == nil {
 			reader = f
 			break
@@ -364,6 +375,26 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		Date:      date,
 		Archived:  archived,
 	})
+}
+
+// findFold returns dir/name, or a case-insensitively matching file in dir when the exact name
+// doesn't exist (the server doesn't always spell a channel the way config does).
+// ponytail: scans dir on a miss; fine for a logs/ dir of a few thousand files.
+func findFold(dir, name string) string {
+	exact := filepath.Join(dir, name)
+	if _, err := os.Stat(exact); err == nil {
+		return exact
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return exact
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.EqualFold(e.Name(), name) {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return exact
 }
 
 type readCloserPair struct {

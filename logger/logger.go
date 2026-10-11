@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +17,7 @@ var (
 
 	rotationMu   sync.RWMutex
 	rotationDays int
+	archiveDays  int
 	rotatorOnce  sync.Once
 )
 
@@ -111,6 +113,14 @@ func SetRotationDays(days int) {
 	rotationMu.Unlock()
 }
 
+// SetArchiveDays sets how many days (counted from the log's own date) archived .log.gz files
+// are kept before being deleted. Values <= 0 keep archives forever.
+func SetArchiveDays(days int) {
+	rotationMu.Lock()
+	archiveDays = days
+	rotationMu.Unlock()
+}
+
 func rotationDaysSnapshot() int {
 	rotationMu.RLock()
 	defer rotationMu.RUnlock()
@@ -136,11 +146,41 @@ func logRotatorLoop() {
 }
 
 func runRotationIfEnabled() {
-	d := rotationDaysSnapshot()
-	if d <= 0 {
+	rotationMu.RLock()
+	d, a := rotationDays, archiveDays
+	rotationMu.RUnlock()
+	if d > 0 {
+		rotateLogs(d)
+	}
+	if a > 0 {
+		purgeArchives(a, time.Now())
+	}
+}
+
+// purgeArchives deletes logs/archive/*_<YYYY-MM-DD>.log.gz files whose date is more than days
+// before now. The date comes from the file name (the day logged), not the mtime, which is
+// just when rotation compressed it.
+func purgeArchives(days int, now time.Time) {
+	archiveDir := filepath.Join(logsDir, "archive")
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
 		return
 	}
-	rotateLogs(d)
+	cutoff := now.AddDate(0, 0, -days).Format("2006-01-02")
+	for _, e := range entries {
+		name := e.Name()
+		base, ok := strings.CutSuffix(name, ".log.gz")
+		if e.IsDir() || !ok || len(base) < 10 {
+			continue
+		}
+		date := base[len(base)-10:]
+		if _, err := time.Parse("2006-01-02", date); err != nil || date >= cutoff {
+			continue
+		}
+		if err := os.Remove(filepath.Join(archiveDir, name)); err != nil {
+			fmt.Printf("Error deleting old log archive %s: %v\n", name, err)
+		}
+	}
 }
 
 // rotateLogs deliberately does not take mu: only files older than the retention window are

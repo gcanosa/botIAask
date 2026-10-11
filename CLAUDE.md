@@ -158,4 +158,5 @@ go vet ./...
 ```
 
 Logs go to `logs/<server>_<channel>_<date>.log` (IRC channel events).  
+Files older than `logger.rotation_days` are gzipped into `logs/archive/`; optional `logger.archive_days` (0 = forever) deletes archives whose logged day is older than that (daily, re-read on rehash). The dashboard log list hides not-joined channels with no day inside the retention window.  
 Runtime data (DBs, PID file) lives in `data/`.

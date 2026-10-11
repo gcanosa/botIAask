@@ -197,6 +197,9 @@ type AuthConfig struct {
 // LoggerConfig holds settings for log rotation.
 type LoggerConfig struct {
 	RotationDays int `yaml:"rotation_days"`
+	// ArchiveDays deletes logs/archive/*.log.gz once the logged day is older than this.
+	// 0 (default) keeps archives forever.
+	ArchiveDays int `yaml:"archive_days,omitempty"`
 }
 
 // RSSConfig holds settings for the Hacker News RSS fetcher.

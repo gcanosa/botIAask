@@ -44,6 +44,7 @@ let logCatalog = null;
 let logState = {
     channelLabel: null,
     channelNetwork: null,
+    network: null, // network shown in the channel list (sidebar picker)
     joined: false,
     selectedDate: null,
     eventSource: null,
@@ -409,6 +410,7 @@ function showPanel(panelId) {
     }
     if (panelId === 'news') fetchNews(1);
     if (panelId === 'admin') {
+        adminTabShow();
         fetchUsers();
         fetchIRCNetworks();
         fetchIRCConfigAdmins();
@@ -737,12 +739,20 @@ function bindLogsPanelListeners() {
     logPanelListenersBound = true;
 
     document.getElementById('logs-channel-filter')?.addEventListener('input', () => renderLogChannelList());
+    document.getElementById('logs-network-filter')?.addEventListener('change', (e) => {
+        logState.network = e.target.value;
+        try { localStorage.setItem('logsNetwork', logState.network); } catch (_) {}
+        renderLogChannelList();
+    });
     document.getElementById('logs-close-view')?.addEventListener('click', closeLogsView);
 
     const calToggle = document.getElementById('log-calendar-toggle');
     const calPop = document.getElementById('log-calendar-popover');
     calToggle?.addEventListener('click', (e) => {
         e.stopPropagation();
+        // On phones the popover is a fixed bottom sheet; the card's backdrop-filter would make
+        // "fixed" relative to the card, so it's hosted on <body> there.
+        if (calPop) (window.matchMedia('(max-width: 640px)').matches ? document.body : calToggle.parentElement).appendChild(calPop);
         calPop?.classList.toggle('hidden');
         const expanded = calPop && !calPop.classList.contains('hidden');
         calToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -822,17 +832,30 @@ function renderLogChannelList() {
     const host = document.getElementById('logs-channel-groups');
     if (!host || !logCatalog?.channels) return;
     const q = (document.getElementById('logs-channel-filter')?.value || '').trim().toLowerCase();
-    const joined = logCatalog.channels.filter((c) => c.joined && (!q || c.label.toLowerCase().includes(q)));
-    const other = logCatalog.channels.filter((c) => !c.joined && (!q || c.label.toLowerCase().includes(q)));
-    const multiNet = new Set(logCatalog.channels.map((c) => c.network).filter(Boolean)).size > 1;
+
+    // One network at a time; entries with no recoverable network (pre-multi-network logs) go under "Other".
+    const nets = [...new Set(logCatalog.channels.map((c) => c.network || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+    if (logState.network == null) {
+        try { logState.network = localStorage.getItem('logsNetwork'); } catch (_) {}
+    }
+    if (!nets.includes(logState.network)) logState.network = nets[0] ?? '';
+    const sel = document.getElementById('logs-network-filter');
+    if (sel) {
+        sel.innerHTML = nets.map((n) => `<option value="${financeEscapeHtml(n)}">${financeEscapeHtml(n || 'Other')}</option>`).join('');
+        sel.value = logState.network;
+        sel.classList.toggle('hidden', nets.length < 2);
+    }
+
+    const inNet = logCatalog.channels.filter((c) => (c.network || '') === logState.network && (!q || c.label.toLowerCase().includes(q)));
+    const joined = inNet.filter((c) => c.joined);
+    const other = inNet.filter((c) => !c.joined);
 
     const mkRow = (c) => {
         const row = document.createElement('button');
         row.type = 'button';
         const active = logState.channelLabel === c.label && logState.channelNetwork === c.network;
         row.className = 'logs-channel-row mono' + (active ? ' active' : '');
-        const netSuffix = multiNet && c.network ? ` <span class="logs-channel-meta">(${financeEscapeHtml(c.network)})</span>` : '';
-        row.innerHTML = `<span>${financeEscapeHtml(c.label)}${netSuffix}</span><span class="logs-channel-meta">${
+        row.innerHTML = `<span>${financeEscapeHtml(c.label)}</span><span class="logs-channel-meta">${
             c.joined
                 ? '<span class="log-badge log-badge-live"><span class="dot pulse"></span>Live</span>'
                 : '<span class="log-badge log-badge-disk">Disk</span>'
@@ -853,7 +876,7 @@ function renderLogChannelList() {
         host.appendChild(wrap);
     };
     addGroup('Joined', joined);
-    addGroup('Not joined / archive', other);
+    addGroup('Not joined (within retention)', other);
     if (!host.children.length) {
         host.innerHTML = '<p class="section-subtitle" style="margin:0;">No channels match.</p>';
     }
@@ -894,7 +917,7 @@ function updateLogToolbarBadges() {
     }
     el.innerHTML = parts.join('');
     const title = document.getElementById('logs-view-title');
-    if (title) title.textContent = logState.channelLabel || '—';
+    if (title) title.textContent = logState.channelLabel ? `${logState.channelLabel}${logState.channelNetwork ? ' · ' + logState.channelNetwork : ''}` : '—';
 }
 
 function updateLogDateLabel() {
@@ -922,16 +945,76 @@ function teardownLogStream() {
     }
 }
 
-function appendLogLine(text) {
-    const scrollEl = document.getElementById('log-scroll');
-    if (!scrollEl) return;
+// mIRC palette for color codes 00–15; 16–98 (extended) render uncolored.
+const IRC_COLORS = ['#ffffff', '#000000', '#00007f', '#009300', '#ff0000', '#7f0000', '#9c009c', '#fc7f00',
+    '#ffff00', '#00fc00', '#009393', '#00ffff', '#0000fc', '#ff00ff', '#7f7f7f', '#d2d2d2'];
+const IRC_FMT_RE = /\x03(?:(\d{1,2})(?:,(\d{1,2}))?)?|\x04(?:([0-9a-fA-F]{6})(?:,([0-9a-fA-F]{6}))?)?|[\x02\x0f\x11\x16\x1d\x1e\x1f]/g;
+
+// ircFormat turns an IRC line with mIRC control codes (color, bold, italic, underline,
+// strikethrough, reset) into DOM nodes. Text only goes through textContent, never innerHTML.
+function ircFormat(text) {
+    const frag = document.createDocumentFragment();
+    const st = { fg: null, bg: null, b: false, i: false, u: false, s: false, rev: false };
+    let last = 0;
+    const emit = (chunk) => {
+        if (!chunk) return;
+        let fg = st.fg, bg = st.bg;
+        if (st.rev) [fg, bg] = [bg || 'var(--bg-card)', fg || 'currentColor'];
+        if (!fg && !bg && !st.b && !st.i && !st.u && !st.s) {
+            frag.append(chunk);
+            return;
+        }
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (fg) span.style.color = fg;
+        if (bg) span.style.backgroundColor = bg;
+        if (st.b) span.style.fontWeight = '700';
+        if (st.i) span.style.fontStyle = 'italic';
+        const deco = [st.u && 'underline', st.s && 'line-through'].filter(Boolean).join(' ');
+        if (deco) span.style.textDecoration = deco;
+        frag.append(span);
+    };
+    for (const m of text.matchAll(IRC_FMT_RE)) {
+        emit(text.slice(last, m.index));
+        last = m.index + m[0].length;
+        switch (m[0][0]) {
+            case '\x03':
+            case '\x04': {
+                const hex = m[0][0] === '\x04';
+                const fg = hex ? m[3] : m[1];
+                if (fg == null) { st.fg = st.bg = null; break; }
+                st.fg = hex ? '#' + fg : IRC_COLORS[+fg] || null;
+                const bg = hex ? m[4] : m[2];
+                if (bg != null) st.bg = hex ? '#' + bg : IRC_COLORS[+bg] || null;
+                break;
+            }
+            case '\x02': st.b = !st.b; break;
+            case '\x1d': st.i = !st.i; break;
+            case '\x1f': st.u = !st.u; break;
+            case '\x1e': st.s = !st.s; break;
+            case '\x16': st.rev = !st.rev; break;
+            case '\x0f': Object.assign(st, { fg: null, bg: null, b: false, i: false, u: false, s: false, rev: false }); break;
+            default: break; // \x11 monospace: already monospace
+        }
+    }
+    emit(text.slice(last));
+    return frag;
+}
+
+function makeLogLine(text) {
     const line = document.createElement('div');
     line.className = 'log-line';
     if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
     else if (text.includes('***') && (text.includes('left') || text.includes('quit'))) line.style.color = 'var(--error)';
-    else if (text.includes('* ') && text.includes('***') === false) line.style.color = 'var(--accent)';
-    line.textContent = text;
-    scrollEl.appendChild(line);
+    else if (text.includes('* ') && !text.includes('***')) line.style.color = 'var(--accent)';
+    line.appendChild(ircFormat(text));
+    return line;
+}
+
+function appendLogLine(text) {
+    const scrollEl = document.getElementById('log-scroll');
+    if (!scrollEl) return;
+    scrollEl.appendChild(makeLogLine(text));
     if (logState.stickToBottom) scrollLogToEnd();
 }
 
@@ -980,16 +1063,7 @@ function reloadLogsForSelection() {
                 const data = await res.json();
                 const lines = Array.isArray(data.lines) ? data.lines : [];
                 const frag = document.createDocumentFragment();
-                lines.forEach((t) => {
-                    const line = document.createElement('div');
-                    line.className = 'log-line';
-                    const text = String(t);
-                    if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
-                    else if (text.includes('***') && (text.includes('left') || text.includes('quit'))) line.style.color = 'var(--error)';
-                    else if (text.includes('* ') && !text.includes('***')) line.style.color = 'var(--accent)';
-                    line.textContent = text;
-                    frag.appendChild(line);
-                });
+                lines.forEach((t) => frag.appendChild(makeLogLine(String(t))));
                 scrollEl?.appendChild(frag);
                 if (data.truncated) {
                     const note = document.createElement('div');
@@ -2615,6 +2689,22 @@ let editingIRCNetwork = null;
 /** '' = global admin.admins list (every network); otherwise a network name (that network's own admins list). */
 let selectedIRCConfigAdminNetwork = '';
 
+// Admin page tabs: cards carry data-admin-group; the chosen tab is remembered per browser.
+function adminTabShow(tab) {
+    if (!tab) {
+        try { tab = localStorage.getItem('adminTab'); } catch (_) {}
+    }
+    if (!['general', 'irc', 'users'].includes(tab)) tab = 'general';
+    try { localStorage.setItem('adminTab', tab); } catch (_) {}
+    document.querySelectorAll('[data-admin-tab]').forEach((b) => {
+        const on = b.dataset.adminTab === tab;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-admin-group]').forEach((c) => c.classList.toggle('admin-tab-off', c.dataset.adminGroup !== tab));
+}
+document.querySelectorAll('[data-admin-tab]').forEach((b) => b.addEventListener('click', () => adminTabShow(b.dataset.adminTab)));
+
 function ircNetworksSetStatus(msg, isError) {
     const el = document.getElementById('irc-networks-status');
     if (!el) return;
@@ -2660,26 +2750,27 @@ function ircNetworksRender() {
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
     if (!lastIRCNetworks.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="padding: 0.75rem; color: var(--text-muted);">No networks configured.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.75rem; color: var(--text-muted);">No networks configured.</td></tr>';
         return;
     }
     tbody.innerHTML = lastIRCNetworks.map((n) => {
         const nameE = encodeURIComponent(n.name);
-        const status = !n.enabled ? 'disabled' : n.connected ? (n.authenticated ? 'connected (SASL)' : 'connected') : 'offline';
-        const statusColor = !n.enabled ? 'var(--text-muted)' : n.connected ? 'var(--success, #34d399)' : 'var(--text-muted)';
+        const status = !n.enabled ? 'Disabled' : n.connected ? (n.authenticated ? 'Connected, logged in' : 'Connected') : 'Offline';
+        const statusColor = !n.enabled ? 'var(--text-muted)' : n.connected ? 'var(--success, #34d399)' : 'var(--error, #f87171)';
+        const login = !n.sasl_enabled ? 'None' : n.sasl_mechanism === 'external' ? 'Certificate' : 'Password';
+        const secure = n.use_ssl ? (n.tls_skip_verify ? ' 🔒⚠' : ' 🔒') : '';
+        const secureTitle = n.use_ssl ? (n.tls_skip_verify ? 'Secure connection, certificate not verified' : 'Secure connection') : 'Not encrypted';
         const canRemove = lastIRCNetworks.length > 1;
         return `<tr style="border-bottom: 1px solid var(--glass-border);">
-            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.name)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.enabled ? '✓' : '—'}</td>
-            <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.server)}:${n.port}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: center;" title="${n.tls_skip_verify ? 'Certificate verification skipped' : ''}">${n.use_ssl ? (n.tls_skip_verify ? '✓ ⚠' : '✓') : '—'}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: center;" title="${n.sasl_username ? ircAutojoinEsc(n.sasl_username) : ''}">${n.sasl_enabled ? '✓' : '—'}</td>
+            <td style="padding: 0.5rem 0.75rem; font-weight: 700;">${ircAutojoinEsc(n.name)}</td>
+            <td style="padding: 0.5rem 0.75rem; white-space: nowrap;" title="${secureTitle}">${ircAutojoinEsc(n.server)}:${n.port}${secure}</td>
             <td style="padding: 0.5rem 0.75rem;">${ircAutojoinEsc(n.nickname)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: center; color: ${statusColor};">${status}</td>
+            <td style="padding: 0.5rem 0.75rem;" title="${n.sasl_username ? ircAutojoinEsc(n.sasl_username) : ''}">${login}</td>
+            <td style="padding: 0.5rem 0.75rem; color: ${statusColor}; white-space: nowrap;">● ${status}</td>
             <td style="padding: 0.5rem 0.75rem; text-align: center;">${n.channel_count}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right;">
-                <button type="button" class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-netedit="${nameE}">Edit</button>
-                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" data-netrm="${nameE}" ${canRemove ? '' : 'disabled title="At least one network is required"'}>Remove</button>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; white-space: nowrap;">
+                <button type="button" class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; display: inline-flex;" data-netedit="${nameE}">Edit</button>
+                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; display: inline-flex;" data-netrm="${nameE}" ${canRemove ? '' : 'disabled title="At least one network is required"'}>Remove</button>
             </td>
         </tr>`;
     }).join('');
@@ -2699,57 +2790,71 @@ function ircAutojoinNetworkChange() {
     fetchIRCAutojoin();
 }
 
+const IRC_NET_LOGIN_HINTS = {
+    none: 'The bot connects without an account. Fine for most channels; pick a login method if the network or a channel requires a registered nick.',
+    plain: 'The bot logs in to its registered account while connecting. Use the account name and password you registered with NickServ.',
+    external: 'The bot logs in with a client certificate instead of a password. Needs a secure connection and a certificate (see "Client certificate" below).',
+};
+
+function ircNetLoginChanged() {
+    const v = (document.getElementById('irc-net-login') || {}).value || 'none';
+    document.getElementById('irc-net-login-plain')?.classList.toggle('hidden', v !== 'plain');
+    const hint = document.getElementById('irc-net-login-hint');
+    if (hint) hint.textContent = IRC_NET_LOGIN_HINTS[v] || '';
+}
+
+// ircNetworkFormFill loads n (or blank defaults when n is null) into the add/edit form and shows it.
+function ircNetworkFormFill(n) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el[typeof v === 'boolean' ? 'checked' : 'value'] = v; };
+    set('irc-net-name', n ? n.name : '');
+    set('irc-net-server', n ? n.server : '');
+    set('irc-net-port', n ? String(n.port) : '6697');
+    set('irc-net-ssl', n ? !!n.use_ssl : true);
+    set('irc-net-tls-skip-verify', n ? !!n.tls_skip_verify : false);
+    set('irc-net-bot-mode', n ? !!n.bot_mode : false);
+    set('irc-net-enabled', n ? n.enabled !== false : true);
+    set('irc-net-nick', n ? n.nickname : '');
+    set('irc-net-quit-message', n ? n.quit_message || '' : '');
+    set('irc-net-login', !n || !n.sasl_enabled ? 'none' : n.sasl_mechanism === 'external' ? 'external' : 'plain');
+    set('irc-net-sasl-username', n ? n.sasl_username || '' : '');
+    set('irc-net-sasl-password', '');
+    set('irc-auth-network', n ? n.name : '');
+    const nameEl = document.getElementById('irc-net-name');
+    if (nameEl) nameEl.disabled = !!n;
+    const pwHint = document.getElementById('irc-net-sasl-password-hint');
+    if (pwHint) pwHint.textContent = n ? 'Leave blank to keep the saved password. Stored encrypted, never shown again.' : 'Stored encrypted, never shown again.';
+    document.getElementById('irc-net-form-title').textContent = n ? `Edit network "${n.name}"` : 'Add network';
+    document.getElementById('irc-net-save-btn').textContent = n ? 'Save changes' : 'Add network';
+    document.getElementById('irc-net-account-tools')?.classList.toggle('hidden', !n);
+    const out = document.getElementById('irc-auth-replies');
+    if (out) out.textContent = '';
+    ircNetLoginChanged();
+    ircAuthRender();
+    const form = document.getElementById('irc-net-form');
+    form?.classList.remove('hidden');
+    document.getElementById('irc-net-add-btn')?.classList.add('hidden');
+    ircNetworksSetStatus('');
+}
+
+function ircNetworkFormOpen() {
+    editingIRCNetwork = null;
+    ircNetworkFormFill(null);
+    document.getElementById('irc-net-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('irc-net-name')?.focus({ preventScroll: true });
+}
+
 function ircNetworkEditStart(name) {
     const n = lastIRCNetworks.find((x) => x.name === name);
     if (!n) return;
     editingIRCNetwork = name;
-    const nameEl = document.getElementById('irc-net-name');
-    if (nameEl) { nameEl.value = n.name; nameEl.disabled = true; }
-    const serverEl = document.getElementById('irc-net-server');
-    if (serverEl) serverEl.value = n.server;
-    const portEl = document.getElementById('irc-net-port');
-    if (portEl) portEl.value = String(n.port);
-    const sslEl = document.getElementById('irc-net-ssl');
-    if (sslEl) sslEl.checked = !!n.use_ssl;
-    const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
-    if (tlsSkipEl) tlsSkipEl.checked = !!n.tls_skip_verify;
-    const botModeEl = document.getElementById('irc-net-bot-mode');
-    if (botModeEl) botModeEl.checked = !!n.bot_mode;
-    const enabledEl = document.getElementById('irc-net-enabled');
-    if (enabledEl) enabledEl.checked = n.enabled !== false;
-    const nickEl = document.getElementById('irc-net-nick');
-    if (nickEl) nickEl.value = n.nickname;
-    const quitEl = document.getElementById('irc-net-quit-message');
-    if (quitEl) quitEl.value = n.quit_message || '';
-    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
-    if (saslEnEl) saslEnEl.checked = !!n.sasl_enabled;
-    const saslUserEl = document.getElementById('irc-net-sasl-username');
-    if (saslUserEl) saslUserEl.value = n.sasl_username || '';
-    const saslPassEl = document.getElementById('irc-net-sasl-password');
-    if (saslPassEl) saslPassEl.value = '';
-    const saslMechEl = document.getElementById('irc-net-sasl-mechanism');
-    if (saslMechEl) saslMechEl.value = n.sasl_mechanism === 'external' ? 'external' : 'plain';
-    ircNetworksSetStatus('Editing "' + name + '" — change fields and click Save changes. SASL password left blank keeps the stored one.');
+    ircNetworkFormFill(n);
+    document.getElementById('irc-net-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function ircNetworkEditCancel() {
     editingIRCNetwork = null;
-    const nameEl = document.getElementById('irc-net-name');
-    if (nameEl) { nameEl.value = ''; nameEl.disabled = false; }
-    const quitEl = document.getElementById('irc-net-quit-message');
-    if (quitEl) quitEl.value = '';
-    const tlsSkipEl = document.getElementById('irc-net-tls-skip-verify');
-    if (tlsSkipEl) tlsSkipEl.checked = false;
-    const botModeEl = document.getElementById('irc-net-bot-mode');
-    if (botModeEl) botModeEl.checked = false;
-    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
-    if (saslEnEl) saslEnEl.checked = false;
-    const saslUserEl = document.getElementById('irc-net-sasl-username');
-    if (saslUserEl) saslUserEl.value = '';
-    const saslPassEl = document.getElementById('irc-net-sasl-password');
-    if (saslPassEl) saslPassEl.value = '';
-    const saslMechEl = document.getElementById('irc-net-sasl-mechanism');
-    if (saslMechEl) saslMechEl.value = 'plain';
+    document.getElementById('irc-net-form')?.classList.add('hidden');
+    document.getElementById('irc-net-add-btn')?.classList.remove('hidden');
     ircNetworksSetStatus('');
 }
 
@@ -2762,7 +2867,7 @@ async function ircNetworkAdd() {
     const enabledEl = document.getElementById('irc-net-enabled');
     const nickEl = document.getElementById('irc-net-nick');
     const quitEl = document.getElementById('irc-net-quit-message');
-    const saslEnEl = document.getElementById('irc-net-sasl-enabled');
+    const login = (document.getElementById('irc-net-login') || {}).value || 'none';
     const saslUserEl = document.getElementById('irc-net-sasl-username');
     const saslPassEl = document.getElementById('irc-net-sasl-password');
     if (!nameEl || !serverEl || !portEl || !nickEl) return;
@@ -2778,14 +2883,14 @@ async function ircNetworkAdd() {
         nickname: nickEl.value.trim(),
         quit_message: quitEl ? quitEl.value.trim() : '',
     };
-    const saslEnabled = saslEnEl ? saslEnEl.checked : false;
+    const saslEnabled = login !== 'none';
     const saslPassword = saslPassEl ? saslPassEl.value : '';
     // On edit, always send sasl so enabling/disabling and username changes persist; a blank
     // password means "keep the one already stored" (server-side, see handleIRCNetworkEdit) —
     // the password is never read back so there's nothing to round-trip here. On add there's
     // no existing password to preserve, so only send it when SASL is actually being set up.
     if (editing || saslEnabled || saslPassword) {
-        body.sasl = { enabled: saslEnabled, username: saslUserEl ? saslUserEl.value.trim() : '', password: saslPassword, mechanism: (document.getElementById('irc-net-sasl-mechanism') || {}).value || 'plain' };
+        body.sasl = { enabled: saslEnabled, username: saslUserEl ? saslUserEl.value.trim() : '', password: saslPassword, mechanism: login === 'external' ? 'external' : 'plain' };
     }
     ircNetworksSetStatus('');
     try {
@@ -2804,12 +2909,8 @@ async function ircNetworkAdd() {
             return;
         }
         ircNetworkEditCancel();
-        serverEl.value = '';
-        portEl.value = '6697';
-        if (sslEl) sslEl.checked = true;
-        if (enabledEl) enabledEl.checked = true;
-        nickEl.value = '';
         await fetchIRCNetworks();
+        ircNetworksSetStatus(editing ? `Saved "${editing}".` : `Added "${body.name}". The bot is connecting now.`);
     } catch (e) {
         ircNetworksSetStatus(String(e), true);
     }
@@ -4637,11 +4738,6 @@ function ircAuthNetwork() {
 }
 
 function ircAuthPopulate() {
-    const sel = document.getElementById('irc-auth-network');
-    if (!sel) return;
-    const cur = sel.value;
-    sel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}">${ircAutojoinEsc(n.name)}</option>`).join('');
-    if (lastIRCNetworks.some((n) => n.name === cur)) sel.value = cur;
     ircAuthRender();
 }
 
@@ -4651,12 +4747,11 @@ function ircAuthRender() {
     const n = lastIRCNetworks.find((x) => x.name === ircAuthNetwork());
     if (!n) { info.textContent = ''; return; }
     const parts = [
-        'SASL: ' + (n.sasl_enabled ? (n.sasl_mechanism === 'external' ? 'EXTERNAL' : 'PLAIN') : 'off'),
-        'NickServ password: ' + (n.has_nickserv_password ? 'stored (auto-identify when SASL is off)' : 'not stored'),
-        'Account registration: ' + (n.account_registration ? 'supported (IRCv3 REGISTER)' : n.connected ? 'not offered by server' : 'unknown (offline)'),
-        'Client cert: ' + (n.cert_fingerprint ? 'SHA-256 ' + n.cert_fingerprint : 'none'),
+        'Saved NickServ password: ' + (n.has_nickserv_password ? 'yes' + (n.sasl_enabled ? '' : ' (identifies automatically on connect)') : 'no'),
+        'Server-side account registration: ' + (n.account_registration ? 'available' : n.connected ? 'not offered' : 'unknown while offline'),
+        'Client certificate: ' + (n.cert_fingerprint ? 'SHA-256 ' + n.cert_fingerprint : 'none'),
     ];
-    info.textContent = parts.join('  |  ');
+    info.textContent = parts.join('\n');
 }
 
 async function ircAuthPost(url, body, busyMsg) {
@@ -4700,6 +4795,15 @@ async function ircNickServ(action) {
     if (out) out.textContent = data.replies && data.replies.length ? data.replies.join('\n') : (action === 'register' || action === 'identify' ? '(no reply — network may have neither NickServ nor account registration; use SASL with an existing account)' : 'Done.');
     if (pwEl) pwEl.value = '';
     await fetchIRCNetworks();
+    // A successful register switches the network to SASL server-side; reflect it in the open
+    // form so a later "Save changes" doesn't turn it back off.
+    const fresh = lastIRCNetworks.find((x) => x.name === network);
+    if (fresh && editingIRCNetwork === network) {
+        document.getElementById('irc-net-login').value = !fresh.sasl_enabled ? 'none' : fresh.sasl_mechanism === 'external' ? 'external' : 'plain';
+        document.getElementById('irc-net-sasl-username').value = fresh.sasl_username || '';
+        ircNetLoginChanged();
+    }
+    ircAuthRender();
 }
 
 async function ircCert(action) {
@@ -4713,4 +4817,5 @@ async function ircCert(action) {
     if (out) out.textContent = data.fingerprint ? 'Certificate set. SHA-256 fingerprint: ' + data.fingerprint : 'Done.';
     if (pemEl) pemEl.value = '';
     await fetchIRCNetworks();
+    ircAuthRender();
 }

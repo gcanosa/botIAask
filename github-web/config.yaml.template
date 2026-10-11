@@ -16,6 +16,8 @@ irc:
           # with no matching SAN). Only relevant when use_ssl is true. Leave off/false when
           # the server has a proper cert.
           # tls_skip_verify: true
+          # Set user mode +B (bot flag) after connecting. Default false.
+          # bot_mode: true
           nickname: Nickname
           # Channels: plain strings, or a mapping for +k. Optional: auto_join: false (default true) to store the row without auto-joining.
           #   - name: '##locked'
@@ -86,6 +88,8 @@ daemon:
     pid_file: bot.pid
 logger:
     rotation_days: 7
+    # Optional: delete archived logs (logs/archive/*.log.gz) older than this many days. 0/omitted = keep forever.
+    # archive_days: 90
 rss:
     enabled: true
     interval_minutes: 30
