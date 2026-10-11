@@ -3,7 +3,6 @@ package logger
 import (
 	"bufio"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -32,34 +31,44 @@ func ChannelActivity(serverName, channel string, days int, skipNick string) Acti
 	now := time.Now()
 	for i := 0; i < days; i++ {
 		d := now.AddDate(0, 0, -i)
-		f, err := os.Open(filepath.Join(logsDir, key+"_"+d.Format("2006-01-02")+".log"))
-		if err != nil {
+		paths := DayLogPaths(logsDir, key, d.Format("2006-01-02"), ".log")
+		if len(paths) == 0 {
 			continue
 		}
 		a.Days++
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			line := sc.Text()
-			m := msgLine.FindStringSubmatch(line)
-			if m == nil {
-				if m = actionLine.FindStringSubmatch(line); m == nil {
-					continue
-				}
-			}
-			if strings.EqualFold(m[2], skipNick) {
-				continue
-			}
-			h := int(m[1][0]-'0')*10 + int(m[1][1]-'0')
-			if h > 23 {
-				continue
-			}
-			a.Total++
-			a.Hours[h]++
-			a.Weekday[d.Weekday()]++
-			a.Nicks[m[2]]++
+		for _, p := range paths {
+			a.addDayFile(p, d.Weekday(), skipNick)
 		}
-		f.Close()
 	}
 	return a
+}
+
+func (a *Activity) addDayFile(path string, wd time.Weekday, skipNick string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		m := msgLine.FindStringSubmatch(line)
+		if m == nil {
+			if m = actionLine.FindStringSubmatch(line); m == nil {
+				continue
+			}
+		}
+		if strings.EqualFold(m[2], skipNick) {
+			continue
+		}
+		h := int(m[1][0]-'0')*10 + int(m[1][1]-'0')
+		if h > 23 {
+			continue
+		}
+		a.Total++
+		a.Hours[h]++
+		a.Weekday[wd]++
+		a.Nicks[m[2]]++
+	}
 }

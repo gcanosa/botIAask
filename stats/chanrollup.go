@@ -147,9 +147,18 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 	for _, n := range nets {
 		nickOf[n.Name] = n.Nick
 	}
-	written := 0
-	done := map[string]bool{} // plain log wins over an archived copy of the same day
-	for _, dir := range dirs {
+	// Collect every file per (network, channel, day) first: before log keys were lower-cased
+	// one day could be split across spellings (#News / #news), and all of them count. Plain
+	// logs win over archived copies of the same day (an earlier dir wins over a later one).
+	type dayFiles struct {
+		network, channel, day string
+		dir                   int
+		paths                 []string
+		gz                    []bool
+	}
+	byID := map[string]*dayFiles{}
+	var order []string
+	for di, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
@@ -167,34 +176,56 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 				continue
 			}
 			id := network + "\x00" + channel + "\x00" + day
-			if done[id] || (have[id] && day < cutoff) {
+			if have[id] && day < cutoff {
 				continue
 			}
-			f, err := os.Open(filepath.Join(dir, e.Name()))
+			df := byID[id]
+			if df == nil {
+				df = &dayFiles{network: network, channel: channel, day: day, dir: di}
+				byID[id] = df
+				order = append(order, id)
+			}
+			if df.dir != di {
+				continue
+			}
+			df.paths = append(df.paths, filepath.Join(dir, e.Name()))
+			df.gz = append(df.gz, gz)
+		}
+	}
+	written := 0
+	for _, id := range order {
+		df := byID[id]
+		var readers []io.Reader
+		var closers []io.Closer
+		for i, p := range df.paths {
+			f, err := os.Open(p)
 			if err != nil {
 				continue
 			}
-			var r io.Reader = f
-			var zr *gzip.Reader
-			if gz {
-				if zr, err = gzip.NewReader(f); err != nil {
-					f.Close()
+			closers = append(closers, f)
+			if df.gz[i] {
+				zr, err := gzip.NewReader(f)
+				if err != nil {
 					continue
 				}
-				r = zr
+				closers = append(closers, zr)
+				readers = append(readers, zr)
+			} else {
+				readers = append(readers, f)
 			}
-			roll := logger.ParseDayLog(r, nickOf[network], prefix)
-			if zr != nil {
-				zr.Close()
-			}
-			f.Close()
-			if err := d.UpsertChanDay(network, channel, day, roll); err != nil {
-				log.Printf("chan rollup %s %s %s: %v", network, channel, day, err)
-				continue
-			}
-			done[id] = true
-			written++
 		}
+		roll := logger.ParseDayLog(io.MultiReader(readers...), nickOf[df.network], prefix)
+		for _, c := range closers {
+			c.Close()
+		}
+		if len(readers) == 0 {
+			continue
+		}
+		if err := d.UpsertChanDay(df.network, df.channel, df.day, roll); err != nil {
+			log.Printf("chan rollup %s %s %s: %v", df.network, df.channel, df.day, err)
+			continue
+		}
+		written++
 	}
 	return written
 }

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1031,69 +1032,105 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := logger.ChannelFileKey(channel, network)
-	logFile := filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
 
+	// The live tail follows the canonical (lower-cased) file the logger writes to. Other
+	// spellings of today's file, written before keys were lower-cased, are replayed once on
+	// connect and merged by timestamp so earlier lines from today don't go missing.
 	var file *os.File
 	var reader *bufio.Reader
-	var err error
-	file, err = os.Open(findFold("logs", filepath.Base(logFile)))
-	if err == nil {
-		reader = bufio.NewReader(file)
+	var pending string // a line the logger was still writing when we hit EOF
+	openCanon := func() {
+		// A missing file just means nothing has been logged for this channel yet today;
+		// the poll loop below retries every tick.
+		if f, err := os.Open(filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))); err == nil {
+			file, reader, pending = f, bufio.NewReader(f), ""
+		}
 	}
-	// A missing file just means nothing has been logged for this channel yet today;
-	// the poll loop below opens it as soon as the first event lands, so don't scare
-	// the user with a raw OS error here.
+	// readLines returns the complete lines available; a trailing partial line is kept in
+	// pending and finished on a later tick instead of being dropped.
+	readLines := func() ([]string, error) {
+		var out []string
+		for {
+			chunk, err := reader.ReadString('\n')
+			pending += chunk
+			if err != nil {
+				if err == io.EOF {
+					return out, nil
+				}
+				return out, err
+			}
+			out = append(out, strings.TrimSuffix(pending, "\n"))
+			pending = ""
+		}
+	}
+
+	openCanon()
+	var initial []string
+	var canonInfo os.FileInfo
+	if file != nil {
+		initial, _ = readLines()
+		canonInfo, _ = file.Stat()
+	}
+	merged := false
+	for _, p := range logger.DayLogPaths("logs", key, date, ".log") {
+		if fi, err := os.Stat(p); err != nil || (canonInfo != nil && os.SameFile(fi, canonInfo)) {
+			continue
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		more, _ := readLogLinesTail(f, maxHistoryLines)
+		f.Close()
+		initial = append(initial, more...)
+		merged = true
+	}
+	if merged {
+		sort.SliceStable(initial, func(i, j int) bool { return logLineTime(initial[i]) < logLineTime(initial[j]) })
+	}
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	defer func() {
+		if file != nil {
+			file.Close()
+		}
+	}()
 
 	fmt.Fprintf(w, "data: [CONNECTED %s %s]\n\n", channel, date)
+	for _, line := range initial {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+	}
 	flusher.Flush()
 
 	ctx := r.Context()
-
 	for {
 		select {
 		case <-ctx.Done():
-			if file != nil {
-				file.Close()
-			}
 			return
 		case <-ticker.C:
-			newToday := time.Now().Format("2006-01-02")
-			if newToday != date {
+			if newToday := time.Now().Format("2006-01-02"); newToday != date {
 				date = newToday
-				logFile = filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))
 				if file != nil {
 					file.Close()
-					file = nil
-					reader = nil
+					file, reader = nil, nil
 				}
 				fmt.Fprintf(w, "data: [ROLLOVER %s]\n\n", date)
 				flusher.Flush()
 			}
-
 			if file == nil {
-				file, err = os.Open(findFold("logs", filepath.Base(logFile)))
-				if err == nil {
-					reader = bufio.NewReader(file)
-				} else {
+				if openCanon(); file == nil {
 					continue
 				}
 			}
-
-			for {
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					if err == io.EOF {
-						break
-					}
-					fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
-					flusher.Flush()
-					break
-				}
-				fmt.Fprintf(w, "data: %s", line)
-				fmt.Fprint(w, "\n")
+			lines, err := readLines()
+			for _, line := range lines {
+				fmt.Fprintf(w, "data: %s\n\n", line)
+			}
+			if err != nil {
+				fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
+			}
+			if len(lines) > 0 || err != nil {
 				flusher.Flush()
 			}
 		}
