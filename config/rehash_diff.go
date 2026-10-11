@@ -165,6 +165,9 @@ func RehashDiff(before, after *Config) []string {
 		lines = append(lines, "Web: weather settings changed")
 	}
 
+	if b.Logger.ArchiveDays != a.Logger.ArchiveDays {
+		lines = append(lines, fmt.Sprintf("Logger: archive_days %d -> %d", b.Logger.ArchiveDays, a.Logger.ArchiveDays))
+	}
 	if b.Logger.RotationDays != a.Logger.RotationDays {
 		lines = append(lines, fmt.Sprintf("Logger: rotation_days %d -> %d", b.Logger.RotationDays, a.Logger.RotationDays))
 	}

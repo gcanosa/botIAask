@@ -392,6 +392,7 @@ func main() {
 	})
 
 	// Start Log Rotator (loop reads live retention via SetRotationDays / rehash)
+	logger.SetArchiveDays(cfg.Logger.ArchiveDays)
 	logger.StartLogRotator(cfg.Logger.RotationDays)
 
 	// Start scheduled SQLite backups (data/backups) unless explicitly disabled.

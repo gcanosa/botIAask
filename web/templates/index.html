@@ -360,6 +360,7 @@
                             <h3 class="card-title" style="margin:0;">Channels</h3>
                             <span class="logs-sidebar-hint mono" id="logs-retention-hint"></span>
                         </div>
+                        <select id="logs-network-filter" class="logs-filter-input hidden" aria-label="Network"></select>
                         <input type="search" id="logs-channel-filter" class="logs-filter-input" placeholder="Filter…" autocomplete="off" aria-label="Filter channels">
                         <div id="logs-channel-groups" class="logs-channel-groups"></div>
                     </aside>
@@ -385,7 +386,7 @@
                                                 <span id="log-cal-month-label" class="mono log-cal-month-label"></span>
                                                 <button type="button" id="log-cal-next" class="btn btn-ghost log-cal-nav" aria-label="Next month">›</button>
                                             </div>
-                                            <div class="log-cal-weekdays mono">Sun Mon Tue Wed Thu Fri Sat</div>
+                                            <div class="log-cal-weekdays mono"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
                                             <div id="log-cal-grid" class="log-cal-grid"></div>
                                             <p id="log-cal-footnote" class="log-cal-footnote mono"></p>
                                         </div>
@@ -411,7 +412,7 @@
                         <div style="position: absolute; left: 1rem; color: var(--text-muted); pointer-events: none;">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                         </div>
-                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search library..." class="btn btn-ghost" style="flex: 1; text-align: left; cursor: text; padding-left: 3rem; background: rgba(0,0,0,0.2);">
+                        <input type="text" id="bookmark-search" oninput="debounceSearch()" placeholder="Search library..." class="btn btn-ghost" style="flex: 1; min-width: 0; text-align: left; cursor: text; padding-left: 3rem; background: rgba(0,0,0,0.2);">
                         <div class="mono" id="bookmarks-count" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">0 items</div>
                         <div style="display: flex; gap: 0.25rem;">
                             <button id="prev-page" onclick="changeBookmarkPage(-1)" class="btn btn-ghost" style="padding: 0.4rem;">&larr;</button>
@@ -818,15 +819,20 @@
             <!-- Admin Panel -->
             <section id="panel-admin" class="panel">
                 <div class="section-header">
-                    <h1 class="section-title">Identity Management</h1>
-                    <p class="section-subtitle">Administrator access control and security configurations.</p>
+                    <h1 class="section-title">Administration</h1>
+                    <p class="section-subtitle">Bot settings, IRC networks and dashboard users.</p>
                 </div>
-                <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="admin-tabs" role="tablist">
+                    <button type="button" class="admin-tab" data-admin-tab="general" role="tab">General</button>
+                    <button type="button" class="admin-tab" data-admin-tab="irc" role="tab">IRC</button>
+                    <button type="button" class="admin-tab" data-admin-tab="users" role="tab">Users</button>
+                </div>
+                <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">Live config reload</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Re-read <span class="mono">config/config.yaml</span> into the running process (IRC connection stays up). Logged-in IRC admins receive a NOTICE.</p>
                     <button type="button" onclick="rehashConfigFromDisk()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Rehash from disk</button>
                 </div>
-                <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">Command Center weather</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">How often the dashboard refetches the server location forecast (and how long the server caches <span class="mono">/api/weather</span>). Stored in <span class="mono">config/config.yaml</span> as <span class="mono">web.weather_refresh_minutes</span> (1–10080 minutes).</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem;">
@@ -838,7 +844,7 @@
                     </div>
                     <p id="weather-settings-status" class="mono" style="font-size: 0.7rem; margin: 0; color: var(--text-muted);"></p>
                 </div>
-                <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">IRC log retention</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">How long daily channel logs stay in the active window before rotation to <span class="mono">logs/archive</span>. Saved as <span class="mono">logger.rotation_days</span> in <span class="mono">config/config.yaml</span> (0–3650 days). <strong>Months</strong> and <strong>years</strong> use 30- and 365-day approximations to match the day-based rotator.</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem;">
@@ -858,7 +864,7 @@
                     </div>
                     <p id="logger-settings-status" class="mono" style="font-size: 0.7rem; margin: 0; color: var(--text-muted);"></p>
                 </div>
-                <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">LLM (OpenAI-compatible API)</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Base URL and model name used by the IRC bot for <span class="mono">!ask</span>. Stored under <span class="mono">ai.lm_studio_url</span> and <span class="mono">ai.model</span> in <span class="mono">config/config.yaml</span>. Changes apply immediately to the running process.</p>
                     <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 0.75rem;">
@@ -876,151 +882,23 @@
                     </div>
                     <p id="ai-settings-status" class="mono" style="font-size: 0.7rem; margin: 0.5rem 0 0; color: var(--text-muted);"></p>
                 </div>
-                <div id="irc-config-admins-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
-                    <h3 class="card-title" style="margin-top: 0;">IRC admin hostmasks</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span>: <strong>global</strong> under <span class="mono">admin.admins</span> (admin on every network), or under a specific network's <span class="mono">admins</span> (admin on that network only). Changes are written to disk and applied to the running bot via a full config rehash (logged-in IRC admins get a NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                <div id="irc-networks-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <div class="net-head">
                         <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Scope</label>
-                            <select id="irc-config-admins-network" class="btn btn-ghost" style="min-width: 10rem; margin: 0;" onchange="ircConfigAdminsNetworkChange()" aria-label="Admin list scope"></select>
+                            <h3 class="card-title" style="margin: 0 0 0.35rem;">IRC networks</h3>
+                            <p class="net-hint" style="margin: 0;">The bot stays connected to every enabled network at once. Changes apply immediately, no restart needed.</p>
                         </div>
-                        <div style="flex: 1; min-width: 12rem;">
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Hostmask fragment</label>
-                            <input type="text" id="irc-config-admin-hostmask" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="~nick@user/host" autocomplete="off" aria-label="IRC admin hostmask">
-                        </div>
-                        <button type="button" onclick="addIRCConfigAdmin()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add</button>
+                        <button type="button" id="irc-net-add-btn" onclick="ircNetworkFormOpen()" class="btn btn-primary" style="padding: 0.5rem 1rem;">+ Add network</button>
                     </div>
                     <div class="data-table-wrap" style="overflow-x: auto;">
                         <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
                             <thead>
                                 <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
-                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Hostmask</th>
-                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="irc-config-admins-list"></tbody>
-                        </table>
-                    </div>
-                    <p id="irc-config-admins-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
-                </div>
-                <div id="irc-networks-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
-                    <h3 class="card-title" style="margin-top: 0;">IRC networks</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">The bot connects to every network below simultaneously. Adding, editing, or removing a network takes effect live — no restart needed. Saved to <span class="mono">config/config.yaml</span> under <span class="mono">irc.networks</span>.</p>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Name</label>
-                            <input type="text" id="irc-net-name" class="btn btn-ghost" style="min-width: 7rem; text-align: left; cursor: text; margin: 0;" placeholder="libera" autocomplete="off" aria-label="Network name">
-                        </div>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Server</label>
-                            <input type="text" id="irc-net-server" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="irc.libera.chat" autocomplete="off" aria-label="Server hostname">
-                        </div>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Port</label>
-                            <input type="number" id="irc-net-port" class="btn btn-ghost" style="min-width: 5rem; text-align: left; cursor: text; margin: 0;" placeholder="6697" value="6697" autocomplete="off" aria-label="Port">
-                        </div>
-                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
-                            <input type="checkbox" id="irc-net-ssl" checked> SSL
-                        </label>
-                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;" title="Skip TLS certificate verification (self-signed certs, bare-IP servers). Only takes effect with SSL on.">
-                            <input type="checkbox" id="irc-net-tls-skip-verify"> Skip cert verify
-                        </label>
-                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;" title="Set user mode +B (bot flag) on this network after connecting.">
-                            <input type="checkbox" id="irc-net-bot-mode"> Bot mode (+B)
-                        </label>
-                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
-                            <input type="checkbox" id="irc-net-enabled" checked> Enabled
-                        </label>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Nickname</label>
-                            <input type="text" id="irc-net-nick" class="btn btn-ghost" style="min-width: 8rem; text-align: left; cursor: text; margin: 0;" placeholder="Nickname" autocomplete="off" aria-label="Nickname">
-                        </div>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Quit message</label>
-                            <input type="text" id="irc-net-quit-message" class="btn btn-ghost" style="min-width: 12rem; text-align: left; cursor: text; margin: 0;" placeholder="(default: name/version/uptime)" autocomplete="off" aria-label="Quit message">
-                        </div>
-                        <button type="button" onclick="ircNetworkAdd()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add network</button>
-                    </div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem; padding-top: 0.75rem; border-top: 1px dashed var(--glass-border);">
-                        <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
-                            <input type="checkbox" id="irc-net-sasl-enabled"> SASL
-                        </label>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL mechanism</label>
-                            <select id="irc-net-sasl-mechanism" class="btn btn-ghost" style="margin: 0;" aria-label="SASL mechanism">
-                                <option value="plain">PLAIN (username + password)</option>
-                                <option value="external">EXTERNAL (client certificate)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL username</label>
-                            <input type="text" id="irc-net-sasl-username" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="registered_nickname" autocomplete="off" aria-label="SASL username">
-                        </div>
-                        <div>
-                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">SASL password</label>
-                            <input type="password" id="irc-net-sasl-password" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="(leave blank to keep current)" autocomplete="new-password" aria-label="SASL password">
-                        </div>
-                        <span class="mono" style="font-size: 0.7rem; color: var(--text-muted);">Password is write-only — never shown back. Leave blank on edit to keep the stored one.</span>
-                    </div>
-                    <div style="margin-bottom: 1rem; padding: 0.75rem 0; border-top: 1px dashed var(--glass-border);">
-                        <div class="card-title" style="margin-bottom: 0.5rem;">Network authentication (NickServ / client certificate)</div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem;">
-                            <div>
-                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
-                                <select id="irc-auth-network" class="btn btn-ghost" style="margin: 0;" onchange="ircAuthRender()" aria-label="Network"></select>
-                            </div>
-                            <div>
-                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">NickServ password</label>
-                                <input type="password" id="irc-auth-password" class="btn btn-ghost" style="min-width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="(blank = use stored)" autocomplete="new-password" aria-label="NickServ password">
-                            </div>
-                            <div>
-                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Email (register only)</label>
-                                <input type="email" id="irc-auth-email" class="btn btn-ghost" style="min-width: 10rem; text-align: left; cursor: text; margin: 0;" placeholder="you@example.com" autocomplete="off" aria-label="Email for NickServ register">
-                            </div>
-                            <div>
-                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Verify code</label>
-                                <input type="text" id="irc-auth-code" class="btn btn-ghost" style="min-width: 7rem; text-align: left; cursor: text; margin: 0;" placeholder="from email" autocomplete="off" aria-label="Verification code">
-                            </div>
-                            <label class="card-title" style="display: flex; align-items: center; gap: 0.35rem; margin: 0; cursor: pointer; font-size: 0.85rem;">
-                                <input type="checkbox" id="irc-auth-save" checked> Save for auto-identify
-                            </label>
-                            <button type="button" class="btn btn-primary" style="padding: 0.5rem 1rem;" onclick="ircNickServ('identify')">Identify</button>
-                            <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('register')">Register nick</button>
-                            <select id="irc-auth-method" class="btn btn-ghost" style="margin: 0;" aria-label="Register method" title="How to create the account">
-                                <option value="">Auto (IRCv3 → NickServ)</option>
-                                <option value="server">Server: REGISTER &lt;account&gt; &lt;password&gt;</option>
-                                <option value="nickserv">NickServ REGISTER</option>
-                            </select>
-                            <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('verify')">Verify</button>
-                            <button type="button" class="btn btn-ghost" style="padding: 0.5rem 1rem;" onclick="ircNickServ('save')">Save password only</button>
-                            <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.5rem 1rem;" onclick="ircNickServ('clear')">Forget password</button>
-                        </div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start;">
-                            <div>
-                                <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Client certificate (PEM cert + private key)</label>
-                                <textarea id="irc-auth-pem" rows="4" class="mono" style="min-width: 22rem; font-size: 0.7rem;" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----BEGIN PRIVATE KEY-----&#10;..." aria-label="Client certificate PEM"></textarea>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                                <button type="button" class="btn btn-ghost" style="padding: 0.4rem 0.8rem;" onclick="ircCert('upload')">Upload pasted PEM</button>
-                                <button type="button" class="btn btn-ghost" style="padding: 0.4rem 0.8rem;" onclick="ircCert('generate')">Generate self-signed</button>
-                                <button type="button" class="btn btn-ghost row-action--danger" style="padding: 0.4rem 0.8rem;" onclick="ircCert('delete')">Remove certificate</button>
-                            </div>
-                        </div>
-                        <div id="irc-auth-info" class="mono" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
-                        <div id="irc-auth-replies" class="mono" style="font-size: 0.75rem; white-space: pre-wrap; margin-top: 0.35rem;"></div>
-                        <span class="mono" style="font-size: 0.7rem; color: var(--text-muted);">Register works on networks with NickServ or IRCv3 account registration (no NickServ); on success the network is switched to SASL PLAIN automatically. Secrets are encrypted in config.yaml and never shown back. After generating a cert, identify, then register its fingerprint with NickServ (e.g. <code>/msg NickServ CERT ADD</code>) and choose SASL EXTERNAL above.</span>
-                    </div>
-                    <div class="data-table-wrap" style="overflow-x: auto;">
-                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
-                            <thead>
-                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
-                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Name</th>
-                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">Enabled</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Network</th>
                                     <th style="text-align: left; padding: 0.5rem 0.75rem;">Server</th>
-                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">SSL</th>
-                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">SASL</th>
                                     <th style="text-align: left; padding: 0.5rem 0.75rem;">Nickname</th>
-                                    <th style="text-align: center; padding: 0.5rem 0.75rem;">Status</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Login</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Status</th>
                                     <th style="text-align: center; padding: 0.5rem 0.75rem;">Channels</th>
                                     <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
                                 </tr>
@@ -1028,10 +906,123 @@
                             <tbody id="irc-networks-list"></tbody>
                         </table>
                     </div>
-                    <p id="irc-networks-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                    <p id="irc-networks-status" class="mono" style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+
+                    <form id="irc-net-form" class="net-form hidden" onsubmit="event.preventDefault(); ircNetworkAdd();">
+                        <h4 id="irc-net-form-title" class="net-form-title">Add network</h4>
+
+                        <fieldset class="net-section">
+                            <legend>Connection</legend>
+                            <div class="net-grid">
+                                <label class="net-field">Name
+                                    <input type="text" id="irc-net-name" class="btn btn-ghost" placeholder="libera" autocomplete="off">
+                                    <small>Short label used across the dashboard. Can't be changed later.</small>
+                                </label>
+                                <label class="net-field">Server
+                                    <input type="text" id="irc-net-server" class="btn btn-ghost" placeholder="irc.libera.chat" autocomplete="off">
+                                </label>
+                                <label class="net-field">Port
+                                    <input type="number" id="irc-net-port" class="btn btn-ghost" placeholder="6697" value="6697" autocomplete="off">
+                                    <small>Usually 6697 with SSL, 6667 without.</small>
+                                </label>
+                            </div>
+                            <label class="net-check"><input type="checkbox" id="irc-net-ssl" checked> Use a secure connection (SSL/TLS) <small>recommended</small></label>
+                            <label class="net-check"><input type="checkbox" id="irc-net-tls-skip-verify"> Don't verify the server's certificate <small>only for self-signed certificates or IP addresses</small></label>
+                        </fieldset>
+
+                        <fieldset class="net-section">
+                            <legend>Bot identity</legend>
+                            <div class="net-grid">
+                                <label class="net-field">Nickname
+                                    <input type="text" id="irc-net-nick" class="btn btn-ghost" placeholder="MyBot" autocomplete="off">
+                                </label>
+                                <label class="net-field"><span>Quit message <span class="net-optional">optional</span></span>
+                                    <input type="text" id="irc-net-quit-message" class="btn btn-ghost" placeholder="Default: bot name, version and uptime" autocomplete="off">
+                                </label>
+                            </div>
+                            <label class="net-check"><input type="checkbox" id="irc-net-enabled" checked> Connect to this network <small>uncheck to keep it configured but offline</small></label>
+                            <label class="net-check"><input type="checkbox" id="irc-net-bot-mode"> Mark the bot as a bot (user mode +B) <small>shows "is a bot" in /whois on networks that support it</small></label>
+                        </fieldset>
+
+                        <fieldset class="net-section">
+                            <legend>How the bot logs in</legend>
+                            <label class="net-field" style="max-width: 26rem;">Login method
+                                <select id="irc-net-login" class="btn btn-ghost" onchange="ircNetLoginChanged()">
+                                    <option value="none">No login, just connect</option>
+                                    <option value="plain">Account + password (SASL)</option>
+                                    <option value="external">Client certificate (SASL)</option>
+                                </select>
+                            </label>
+                            <p id="irc-net-login-hint" class="net-hint"></p>
+                            <div id="irc-net-login-plain" class="net-grid hidden">
+                                <label class="net-field">Account name
+                                    <input type="text" id="irc-net-sasl-username" class="btn btn-ghost" placeholder="Usually the bot's registered nick" autocomplete="off">
+                                </label>
+                                <label class="net-field">Password
+                                    <input type="password" id="irc-net-sasl-password" class="btn btn-ghost" autocomplete="new-password">
+                                    <small id="irc-net-sasl-password-hint">Stored encrypted, never shown again.</small>
+                                </label>
+                            </div>
+                        </fieldset>
+
+                        <div id="irc-net-account-tools" class="hidden">
+                            <input type="hidden" id="irc-auth-network">
+                            <p class="net-form-title" style="font-size: 0.9rem; margin-bottom: 0.25rem;">Account tools</p>
+                            <div id="irc-auth-info" class="net-status mono"></div>
+                            <details class="net-section net-details">
+                                <summary>Register or identify the nickname (NickServ)</summary>
+                                <p class="net-hint">No account yet? Enter a password (and an email if the network asks for one) and press <b>Register</b>. If you get an email with a code, paste it and press <b>Confirm code</b>. Once registered, the login method above switches to <i>Account + password</i> automatically.</p>
+                                <div class="net-grid">
+                                    <label class="net-field">Password
+                                        <input type="password" id="irc-auth-password" class="btn btn-ghost" placeholder="Leave blank to use the saved one" autocomplete="new-password">
+                                    </label>
+                                    <label class="net-field"><span>Email <span class="net-optional">register only</span></span>
+                                        <input type="email" id="irc-auth-email" class="btn btn-ghost" placeholder="you@example.com" autocomplete="off">
+                                    </label>
+                                    <label class="net-field">Code from email
+                                        <input type="text" id="irc-auth-code" class="btn btn-ghost" autocomplete="off">
+                                    </label>
+                                </div>
+                                <label class="net-check"><input type="checkbox" id="irc-auth-save" checked> Remember the password and identify automatically on connect</label>
+                                <div class="net-actions">
+                                    <button type="button" class="btn btn-primary" onclick="ircNickServ('register')">Register</button>
+                                    <button type="button" class="btn btn-ghost" onclick="ircNickServ('verify')">Confirm code</button>
+                                    <button type="button" class="btn btn-ghost" onclick="ircNickServ('identify')">Identify now</button>
+                                    <button type="button" class="btn btn-ghost" onclick="ircNickServ('save')">Save password only</button>
+                                    <button type="button" class="btn btn-ghost row-action--danger" onclick="ircNickServ('clear')">Forget saved password</button>
+                                </div>
+                                <details class="net-advanced">
+                                    <summary>Advanced: registration method</summary>
+                                    <select id="irc-auth-method" class="btn btn-ghost" aria-label="Register method">
+                                        <option value="">Automatic (server account registration, else NickServ)</option>
+                                        <option value="server">Server: REGISTER &lt;account&gt; &lt;password&gt;</option>
+                                        <option value="nickserv">NickServ REGISTER</option>
+                                    </select>
+                                </details>
+                            </details>
+                            <details class="net-section net-details">
+                                <summary>Client certificate <span class="net-optional">advanced</span></summary>
+                                <p class="net-hint">A certificate lets the bot log in without a password. Generate one, identify with NickServ, run <code>/msg NickServ CERT ADD</code> from the bot (or add the fingerprint below), then pick <i>Client certificate</i> as the login method. Requires a secure connection.</p>
+                                <div class="net-actions">
+                                    <button type="button" class="btn btn-ghost" onclick="ircCert('generate')">Generate certificate</button>
+                                    <button type="button" class="btn btn-ghost row-action--danger" onclick="ircCert('delete')">Remove certificate</button>
+                                </div>
+                                <label class="net-field" style="margin-top: 0.75rem;">Or paste your own (PEM certificate + private key)
+                                    <textarea id="irc-auth-pem" rows="4" class="mono" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----BEGIN PRIVATE KEY-----&#10;..."></textarea>
+                                </label>
+                                <div class="net-actions"><button type="button" class="btn btn-ghost" onclick="ircCert('upload')">Upload pasted certificate</button></div>
+                            </details>
+                            <div id="irc-auth-replies" class="mono" style="font-size: 0.75rem; white-space: pre-wrap; margin-top: 0.35rem;"></div>
+                        </div>
+
+                        <div class="net-actions net-form-footer">
+                            <button type="submit" id="irc-net-save-btn" class="btn btn-primary">Add network</button>
+                            <button type="button" class="btn btn-ghost" onclick="ircNetworkEditCancel()">Cancel</button>
+                        </div>
+                    </form>
                 </div>
-                <div id="irc-autojoin-wrap" class="card hidden" style="margin-bottom: 1.5rem;">
-                    <h3 class="card-title" style="margin-top: 0;">IRC autoinjoin channels</h3>
+                <div id="irc-autojoin-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">Auto-join channels</h3>
                     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Saved entries live in <span class="mono">config/config.yaml</span> under the selected network's <span class="mono">channels</span> list. <strong>Autoinjoin on connect</strong> controls whether the bot joins the channel on startup and after rehash (you can keep a +k entry without auto-joining). <strong>Session only</strong> joins IRC now and does not write YAML (rejoined in-process if the server reconnects, lost on bot restart). RSS <strong>announce</strong> per row still requires RSS + global <span class="mono">announce_to_irc</span> on the News card.</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
                         <div>
@@ -1083,7 +1074,34 @@
                     </div>
                     <p id="irc-autojoin-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
                 </div>
-                <div class="card">
+                <div id="irc-config-admins-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">IRC admin hostmasks</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Entries are stored in <span class="mono">config/config.yaml</span>: <strong>global</strong> under <span class="mono">admin.admins</span> (admin on every network), or under a specific network's <span class="mono">admins</span> (admin on that network only). Changes are written to disk and applied to the running bot via a full config rehash (logged-in IRC admins get a NOTICE). Use the same hostmask fragments as in IRC <span class="mono">!admin</span> checks (e.g. <span class="mono">~nick!user@host</span> substring).</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Scope</label>
+                            <select id="irc-config-admins-network" class="btn btn-ghost" style="min-width: 10rem; margin: 0;" onchange="ircConfigAdminsNetworkChange()" aria-label="Admin list scope"></select>
+                        </div>
+                        <div style="flex: 1; min-width: 12rem;">
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Hostmask fragment</label>
+                            <input type="text" id="irc-config-admin-hostmask" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="~nick@user/host" autocomplete="off" aria-label="IRC admin hostmask">
+                        </div>
+                        <button type="button" onclick="addIRCConfigAdmin()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Hostmask</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-config-admins-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-config-admins-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
+                <div class="card" data-admin-group="users">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">Authorized Users</h3>
                         <button onclick="showAddUser()" class="btn btn-primary" style="padding: 0.4rem 0.8rem;">+ New Admin</button>

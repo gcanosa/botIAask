@@ -88,6 +88,8 @@ daemon:
     pid_file: bot.pid
 logger:
     rotation_days: 7
+    # Optional: delete archived logs (logs/archive/*.log.gz) older than this many days. 0/omitted = keep forever.
+    # archive_days: 90
 rss:
     enabled: true
     interval_minutes: 30

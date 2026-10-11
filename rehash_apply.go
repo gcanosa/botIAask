@@ -59,6 +59,7 @@ func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
 		log.Printf("RSS: repair source column after rehash: %v", err)
 	}
 	logger.SetRotationDays(newCfg.Logger.RotationDays)
+	logger.SetArchiveDays(newCfg.Logger.ArchiveDays)
 
 	if err := s.applyWebHot(before, newCfg, fromWeb); err != nil {
 		return err

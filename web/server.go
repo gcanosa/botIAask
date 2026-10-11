@@ -1036,7 +1036,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	var file *os.File
 	var reader *bufio.Reader
 	var err error
-	file, err = os.Open(logFile)
+	file, err = os.Open(findFold("logs", filepath.Base(logFile)))
 	if err == nil {
 		reader = bufio.NewReader(file)
 	}
@@ -1074,7 +1074,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if file == nil {
-				file, err = os.Open(logFile)
+				file, err = os.Open(findFold("logs", filepath.Base(logFile)))
 				if err == nil {
 					reader = bufio.NewReader(file)
 				} else {

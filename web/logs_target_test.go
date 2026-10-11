@@ -1,7 +1,11 @@
 package web
 
 import (
+	"encoding/json"
+	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
 
 	"botIAask/config"
 )
@@ -50,5 +54,45 @@ func TestIsKeyedChannel(t *testing.T) {
 	}
 	if isKeyedChannel(cfg, "#staff", "b") || isKeyedChannel(cfg, "#pub", "a") {
 		t.Fatal("unkeyed channel misclassified")
+	}
+}
+
+func TestLogCatalog_RetentionAndCaseFold(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("logs/archive", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	day := func(n int) string { return time.Now().AddDate(0, 0, n).Format("2006-01-02") }
+	for _, name := range []string{
+		"logs/SekurNet_news_" + day(-1) + ".log",          // server spelled it lower-case
+		"logs/libera_gone_" + day(-1) + ".log",            // parted, still within retention
+		"logs/archive/libera_old_" + day(-30) + ".log.gz", // parted, aged out
+	} {
+		if err := os.WriteFile(name, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{}
+	cfg.Logger.RotationDays = 7
+	cfg.IRC.Networks = []config.IRCNetworkConfig{
+		{Name: "SekurNet", Channels: []config.IRChannel{{Name: "#News"}}},
+		{Name: "libera"},
+	}
+	s := &Server{cfg: cfg}
+	rec := httptest.NewRecorder()
+	s.handleLogCatalog(rec, httptest.NewRequest("GET", "/api/logs/catalog", nil))
+	var resp logCatalogResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]logChannelEntry{}
+	for _, c := range resp.Channels {
+		got[c.Network+" "+c.Label] = c
+	}
+	if c, ok := got["SekurNet #News"]; !ok || !c.Joined || len(c.DatesWithLogs) != 1 || len(got) != 2 {
+		t.Fatalf("want #News (joined, merged with #news file) and libera #gone only, got %+v", resp.Channels)
+	}
+	if _, ok := got["libera #gone"]; !ok {
+		t.Fatalf("parted channel within retention missing: %+v", resp.Channels)
 	}
 }
