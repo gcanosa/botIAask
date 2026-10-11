@@ -157,6 +157,6 @@ go test -race ./...
 go vet ./...
 ```
 
-Logs go to `logs/<server>_<channel>_<date>.log` (IRC channel events).  
+Logs go to `logs/<server>_<channel>_<date>.log` (IRC channel events; the channel part is lower-cased by `logger.ChannelFileKey`, older logs may have mixed-case spellings, so readers use `logger.DayLogPaths` to find all of a day's files).  
 Files older than `logger.rotation_days` are gzipped into `logs/archive/`; optional `logger.archive_days` (0 = forever) deletes archives whose logged day is older than that (daily, re-read on rehash). The dashboard log list hides not-joined channels with no day inside the retention window.  
 Runtime data (DBs, PID file) lives in `data/`.

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -339,34 +338,14 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, legacy)
 	}
 
-	var reader io.ReadCloser
-	archived := false
-	for _, key := range keys {
-		activePath := findFold(logsDir, fmt.Sprintf("%s_%s.log", key, date))
-		archivePath := findFold(logsArchiveDir, fmt.Sprintf("%s_%s.log.gz", key, date))
-		if f, err := os.Open(activePath); err == nil {
-			reader = f
-			break
-		} else if f, err := os.Open(archivePath); err == nil {
-			gz, err := gzip.NewReader(f)
-			if err != nil {
-				f.Close()
-				http.Error(w, "bad archive", http.StatusInternalServerError)
-				return
-			}
-			reader = &readCloserPair{rc: gz, closeUnderlying: f}
-			archived = true
-			break
-		}
-	}
-	if reader == nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(logHistoryResponse{Lines: []string{}, Date: date, Archived: false})
+	lines, truncated, archived, err := readDayLog(keys, date, maxHistoryLines)
+	if err != nil {
+		http.Error(w, "bad archive", http.StatusInternalServerError)
 		return
 	}
-	defer reader.Close()
-
-	lines, truncated := readLogLinesTail(reader, maxHistoryLines)
+	if lines == nil {
+		lines = []string{}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(logHistoryResponse{
@@ -377,36 +356,54 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// findFold returns dir/name, or a case-insensitively matching file in dir when the exact name
-// doesn't exist (the server doesn't always spell a channel the way config does).
-// ponytail: scans dir on a miss; fine for a logs/ dir of a few thousand files.
-func findFold(dir, name string) string {
-	exact := filepath.Join(dir, name)
-	if _, err := os.Stat(exact); err == nil {
-		return exact
+// readDayLog returns the last maxLines lines logged on date under any of keys, reading every
+// spelling of the file (see logger.DayLogPaths) and interleaving them by timestamp. Plain logs
+// are used when present, otherwise the gzipped archive copies (archived reports which).
+func readDayLog(keys []string, date string, maxLines int) (lines []string, truncated, archived bool, err error) {
+	var plain, gz []string
+	for _, key := range keys {
+		plain = append(plain, logger.DayLogPaths(logsDir, key, date, ".log")...)
+		gz = append(gz, logger.DayLogPaths(logsArchiveDir, key, date, ".log.gz")...)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return exact
+	paths := plain
+	if len(paths) == 0 {
+		paths, archived = gz, true
 	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.EqualFold(e.Name(), name) {
-			return filepath.Join(dir, e.Name())
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
 		}
+		var r io.Reader = f
+		if archived {
+			zr, err := gzip.NewReader(f)
+			if err != nil {
+				f.Close()
+				return nil, false, false, err
+			}
+			defer zr.Close()
+			r = zr
+		}
+		got, trunc := readLogLinesTail(r, maxLines)
+		f.Close()
+		lines = append(lines, got...)
+		truncated = truncated || trunc
 	}
-	return exact
+	if len(paths) > 1 {
+		// Every line starts with "[HH:MM:SS]"; a stable sort keeps same-second lines in file order.
+		sort.SliceStable(lines, func(i, j int) bool { return logLineTime(lines[i]) < logLineTime(lines[j]) })
+	}
+	if len(lines) > maxLines {
+		lines, truncated = lines[len(lines)-maxLines:], true
+	}
+	return lines, truncated, archived, nil
 }
 
-type readCloserPair struct {
-	rc              io.ReadCloser
-	closeUnderlying io.Closer
-}
-
-func (p *readCloserPair) Read(b []byte) (int, error) { return p.rc.Read(b) }
-
-func (p *readCloserPair) Close() error {
-	_ = p.rc.Close()
-	return p.closeUnderlying.Close()
+func logLineTime(line string) string {
+	if len(line) >= 10 && line[0] == '[' {
+		return line[1:9]
+	}
+	return ""
 }
 
 func readLogLinesTail(r io.Reader, maxLines int) (lines []string, truncated bool) {

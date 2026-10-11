@@ -1,9 +1,12 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,5 +97,107 @@ func TestLogCatalog_RetentionAndCaseFold(t *testing.T) {
 	}
 	if _, ok := got["libera #gone"]; !ok {
 		t.Fatalf("parted channel within retention missing: %+v", resp.Channels)
+	}
+}
+
+// A day split across spellings (logged before keys were lower-cased) is returned in full,
+// interleaved by timestamp.
+func TestReadDayLog_MergesSpellings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	os.MkdirAll("logs/archive", 0o755)
+	os.WriteFile("logs/net_News_2026-10-11.log", []byte("[09:00:00] <a> one\n[11:00:00] <a> three\n"), 0o644)
+	if _, err := os.Stat("logs/net_news_2026-10-11.log"); err == nil {
+		t.Skip("case-insensitive filesystem: spellings are the same file")
+	}
+	os.WriteFile("logs/net_news_2026-10-11.log", []byte("[10:00:00] <b> two\n[12:00:00] <b> four\n"), 0o644)
+	lines, truncated, archived, err := readDayLog([]string{"net_news"}, "2026-10-11", 100)
+	if err != nil || truncated || archived {
+		t.Fatalf("err=%v truncated=%v archived=%v", err, truncated, archived)
+	}
+	want := "[09:00:00] <a> one|[10:00:00] <b> two|[11:00:00] <a> three|[12:00:00] <b> four"
+	if got := strings.Join(lines, "|"); got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	if lines, _, _, _ := readDayLog([]string{"net_news"}, "2026-10-11", 3); len(lines) != 3 || lines[0] != "[10:00:00] <b> two" {
+		t.Fatalf("maxLines: %v", lines)
+	}
+}
+
+// The live stream must not drop a line the logger was still writing when it hit EOF.
+func TestLogStream_PartialLineNotDropped(t *testing.T) {
+	t.Chdir(t.TempDir())
+	os.MkdirAll("logs", 0o755)
+	cfg := &config.Config{}
+	cfg.IRC.Networks = []config.IRCNetworkConfig{{Name: "net", Channels: []config.IRChannel{{Name: "#chan"}}}}
+	s := &Server{cfg: cfg}
+	today := time.Now().Format("2006-01-02")
+	path := "logs/net_chan_" + today + ".log"
+	os.WriteFile(path, []byte("[09:00:00] <a> first\n[09:00:01] <a> sec"), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/api/logs/stream?channel=%23chan&network=net", nil).WithContext(ctx)
+	rec := &syncRecorder{ResponseRecorder: httptest.NewRecorder()}
+	done := make(chan struct{})
+	go func() { s.handleLogStream(rec, req); close(done) }()
+	time.Sleep(300 * time.Millisecond)
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("ond\n[09:00:02] <a> third\n")
+	f.Close()
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rec.String()
+	for _, want := range []string{"data: [09:00:00] <a> first\n", "data: [09:00:01] <a> second\n", "data: [09:00:02] <a> third\n"} {
+		if strings.Count(body, want) != 1 {
+			t.Fatalf("want exactly one %q in stream:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "<a> sec\n") {
+		t.Fatalf("partial line was sent:\n%s", body)
+	}
+}
+
+// syncRecorder guards the recorder: the handler writes from its goroutine while the test reads.
+type syncRecorder struct {
+	mu sync.Mutex
+	*httptest.ResponseRecorder
+}
+
+func (r *syncRecorder) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ResponseRecorder.Write(b)
+}
+
+func (r *syncRecorder) Flush() {}
+
+func (r *syncRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Body.String()
+}
+
+// Opening today's live view replays lines logged under an older spelling of the channel too.
+func TestLogStream_ReplaysOtherSpellings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	os.MkdirAll("logs", 0o755)
+	today := time.Now().Format("2006-01-02")
+	os.WriteFile("logs/net_Chan_"+today+".log", []byte("[09:00:00] <a> before restart\n"), 0o644)
+	if _, err := os.Stat("logs/net_chan_" + today + ".log"); err == nil {
+		t.Skip("case-insensitive filesystem: spellings are the same file")
+	}
+	os.WriteFile("logs/net_chan_"+today+".log", []byte("[10:00:00] <b> after restart\n"), 0o644)
+	cfg := &config.Config{}
+	cfg.IRC.Networks = []config.IRCNetworkConfig{{Name: "net", Channels: []config.IRChannel{{Name: "#Chan"}}}}
+	s := &Server{cfg: cfg}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	rec := &syncRecorder{ResponseRecorder: httptest.NewRecorder()}
+	s.handleLogStream(rec, httptest.NewRequest("GET", "/api/logs/stream?channel=%23Chan&network=net", nil).WithContext(ctx))
+	body := rec.String()
+	i, j := strings.Index(body, "before restart"), strings.Index(body, "after restart")
+	if i < 0 || j < 0 || i > j {
+		t.Fatalf("want both lines in time order:\n%s", body)
 	}
 }
