@@ -1,10 +1,17 @@
 package irc
 
 import (
+	"bufio"
+	"fmt"
+	"net"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"botIAask/config"
+
+	"github.com/ergochat/irc-go/ircevent"
 )
 
 // TestConnectWithRetry_CancelledBeforeStart guards the uncancellable-retry-loop bug: a
@@ -94,5 +101,78 @@ func TestRunNetwork_RegistryCompareAndDelete(t *testing.T) {
 
 	if got := b.network("test"); got != live {
 		t.Fatalf("stale cleanup erased the live network: got %v, want %v", got, live)
+	}
+}
+
+// TestRunNetwork_RestartsAfterLoopPanic guards the "never came back" bug: when a network's
+// event loop dies without a quit request, runNetwork must rebuild and reconnect it, and an
+// explicit disconnectNetwork must still stop it for good.
+func TestRunNetwork_RestartsAfterLoopPanic(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	conns := make(chan struct{}, 10)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns <- struct{}{}
+			go func(c net.Conn) {
+				defer c.Close()
+				sc := bufio.NewScanner(c)
+				for sc.Scan() {
+					if strings.HasPrefix(sc.Text(), "QUIT") {
+						return // like a real server: close the link on QUIT
+					}
+					if strings.HasPrefix(sc.Text(), "USER ") {
+						fmt.Fprint(c, ":srv 001 bot :welcome\r\n:srv 422 bot :no MOTD\r\n")
+					}
+				}
+			}(c)
+		}
+	}()
+
+	oldDelay, oldLoop := networkRestartDelay, runLoop
+	defer func() { networkRestartDelay, runLoop = oldDelay, oldLoop }()
+	networkRestartDelay = 10 * time.Millisecond
+	var loops atomic.Int32
+	runLoop = func(c *ircevent.Connection) {
+		if loops.Add(1) == 1 {
+			panic("simulated loop crash")
+		}
+		c.Loop() // second instance: real loop, returns after disconnectNetwork's Quit
+	}
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	netCfg := config.IRCNetworkConfig{Name: "test", Server: "127.0.0.1", Port: port, Nickname: "bot"}
+	b := newTestBot(&config.Config{IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{netCfg}}})
+
+	done := make(chan struct{})
+	go func() { b.runNetwork(netCfg); close(done) }()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-conns:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("connection %d never arrived: network was not restarted", i+1)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for b.network("test") == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("restarted network never went live")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	b.disconnectNetwork("test")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runNetwork kept running after disconnectNetwork")
 	}
 }
