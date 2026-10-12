@@ -898,6 +898,19 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !ipcheck / !hostcheck <ip|host> (ipwho.is geolocation + ASN)
+	if f := strings.Fields(message); len(f) > 0 && (f[0] == b.pfx()+"ipcheck" || f[0] == b.pfx()+"hostcheck") {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sipcheck <ip> | %shostcheck <host> — e.g. %shostcheck nasa.gov", b.pfx(), b.pfx(), b.pfx()))
+			return
+		}
+		b.handleIPCheckCommand(target, sender, f[1])
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {
