@@ -46,11 +46,23 @@ func ircFormatMinTemp(v float64) string {
 	return ircMinTemp + fmt.Sprintf("%.0f°", v) + ircEnd
 }
 
+// dewPointC is the Magnus formula (Alduchov–Eskridge constants), accurate to ~0.4°C
+// over -40…50°C at any RH (the old T-(100-RH)/5 rule drifts badly below 50% RH).
+func dewPointC(tempC float64, humidity int) float64 {
+	const b, c = 17.625, 243.04
+	g := math.Log(float64(humidity)/100) + b*tempC/(c+tempC)
+	return c * g / (b - g)
+}
+
+// barCells rounds pct (0–100) to the nearest of width cells.
+func barCells(pct, width int) int {
+	return (pct*width + 50) / 100
+}
+
 // humidityBar returns a visual progress bar colored by dewpoint (comfort level).
-// Uses simplified Magnus: Td = T - ((100 - RH) / 5)
 func humidityBar(humidity int, tempC float64) string {
 	const width = 10
-	dew := tempC - float64(100-humidity)/5.0
+	dew := dewPointC(tempC, humidity)
 
 	var color string
 	switch {
@@ -64,7 +76,7 @@ func humidityBar(humidity int, tempC float64) string {
 		color = ircRed
 	}
 
-	filled := (humidity*width + 99) / 100
+	filled := barCells(humidity, width)
 	bar := "[" + color + strings.Repeat("▓", filled) + ircEnd +
 		ircGray + strings.Repeat("░", width-filled) + ircEnd + "]"
 
@@ -103,11 +115,11 @@ func tempBar(tempC, minC, maxC float64) string {
 		color = ircRed
 	}
 
-	filled := (pct*width + 99) / 100
+	filled := barCells(pct, width)
 	bar := "[" + color + strings.Repeat("▓", filled) + ircEnd +
 		ircGray + strings.Repeat("░", width-filled) + ircEnd + "]"
 
-	return fmt.Sprintf("%s %.0f°C (%.0f°–%.0f°)", bar, tempC, minC, maxC)
+	return fmt.Sprintf("%s %.0f°C (↓%.0f° ↑%.0f°)", bar, tempC, minC, maxC)
 }
 
 // handleWeatherCommand fetches a forecast for query (e.g. "Barcelona, Spain") via Open-Meteo.
@@ -127,7 +139,7 @@ func (b *ircNetwork) handleWeatherCommand(target, sender, query string) {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Weather: %s", sender, msg)))
 		return
 	}
-	line1, line2 := formatWeatherIRCLines(snap)
+	line1, line2 := formatWeatherIRCLines(snap, weatherTextBudget(b.netCfg().Nickname, target))
 	if line2 != "" {
 		b.sendPrivmsg(target, b.sanitize(line1))
 		b.sendPrivmsg(target, b.sanitize(line2))
@@ -136,7 +148,39 @@ func (b *ircNetwork) handleWeatherCommand(target, sender, query string) {
 	}
 }
 
-func formatWeatherIRCLines(s *weather.Snapshot) (line1, line2 string) {
+// weatherIcon is a condition symbol for an IconKind; BMP text-presentation glyphs where
+// one exists (3 bytes, single-width in terminals), emoji only for fog/partly/thunder.
+func weatherIcon(kind string) string {
+	switch kind {
+	case "clear":
+		return "☀"
+	case "night_clear":
+		return "☾"
+	case "partly":
+		return "⛅"
+	case "cloud":
+		return "☁"
+	case "fog":
+		return "🌫"
+	case "rain", "shower":
+		return "☂"
+	case "snow":
+		return "❄"
+	case "thunder":
+		return "⚡"
+	}
+	return ""
+}
+
+// weatherTextBudget is the PRIVMSG text bytes that survive relay: the server prepends
+// ":nick!user@host PRIVMSG target :" and caps the line at 512 incl. CRLF. We don't know
+// our user@host, so assume the worst (10-byte ident, 63-byte host).
+func weatherTextBudget(nick, target string) int {
+	n := 512 - len("\r\n:!@ PRIVMSG  :") - len(nick) - 10 - 63 - len(target)
+	return min(n, ircTextBudget)
+}
+
+func formatWeatherIRCLines(s *weather.Snapshot, budget int) (line1, line2 string) {
 	if s == nil || s.Current == nil {
 		return "\x0303,01[WEATHER]\x03 —", ""
 	}
@@ -147,9 +191,13 @@ func formatWeatherIRCLines(s *weather.Snapshot) (line1, line2 string) {
 	} else {
 		tempStr = fmt.Sprintf("%.0f°C", c.TempC)
 	}
+	summary := c.Summary
+	if ic := weatherIcon(c.Icon); ic != "" {
+		summary = ic + " " + summary
+	}
 	cur := fmt.Sprintf(
 		"\x0303,01[WEATHER]\x03 %s — %s %s · %s %.0f km/h",
-		s.Location, tempStr, c.Summary, ircBoldLabel("wind"), c.WindKmh,
+		s.Location, tempStr, summary, ircBoldLabel("wind"), c.WindKmh,
 	)
 	if math.Abs(c.ApparentC-c.TempC) >= 0.5 {
 		cur += fmt.Sprintf(" · %s %.0f°C", ircBoldLabel("feels"), c.ApparentC)
@@ -160,8 +208,20 @@ func formatWeatherIRCLines(s *weather.Snapshot) (line1, line2 string) {
 	if len(s.Daily) == 0 {
 		return cur, ""
 	}
+	// Prefer one line: 5-day forecast, then 3-day; only split if even 3 days won't fit.
+	for _, n := range []int{5, 3} {
+		if full := cur + " | " + dailyForecast(s.Daily, n); len(full) <= budget {
+			return full, ""
+		}
+	}
+	return cur, dailyForecast(s.Daily, 5)
+}
+
+// dailyForecast renders up to n days as "Nd: Mon ☀24°/15° · …" (max red, min blue).
+func dailyForecast(days []weather.Day, n int) string {
+	days = days[:min(n, len(days))]
 	var sb strings.Builder
-	for i, d := range s.Daily {
+	for i, d := range days {
 		if i > 0 {
 			sb.WriteString(" · ")
 		}
@@ -169,17 +229,12 @@ func formatWeatherIRCLines(s *weather.Snapshot) (line1, line2 string) {
 		if day == "" {
 			day = d.Date
 		}
-		// max°C first (red on black) / min°C (blue on black), slash between
 		sb.WriteString(day)
 		sb.WriteString(" ")
+		sb.WriteString(weatherIcon(d.Icon))
 		sb.WriteString(ircFormatMaxTemp(d.MaxC))
 		sb.WriteString("/")
 		sb.WriteString(ircFormatMinTemp(d.MinC))
 	}
-	daily := ircBoldLabel("5d:") + " " + sb.String() + " (open-meteo.com)"
-	full := cur + " | " + daily
-	if len([]byte(full)) <= 450 {
-		return full, ""
-	}
-	return cur, daily
+	return ircBoldLabel(fmt.Sprintf("%dd:", len(days))) + " " + sb.String()
 }
