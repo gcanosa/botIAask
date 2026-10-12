@@ -26,6 +26,8 @@ type line struct {
 var userLines = []line{
 	{cmd: "!ask <query>", desc: "Ask the AI (name configurable; default ask)"},
 	{cmd: "!bc <expr>", desc: "Evaluate a math expression, e.g. 5+5"},
+	{cmd: "!ipcheck <ip>", desc: "Geolocate an IP: country, region, city, lat/lon, ASN/ISP, timezone, reverse DNS"},
+	{cmd: "!hostcheck <host>", desc: "!ipcheck for a hostname, plus a WHOIS line: owner org (if not redacted), registrar, reg/exp dates, nameservers"},
 	{cmd: "!weather <place>", desc: "Current + 5-day forecast (e.g. Barcelona, Spain)"},
 	{cmd: "!movie <title>", desc: "Year, IMDb rating, short plot (OMDb; omdb.api_key or OMDB_API_KEY)"},
 	{cmd: "!flight <IATA> [date]", desc: "Flight status (AirLabs: sched, delay, O/D, progress; key in config; paid = high quota)"},
