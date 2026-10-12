@@ -98,6 +98,32 @@ func (b *ircNetwork) setBotMode(on bool) {
 	}
 }
 
+// disableBotMode saves bot_mode: false for this network and rehashes so every view of the
+// config (web dashboard included) picks it up.
+func (b *ircNetwork) disableBotMode() {
+	clone, err := config.CloneConfig(b.getCfg())
+	if err != nil {
+		log.Printf("irc[%s]: disable bot_mode: %v", b.name, err)
+		return
+	}
+	found := false
+	for i := range clone.IRC.Networks {
+		if strings.EqualFold(clone.IRC.Networks[i].Name, b.name) {
+			clone.IRC.Networks[i].BotMode, found = false, true
+		}
+	}
+	if !found {
+		return
+	}
+	if err := config.SaveConfig(configPathOrDefault(b.Bot), clone); err != nil {
+		log.Printf("irc[%s]: disable bot_mode: save config: %v", b.name, err)
+		return
+	}
+	if err := b.RunRehash(fmt.Sprintf("irc[%s]: +B unsupported, bot_mode disabled", b.name)); err != nil {
+		log.Printf("irc[%s]: disable bot_mode: rehash: %v", b.name, err)
+	}
+}
+
 func (b *ircNetwork) isConnected() bool {
 	b.statsMu.Lock()
 	defer b.statsMu.Unlock()
@@ -502,8 +528,11 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 	})
 	n.conn.AddCallback("501", func(e ircmsg.Message) {
-		if n.netCfg().BotMode || len(e.Params) < 2 {
-			log.Printf("irc[%s]: server rejected user mode (501: %s); this network may not support +B", n.name, strings.Join(e.Params[1:], " "))
+		// +B is the only user mode the bot sets, so a 501 while bot_mode is on means the
+		// network doesn't support it: turn it off for this network so reconnects stop retrying.
+		if n.netCfg().BotMode {
+			log.Printf("irc[%s]: server rejected user mode (501: %s); network doesn't support +B, disabling bot_mode for it", n.name, strings.Join(e.Params[1:], " "))
+			guard.Go("irc:"+n.name+" disable bot_mode", n.disableBotMode) // off the read loop: rehash touches connections
 		}
 	})
 

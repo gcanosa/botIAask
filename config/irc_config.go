@@ -27,7 +27,7 @@ type IRCNetworkConfig struct {
 	// servers without matching SANs). Only takes effect when UseSSL is true.
 	TLSSkipVerify bool `yaml:"tls_skip_verify,omitempty"`
 	// BotMode sets user mode +B (bot flag) on this network after connecting. Off by default;
-	// servers without +B reject it harmlessly.
+	// a server that rejects +B (501) gets it switched off automatically (saved to config).
 	BotMode  bool        `yaml:"bot_mode,omitempty"`
 	Nickname string      `yaml:"nickname"`
 	Channels []IRChannel `yaml:"channels"`
