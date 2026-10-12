@@ -911,6 +911,19 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !latest / !latestversion <project|owner/repo|URL> (GitHub, GitLab, Codeberg, SourceForge, Repology)
+	if f := strings.Fields(message); len(f) > 0 && (f[0] == b.pfx()+"latest" || f[0] == b.pfx()+"latestversion") {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %slatest <name|owner/repo|URL> — e.g. %slatest nginx, %slatest neovim/neovim, %slatest sf:keepass", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
+			return
+		}
+		b.handleLatestCommand(target, sender, f[1])
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {
