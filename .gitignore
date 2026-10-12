@@ -74,3 +74,4 @@ scripts/
 
 # Compose local state (optional; contains data + config)
 state/
+CLAUDE.local.md
