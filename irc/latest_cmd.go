@@ -28,7 +28,10 @@ var (
 	latestRepology    = "https://repology.org/api/v1/project/"
 )
 
-var errLatestNotFound = errors.New("not found")
+var (
+	errLatestNotFound = errors.New("not found")
+	errLatestUnknown  = errors.New("unknown project (try owner/repo or a forge URL)")
+)
 
 // latestQuery is a parsed !latest argument. kind is gh, gl, cb, sf or repology.
 type latestQuery struct {
@@ -183,7 +186,9 @@ type latestResult struct {
 	version, title, date, link, note string
 }
 
-func fetchLatest(ctx context.Context, q latestQuery, ghToken string) (*latestResult, error) {
+// fetchLatest looks q up; a bare name unknown to Repology falls back to the GitHub repo
+// with exactly that name, in which case q is rewritten to it.
+func fetchLatest(ctx context.Context, q *latestQuery, ghToken string) (*latestResult, error) {
 	switch q.kind {
 	case "gh":
 		return fetchLatestForge(ctx, latestGitHubAPI+"/repos/"+q.name, "https://github.com/"+q.name, ghToken, "per_page=100")
@@ -194,7 +199,14 @@ func fetchLatest(ctx context.Context, q latestQuery, ghToken string) (*latestRes
 	case "sf":
 		return fetchLatestSF(ctx, q.name)
 	default:
-		return fetchLatestRepology(ctx, q.name)
+		r, err := fetchLatestRepology(ctx, q.name)
+		if errors.Is(err, errLatestUnknown) {
+			if full := githubRepoByName(ctx, q.name, ghToken); full != "" {
+				*q = latestQuery{"gh", full}
+				return fetchLatest(ctx, q, ghToken)
+			}
+		}
+		return r, err
 	}
 }
 
@@ -313,7 +325,7 @@ func fetchLatestRepology(ctx context.Context, name string) (*latestResult, error
 		return nil, err
 	}
 	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("unknown project (try owner/repo or a forge URL)")
+		return nil, errLatestUnknown
 	}
 	best := ""
 	for _, p := range pkgs {
@@ -328,6 +340,26 @@ func fetchLatestRepology(ctx context.Context, name string) (*latestResult, error
 		return nil, fmt.Errorf("no stable version known")
 	}
 	return &latestResult{version: best, link: "https://repology.org/project/" + url.PathEscape(name) + "/versions"}, nil
+}
+
+// githubRepoByName returns "owner/repo" of the most-starred GitHub repo named exactly name, or "".
+func githubRepoByName(ctx context.Context, name, token string) string {
+	var res struct {
+		Items []struct {
+			Name     string `json:"name"`
+			FullName string `json:"full_name"`
+		} `json:"items"`
+	}
+	u := latestGitHubAPI + "/search/repositories?sort=stars&per_page=20&q=" + url.QueryEscape(name+" in:name")
+	if latestGetJSON(ctx, u, token, &res) != nil {
+		return ""
+	}
+	for _, it := range res.Items {
+		if strings.EqualFold(it.Name, name) {
+			return it.FullName
+		}
+	}
+	return ""
 }
 
 func formatLatest(q latestQuery, r *latestResult, link string) string {
@@ -356,7 +388,7 @@ func (b *ircNetwork) handleLatestCommand(target, sender, query string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		var r *latestResult
-		if r, err = fetchLatest(ctx, q, b.getCfg().GitHub.Token); err == nil {
+		if r, err = fetchLatest(ctx, &q, b.getCfg().GitHub.Token); err == nil {
 			link := r.link
 			if link != "" {
 				link = rss.ShortenURLWithService(link, b.getCfg().RSS.URLShortener)
