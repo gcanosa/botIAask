@@ -183,6 +183,11 @@ func main() {
 		}
 	}
 
+	// Process log (reconnects, errors, panics, crash traces) under logs/debug/, apart from IRC logs.
+	if err := logger.StartDebugLog(); err != nil {
+		log.Printf("Warning: debug log disabled: %v", err)
+	}
+
 	// Internal Initialization for maintenance flags
 	if *dropNews {
 		rssDB, err := rss.NewDatabase("data/rss_seen.db")
