@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,58 +240,129 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// runNetwork builds one network, registers it as pending while its initial connect retries,
-// promotes it to live in b.networks on success, blocks in its event loop, and unregisters it
-// when the loop exits (Quit() or a fatal disconnect). A removal/disable requested while still
-// pending (disconnectNetwork closing n.quit) cancels the retry instead of leaking a goroutine
-// that would otherwise re-register itself once the server comes back.
+// networkRestartDelay is how long runNetwork waits before rebuilding a network whose
+// connection loop died unexpectedly (a var so tests can shorten it).
+var networkRestartDelay = 30 * time.Second
+
+// runLoop is ircevent's blocking event loop; a var only so tests can make it die.
+var runLoop = (*ircevent.Connection).Loop
+
+// runNetwork supervises one network for the process lifetime. ircevent's Loop() already
+// reconnects forever after a disconnect, but if the loop ever ends without a quit request
+// (a panic in the connect/loop path, or anything else that unwinds it), the network used to
+// stay offline until the process was restarted. Now it is rebuilt from the current config
+// and reconnected. Only an explicit quit (requestQuit: removal/disable, endpoint-change
+// rehash, !quit, shutdown) stops it.
 func (b *Bot) runNetwork(netCfg config.IRCNetworkConfig) {
 	n := b.buildNetwork(netCfg)
-
 	b.pendingMu.Lock()
 	b.pending[netCfg.Name] = n
 	b.pendingMu.Unlock()
 
-	err := b.connectWithRetry(n)
+	for b.runNetworkOnce(n) {
+		log.Printf("irc[%s]: connection loop ended unexpectedly; restarting in %s", n.name, networkRestartDelay)
+		select {
+		case <-time.After(networkRestartDelay):
+		case <-n.quit:
+			b.dropPending(n)
+			return
+		}
+		cur, ok := config.FindIRCNetworkByName(b.getCfg().IRC.Networks, n.name)
+		if !ok || !cur.IsEnabled() {
+			b.dropPending(n)
+			return
+		}
+		next := b.buildNetwork(cur)
+		n.sessionJoinsMu.Lock()
+		next.sessionJoins = append([]config.IRChannel(nil), n.sessionJoins...)
+		n.sessionJoinsMu.Unlock()
 
+		b.pendingMu.Lock()
+		owned := b.pending[n.name] == n
+		if owned {
+			b.pending[n.name] = next
+		}
+		b.pendingMu.Unlock()
+		if !owned { // removed or replaced while we were paused
+			return
+		}
+		n = next
+	}
+}
+
+// dropPending removes n from b.pending if it is still the registered instance.
+func (b *Bot) dropPending(n *ircNetwork) {
 	b.pendingMu.Lock()
-	if b.pending[netCfg.Name] == n {
-		delete(b.pending, netCfg.Name)
+	if b.pending[n.name] == n {
+		delete(b.pending, n.name)
 	}
 	b.pendingMu.Unlock()
+}
 
-	if err != nil {
-		if err == errNetworkCancelled {
-			log.Printf("irc[%s]: connect cancelled (network removed/disabled while retrying)", netCfg.Name)
-		} else {
-			log.Printf("irc[%s]: connect failed permanently: %v", netCfg.Name, err)
+// runNetworkOnce connects n (retrying forever), promotes it from pending to live, and
+// blocks in its event loop. It reports whether runNetwork should rebuild and reconnect:
+// true only when the loop ended (or panicked) without a quit request and n still owns its
+// name. In that case n is left registered in b.pending, so disconnectNetwork can still
+// cancel it during the restart pause.
+func (b *Bot) runNetworkOnce(n *ircNetwork) (restart bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic in irc[%s]: %v\n%s", n.name, r, debug.Stack())
+			n.conn.Quit() // abandon this connection; its goroutines unwind on their own
+			restart = !n.cancelled()
 		}
-		return
+		// Compare-and-delete: an endpoint-change rehash (ApplyLiveConfig) may have already
+		// disconnected this instance and spawned its replacement under the same name, so
+		// only touch entries that still point at n.
+		b.networksMu.Lock()
+		b.pendingMu.Lock()
+		owned := b.networks[n.name] == n || b.pending[n.name] == n
+		if b.networks[n.name] == n {
+			delete(b.networks, n.name)
+		}
+		if restart && owned {
+			b.pending[n.name] = n
+		} else {
+			restart = false
+			if b.pending[n.name] == n {
+				delete(b.pending, n.name)
+			}
+		}
+		b.pendingMu.Unlock()
+		b.networksMu.Unlock()
+	}()
+
+	if err := b.connectWithRetry(n); err != nil {
+		if err == errNetworkCancelled {
+			log.Printf("irc[%s]: connect cancelled (network removed/disabled while retrying)", n.name)
+		} else {
+			log.Printf("irc[%s]: connect failed permanently: %v", n.name, err)
+		}
+		return false
 	}
 
-	// A cancellation can race a just-completed connect (disconnectNetwork's pending lookup
-	// and this goroutine's delete above can interleave); check once more before going live.
-	if n.cancelled() {
+	// Promote pending -> live atomically. If disconnectNetwork already took us out of
+	// pending (removal/disable racing a just-completed connect), quit instead of going live.
+	b.networksMu.Lock()
+	b.pendingMu.Lock()
+	owned := b.pending[n.name] == n && !n.cancelled()
+	if b.pending[n.name] == n {
+		delete(b.pending, n.name)
+	}
+	if owned {
+		b.networks[n.name] = n
+	}
+	b.pendingMu.Unlock()
+	b.networksMu.Unlock()
+	if !owned {
+		n.requestQuit()
 		n.conn.QuitMessage = n.FormatQuitMessage("")
 		n.conn.Quit()
-		return
+		return false
 	}
 
-	b.networksMu.Lock()
-	b.networks[netCfg.Name] = n
-	b.networksMu.Unlock()
-
-	n.conn.Loop() // blocks; returns when Quit()/a fatal error tears the connection down
-
-	b.networksMu.Lock()
-	// Compare-and-delete: an endpoint-change rehash (ApplyLiveConfig) may have already
-	// disconnected this instance and spawned its replacement under the same name before
-	// this goroutine's Loop() unwound. Only remove the entry if it's still this instance,
-	// so a stale goroutine can never erase a live replacement's registration.
-	if b.networks[netCfg.Name] == n {
-		delete(b.networks, netCfg.Name)
-	}
-	b.networksMu.Unlock()
+	runLoop(n.conn) // blocks; ircevent reconnects internally and only returns after Quit()
+	return !n.cancelled()
 }
 
 // errNetworkCancelled is returned by connectWithRetry when n.quit is closed mid-backoff.
@@ -713,9 +785,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		n.authMu.Lock()
 		n.authenticated = false
 		n.authMu.Unlock()
-		if b.getCfg().Bot.Debug {
-			log.Printf("irc[%s]: disconnected from IRC server", n.name)
-		}
+		log.Printf("irc[%s]: disconnected from IRC server; reconnecting every %s until it succeeds", n.name, n.conn.ReconnectFreq)
 	})
 
 	return n
@@ -815,6 +885,7 @@ func (b *Bot) disconnectNetwork(name string) {
 	b.pendingMu.Unlock()
 
 	if net != nil {
+		net.requestQuit() // tells runNetwork's supervisor this exit is intentional
 		net.conn.QuitMessage = net.FormatQuitMessage("")
 		net.conn.Quit() // the goroutine blocked in runNetwork's conn.Loop() returns on its own
 	}
@@ -856,6 +927,7 @@ func (b *Bot) RequestQuit(override string) {
 		if !net.isConnected() {
 			continue
 		}
+		net.requestQuit() // intentional: runNetwork must not reconnect after !quit/shutdown
 		net.conn.QuitMessage = net.FormatQuitMessage(override)
 		net.conn.Quit()
 	}
