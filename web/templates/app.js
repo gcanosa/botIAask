@@ -46,6 +46,7 @@ let logState = {
     channelNetwork: null,
     network: null, // network shown in the channel list (sidebar picker)
     joined: false,
+    debug: false, // viewing the bot's process log (logs/debug) instead of a channel
     selectedDate: null,
     eventSource: null,
     stickToBottom: true,
@@ -834,7 +835,9 @@ function renderLogChannelList() {
     const q = (document.getElementById('logs-channel-filter')?.value || '').trim().toLowerCase();
 
     // One network at a time; entries with no recoverable network (pre-multi-network logs) go under "Other".
-    const nets = [...new Set(logCatalog.channels.map((c) => c.network || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+    const chans = logCatalog.channels.filter((c) => !c.debug);
+    const debugEntries = logCatalog.channels.filter((c) => c.debug);
+    const nets = [...new Set(chans.map((c) => c.network || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
     if (logState.network == null) {
         try { logState.network = localStorage.getItem('logsNetwork'); } catch (_) {}
     }
@@ -846,7 +849,7 @@ function renderLogChannelList() {
         sel.classList.toggle('hidden', nets.length < 2);
     }
 
-    const inNet = logCatalog.channels.filter((c) => (c.network || '') === logState.network && (!q || c.label.toLowerCase().includes(q)));
+    const inNet = chans.filter((c) => (c.network || '') === logState.network && (!q || c.label.toLowerCase().includes(q)));
     const joined = inNet.filter((c) => c.joined);
     const other = inNet.filter((c) => !c.joined);
 
@@ -856,11 +859,13 @@ function renderLogChannelList() {
         const active = logState.channelLabel === c.label && logState.channelNetwork === c.network;
         row.className = 'logs-channel-row mono' + (active ? ' active' : '');
         row.innerHTML = `<span>${financeEscapeHtml(c.label)}</span><span class="logs-channel-meta">${
-            c.joined
+            c.debug
+                ? '<span class="log-badge log-badge-disk">Admin</span>'
+                : c.joined
                 ? '<span class="log-badge log-badge-live"><span class="dot pulse"></span>Live</span>'
                 : '<span class="log-badge log-badge-disk">Disk</span>'
         }</span>`;
-        row.addEventListener('click', () => selectLogChannel(c.label, c.network, c.joined));
+        row.addEventListener('click', () => selectLogChannel(c.label, c.network, c.joined, c.debug));
         return row;
     };
 
@@ -875,6 +880,7 @@ function renderLogChannelList() {
         items.forEach((c) => wrap.appendChild(mkRow(c)));
         host.appendChild(wrap);
     };
+    addGroup('Bot', debugEntries);
     addGroup('Joined', joined);
     addGroup('Not joined (within retention)', other);
     if (!host.children.length) {
@@ -882,10 +888,11 @@ function renderLogChannelList() {
     }
 }
 
-function selectLogChannel(label, network, joined) {
+function selectLogChannel(label, network, joined, debug = false) {
     logState.channelLabel = label;
     logState.channelNetwork = network;
     logState.joined = joined;
+    logState.debug = debug;
     if (logCatalog?.calendar?.server_local_today) {
         logState.selectedDate = logCatalog.calendar.server_local_today;
     }
@@ -905,7 +912,9 @@ function updateLogToolbarBadges() {
     const today = logCatalog?.calendar?.server_local_today;
     const hist = logState.selectedDate && today && logState.selectedDate < today;
     const parts = [];
-    if (logState.joined) {
+    if (logState.debug) {
+        parts.push('<span class="log-badge log-badge-disk">Process log</span>');
+    } else if (logState.joined) {
         parts.push('<span class="log-badge log-badge-live"><span class="dot pulse"></span>Joined</span>');
     } else {
         parts.push('<span class="log-badge log-badge-disk">Not joined</span>');
@@ -930,6 +939,7 @@ function closeLogsView() {
     logState.channelLabel = null;
     logState.channelNetwork = null;
     logState.joined = false;
+    logState.debug = false;
     logState.selectedDate = null;
     logState.stickToBottom = true;
     document.getElementById('logs-viewer')?.classList.add('hidden');
@@ -1004,7 +1014,10 @@ function ircFormat(text) {
 function makeLogLine(text) {
     const line = document.createElement('div');
     line.className = 'log-line';
-    if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
+    if (logState.debug) {
+        if (/panic|fatal|error|fail/i.test(text)) line.style.color = 'var(--error)';
+        else if (/reconnect|disconnect|retry|restart|signal/i.test(text)) line.style.color = 'var(--accent)';
+    } else if (text.includes('***') && text.includes('joined')) line.style.color = 'var(--success)';
     else if (text.includes('***') && (text.includes('left') || text.includes('quit'))) line.style.color = 'var(--error)';
     else if (text.includes('* ') && !text.includes('***')) line.style.color = 'var(--accent)';
     line.appendChild(ircFormat(text));
@@ -1040,8 +1053,13 @@ function reloadLogsForSelection() {
     const today = logCatalog?.calendar?.server_local_today;
     updateLogToolbarBadges();
 
+    const params = new URLSearchParams(
+        logState.debug
+            ? { debug: '1', date: logState.selectedDate }
+            : { channel: logState.channelLabel, network: logState.channelNetwork || '', date: logState.selectedDate }
+    );
     if (logState.selectedDate === today) {
-        const url = `/api/logs/stream?${new URLSearchParams({ channel: logState.channelLabel, network: logState.channelNetwork || '', date: logState.selectedDate })}`;
+        const url = `/api/logs/stream?${params}`;
         const source = new EventSource(url);
         logState.eventSource = source;
         source.onmessage = (e) => {
@@ -1053,9 +1071,7 @@ function reloadLogsForSelection() {
     } else {
         (async () => {
             try {
-                const res = await fetch(
-                    `/api/logs/history?${new URLSearchParams({ channel: logState.channelLabel, network: logState.channelNetwork || '', date: logState.selectedDate })}`
-                );
+                const res = await fetch(`/api/logs/history?${params}`);
                 if (!res.ok) {
                     appendLogLine('[ERROR] Failed to load history');
                     return;

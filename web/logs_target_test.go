@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -110,7 +112,7 @@ func TestReadDayLog_MergesSpellings(t *testing.T) {
 		t.Skip("case-insensitive filesystem: spellings are the same file")
 	}
 	os.WriteFile("logs/net_news_2026-10-11.log", []byte("[10:00:00] <b> two\n[12:00:00] <b> four\n"), 0o644)
-	lines, truncated, archived, err := readDayLog([]string{"net_news"}, "2026-10-11", 100)
+	lines, truncated, archived, err := readDayLog(logsDir, []string{"net_news"}, "2026-10-11", 100)
 	if err != nil || truncated || archived {
 		t.Fatalf("err=%v truncated=%v archived=%v", err, truncated, archived)
 	}
@@ -118,7 +120,7 @@ func TestReadDayLog_MergesSpellings(t *testing.T) {
 	if got := strings.Join(lines, "|"); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
-	if lines, _, _, _ := readDayLog([]string{"net_news"}, "2026-10-11", 3); len(lines) != 3 || lines[0] != "[10:00:00] <b> two" {
+	if lines, _, _, _ := readDayLog(logsDir, []string{"net_news"}, "2026-10-11", 3); len(lines) != 3 || lines[0] != "[10:00:00] <b> two" {
 		t.Fatalf("maxLines: %v", lines)
 	}
 }
@@ -199,5 +201,51 @@ func TestLogStream_ReplaysOtherSpellings(t *testing.T) {
 	i, j := strings.Index(body, "before restart"), strings.Index(body, "after restart")
 	if i < 0 || j < 0 || i > j {
 		t.Fatalf("want both lines in time order:\n%s", body)
+	}
+}
+
+// The bot's process log is listed and served to admins only.
+func TestDebugLog_AdminOnly(t *testing.T) {
+	t.Chdir(t.TempDir())
+	today := time.Now().Format("2006-01-02")
+	os.MkdirAll("logs/debug", 0o755)
+	os.WriteFile("logs/debug/bot_"+today+".log", []byte("2026/10/12 10:00:00 irc[net]: connected\n"), 0o644)
+
+	authDB, err := NewAuthDatabase(filepath.Join(t.TempDir(), "web_auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authDB.Close()
+	authDB.AddUser("admin", "hunter2pass")
+	uid, _, _ := authDB.Authenticate("admin", "hunter2pass")
+	tok, _ := authDB.CreateSession(uid)
+	s := &Server{cfg: &config.Config{}, authDB: authDB}
+
+	get := func(h func(http.ResponseWriter, *http.Request), url string, admin bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", url, nil)
+		if admin {
+			req.AddCookie(&http.Cookie{Name: "admin_session", Value: tok})
+		}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		return rec
+	}
+	hist := "/api/logs/history?debug=1&date=" + today
+	if rec := get(s.handleLogHistory, hist, false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous debug history: got %d", rec.Code)
+	}
+	if rec := get(s.handleLogHistory, hist, true); rec.Code != 200 || !strings.Contains(rec.Body.String(), "connected") {
+		t.Fatalf("admin debug history: %d %s", rec.Code, rec.Body)
+	}
+	for admin, want := range map[bool]bool{false: false, true: true} {
+		var resp logCatalogResponse
+		json.NewDecoder(get(s.handleLogCatalog, "/api/logs/catalog", admin).Body).Decode(&resp)
+		found := false
+		for _, c := range resp.Channels {
+			found = found || (c.Debug && len(c.DatesWithLogs) == 1)
+		}
+		if found != want {
+			t.Fatalf("admin=%v: debug entry listed=%v, want %v (%+v)", admin, found, want, resp.Channels)
+		}
 	}
 }

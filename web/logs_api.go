@@ -20,6 +20,7 @@ const (
 	maxHistoryLines = 40000
 	logsDir         = "logs"
 	logsArchiveDir  = "logs/archive"
+	debugLogKey     = "bot" // logs/debug/bot_<date>.log, see logger.StartDebugLog
 )
 
 type logCalendarMeta struct {
@@ -35,6 +36,7 @@ type logChannelEntry struct {
 	FileKey       string   `json:"file_key"`
 	Joined        bool     `json:"joined"`
 	DatesWithLogs []string `json:"dates_with_logs"`
+	Debug         bool     `json:"debug,omitempty"` // the bot's process log (admins only), not a channel
 }
 
 type logCatalogResponse struct {
@@ -278,6 +280,10 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if isAdmin {
+		channels = append(channels, debugLogEntry(minDate))
+	}
+
 	resp := logCatalogResponse{
 		Calendar: logCalendarMeta{
 			MinDate:      minDate,
@@ -290,6 +296,30 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// debugLogEntry lists the days that have a process log in logs/debug (or its archive).
+func debugLogEntry(minDate string) logChannelEntry {
+	dir := logger.DebugDir()
+	set := make(map[string]struct{})
+	for _, d := range []string{dir, filepath.Join(dir, "archive")} {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			name, ok := strings.CutSuffix(e.Name(), ".gz")
+			if !ok && d != dir {
+				continue
+			}
+			if key, date, ok := parseLogBaseName(name); ok && key == debugLogKey && date >= minDate {
+				set[date] = struct{}{}
+			}
+		}
+	}
+	dates := make([]string, 0, len(set))
+	for d := range set {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+	return logChannelEntry{Label: "Bot debug log", FileKey: debugLogKey, Joined: true, DatesWithLogs: dates, Debug: true}
 }
 
 type logHistoryResponse struct {
@@ -305,8 +335,20 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
 	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	if r.URL.Query().Get("debug") == "1" {
+		if !s.staffAdminFromRequest(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
+			http.Error(w, "invalid date", http.StatusBadRequest)
+			return
+		}
+		s.writeLogHistory(w, logger.DebugDir(), []string{debugLogKey}, date)
+		return
+	}
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
 	if channel == "" || date == "" {
 		http.Error(w, "channel and date are required", http.StatusBadRequest)
 		return
@@ -338,7 +380,11 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, legacy)
 	}
 
-	lines, truncated, archived, err := readDayLog(keys, date, maxHistoryLines)
+	s.writeLogHistory(w, logsDir, keys, date)
+}
+
+func (s *Server) writeLogHistory(w http.ResponseWriter, dir string, keys []string, date string) {
+	lines, truncated, archived, err := readDayLog(dir, keys, date, maxHistoryLines)
 	if err != nil {
 		http.Error(w, "bad archive", http.StatusInternalServerError)
 		return
@@ -356,14 +402,14 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// readDayLog returns the last maxLines lines logged on date under any of keys, reading every
+// readDayLog returns the last maxLines lines logged on date in dir under any of keys, reading every
 // spelling of the file (see logger.DayLogPaths) and interleaving them by timestamp. Plain logs
 // are used when present, otherwise the gzipped archive copies (archived reports which).
-func readDayLog(keys []string, date string, maxLines int) (lines []string, truncated, archived bool, err error) {
+func readDayLog(dir string, keys []string, date string, maxLines int) (lines []string, truncated, archived bool, err error) {
 	var plain, gz []string
 	for _, key := range keys {
-		plain = append(plain, logger.DayLogPaths(logsDir, key, date, ".log")...)
-		gz = append(gz, logger.DayLogPaths(logsArchiveDir, key, date, ".log.gz")...)
+		plain = append(plain, logger.DayLogPaths(dir, key, date, ".log")...)
+		gz = append(gz, logger.DayLogPaths(filepath.Join(dir, "archive"), key, date, ".log.gz")...)
 	}
 	paths := plain
 	if len(paths) == 0 {
