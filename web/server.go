@@ -987,24 +987,35 @@ func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	// dir/key name the file tailed: a channel log, or (debug=1, admins only) the bot's process log.
+	dir, key := logsDir, ""
 	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
-	if channel == "" {
-		http.Error(w, "Channel is required", http.StatusBadRequest)
-		return
-	}
-	network := strings.TrimSpace(r.URL.Query().Get("network"))
-	if !validLogTarget(s.getConfig(), channel, network) {
-		http.Error(w, "invalid channel or network", http.StatusBadRequest)
-		return
-	}
-	if network == "" {
-		if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
-			network = nets[0].Name
+	if r.URL.Query().Get("debug") == "1" {
+		if !s.staffAdminFromRequest(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
-	}
-	if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		dir, key, channel = logger.DebugDir(), debugLogKey, "debug"
+	} else {
+		if channel == "" {
+			http.Error(w, "Channel is required", http.StatusBadRequest)
+			return
+		}
+		network := strings.TrimSpace(r.URL.Query().Get("network"))
+		if !validLogTarget(s.getConfig(), channel, network) {
+			http.Error(w, "invalid channel or network", http.StatusBadRequest)
+			return
+		}
+		if network == "" {
+			if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
+				network = nets[0].Name
+			}
+		}
+		if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		key = logger.ChannelFileKey(channel, network)
 	}
 
 	date := strings.TrimSpace(r.URL.Query().Get("date"))
@@ -1031,8 +1042,6 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := logger.ChannelFileKey(channel, network)
-
 	// The live tail follows the canonical (lower-cased) file the logger writes to. Other
 	// spellings of today's file, written before keys were lower-cased, are replayed once on
 	// connect and merged by timestamp so earlier lines from today don't go missing.
@@ -1042,7 +1051,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	openCanon := func() {
 		// A missing file just means nothing has been logged for this channel yet today;
 		// the poll loop below retries every tick.
-		if f, err := os.Open(filepath.Join("logs", fmt.Sprintf("%s_%s.log", key, date))); err == nil {
+		if f, err := os.Open(filepath.Join(dir, fmt.Sprintf("%s_%s.log", key, date))); err == nil {
 			file, reader, pending = f, bufio.NewReader(f), ""
 		}
 	}
@@ -1072,7 +1081,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		canonInfo, _ = file.Stat()
 	}
 	merged := false
-	for _, p := range logger.DayLogPaths("logs", key, date, ".log") {
+	for _, p := range logger.DayLogPaths(dir, key, date, ".log") {
 		if fi, err := os.Stat(p); err != nil || (canonInfo != nil && os.SameFile(fi, canonInfo)) {
 			continue
 		}
