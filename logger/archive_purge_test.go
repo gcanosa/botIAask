@@ -28,7 +28,7 @@ func TestPurgeArchives(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	purgeArchives(90, now)
+	purgeArchives(logsDir, 90, now)
 	for name, keep := range files {
 		_, err := os.Stat(filepath.Join(dir, name))
 		if exists := err == nil; exists != keep {

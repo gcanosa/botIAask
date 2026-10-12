@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 	}
 
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		fmt.Printf("Error creating logs directory: %v\n", err)
+		log.Printf("Error creating logs directory: %v\n", err)
 		return
 	}
 
@@ -64,7 +65,7 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 
 	f, err := os.OpenFile(fullpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Printf("Error opening log file: %v\n", err)
+		log.Printf("Error opening log file: %v\n", err)
 		return
 	}
 	defer f.Close()
@@ -149,19 +150,21 @@ func runRotationIfEnabled() {
 	rotationMu.RLock()
 	d, a := rotationDays, archiveDays
 	rotationMu.RUnlock()
-	if d > 0 {
-		rotateLogs(d)
-	}
-	if a > 0 {
-		purgeArchives(a, time.Now())
+	for _, dir := range []string{logsDir, DebugDir()} {
+		if d > 0 {
+			rotateLogs(dir, d)
+		}
+		if a > 0 {
+			purgeArchives(dir, a, time.Now())
+		}
 	}
 }
 
-// purgeArchives deletes logs/archive/*_<YYYY-MM-DD>.log.gz files whose date is more than days
+// purgeArchives deletes <dir>/archive/*_<YYYY-MM-DD>.log.gz files whose date is more than days
 // before now. The date comes from the file name (the day logged), not the mtime, which is
 // just when rotation compressed it.
-func purgeArchives(days int, now time.Time) {
-	archiveDir := filepath.Join(logsDir, "archive")
+func purgeArchives(dir string, days int, now time.Time) {
+	archiveDir := filepath.Join(dir, "archive")
 	entries, err := os.ReadDir(archiveDir)
 	if err != nil {
 		return
@@ -178,7 +181,7 @@ func purgeArchives(days int, now time.Time) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(archiveDir, name)); err != nil {
-			fmt.Printf("Error deleting old log archive %s: %v\n", name, err)
+			log.Printf("Error deleting old log archive %s: %v\n", name, err)
 		}
 	}
 }
@@ -186,16 +189,19 @@ func purgeArchives(days int, now time.Time) {
 // rotateLogs deliberately does not take mu: only files older than the retention window are
 // touched, and those are never being appended to (an append refreshes the mtime), so holding
 // the global writer lock for the whole compression pass would just stall every LogChannelEvent.
-func rotateLogs(days int) {
-	entries, err := os.ReadDir(logsDir)
+func rotateLogs(dir string, days int) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return
+	}
 	if err != nil {
-		fmt.Printf("Error reading logs directory for rotation: %v\n", err)
+		log.Printf("Error reading logs directory for rotation: %v\n", err)
 		return
 	}
 
-	archiveDir := filepath.Join(logsDir, "archive")
+	archiveDir := filepath.Join(dir, "archive")
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
-		fmt.Printf("Error creating archive directory: %v\n", err)
+		log.Printf("Error creating archive directory: %v\n", err)
 		return
 	}
 
@@ -212,11 +218,11 @@ func rotateLogs(days int) {
 		}
 
 		if info.ModTime().Before(threshold) {
-			oldPath := filepath.Join(logsDir, entry.Name())
+			oldPath := filepath.Join(dir, entry.Name())
 			newPath := filepath.Join(archiveDir, entry.Name()+".gz")
 
 			if err := compressAndMoveLog(oldPath, newPath); err != nil {
-				fmt.Printf("Error rotating log %s: %v\n", entry.Name(), err)
+				log.Printf("Error rotating log %s: %v\n", entry.Name(), err)
 			}
 		}
 	}
