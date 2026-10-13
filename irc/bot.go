@@ -924,6 +924,15 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !apple: newest stable macOS/iOS/iPadOS/watchOS/tvOS/visionOS (Apple developer releases feed)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"apple" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		b.handleAppleCommand(target, sender)
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {
