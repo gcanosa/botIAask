@@ -57,8 +57,8 @@ func macOSNameFromApple(ctx context.Context, major string) string {
 	return ""
 }
 
-// appleVersionLess compares dotted numeric versions ("26.7.1" < "27.0").
-func appleVersionLess(a, b string) bool {
+// versionLess compares dotted numeric versions ("26.7.1" < "27.0").
+func versionLess(a, b string) bool {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	for i := 0; i < len(as) || i < len(bs); i++ {
 		var x, y int
@@ -84,7 +84,7 @@ func latestAppleReleases(titles []string) map[string]appleRelease {
 		if m == nil {
 			continue
 		}
-		if cur, ok := out[m[1]]; !ok || appleVersionLess(cur.version, m[2]) {
+		if cur, ok := out[m[1]]; !ok || versionLess(cur.version, m[2]) {
 			out[m[1]] = appleRelease{version: m[2], build: m[3]}
 		}
 	}

@@ -933,6 +933,15 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !linux: newest popular distro releases + kernel.org trees
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"linux" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		b.handleLinuxCommand(target, sender)
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {
