@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"botIAask/internal/httpx"
 )
 
 const userAgent = "botIAask-github-tracker (+https://github.com/)"
@@ -98,7 +100,7 @@ func FetchRepoEvents(ctx context.Context, owner, repo, token, etag string) (*Fet
 		return result, fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result.Events); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, httpx.MaxBody, &result.Events); err != nil {
 		return result, fmt.Errorf("github: decode events: %w", err)
 	}
 	return result, nil
@@ -247,5 +249,5 @@ func fetchOne(ctx context.Context, url, token string, out interface{}) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return httpx.DecodeJSON(resp.Body, httpx.MaxBody, out)
 }

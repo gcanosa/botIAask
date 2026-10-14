@@ -2,7 +2,6 @@ package irc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"botIAask/internal/httpx"
+	"botIAask/internal/ttlcache"
 	"botIAask/meta"
 	"botIAask/rss"
 )
@@ -180,7 +181,7 @@ func latestGetJSON(ctx context.Context, rawURL, token string, out any) error {
 	case resp.StatusCode != http.StatusOK:
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 2<<20)).Decode(out); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, 2<<20, out); err != nil {
 		return fmt.Errorf("bad response")
 	}
 	return nil
@@ -402,19 +403,30 @@ func formatLatest(q latestQuery, r *latestResult, link string) string {
 	return strings.Join(parts, " · ")
 }
 
+// latestCache keeps finished !latest lines (link already shortened) for 5 minutes, so a project
+// asked about repeatedly costs one forge request and one shortener call, not one per question.
+var latestCache = ttlcache.Cache[latestQuery, string]{TTL: 5 * time.Minute, Max: 256}
+
 // handleLatestCommand reports the newest released version of a project (!latest / !latestversion).
 func (b *ircNetwork) handleLatestCommand(target, sender, query string) {
 	q, err := parseLatestQuery(query)
 	if err == nil {
+		if line, ok := latestCache.Get(q); ok {
+			b.sendPrivmsg(target, b.sanitize(line))
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		var r *latestResult
+		asked := q // fetchLatest may rewrite q (bare name -> GitHub repo); cache under what was asked
 		if r, err = fetchLatest(ctx, &q, b.getCfg().GitHub.Token); err == nil {
 			link := r.link
 			if link != "" {
 				link = rss.ShortenURLWithService(link, b.getCfg().RSS.URLShortener)
 			}
-			b.sendPrivmsg(target, b.sanitize(formatLatest(q, r, link)))
+			line := formatLatest(q, r, link)
+			latestCache.Put(asked, line)
+			b.sendPrivmsg(target, b.sanitize(line))
 			return
 		}
 	}

@@ -1,12 +1,13 @@
 package crypto
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"botIAask/internal/httpx"
 )
 
 type Fetcher struct {
@@ -61,7 +62,7 @@ func (f *Fetcher) FetchAndSave() error {
 	}
 
 	var markets []CoinGeckoMarket
-	if err := json.NewDecoder(resp.Body).Decode(&markets); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, httpx.MaxBody, &markets); err != nil {
 		return err
 	}
 

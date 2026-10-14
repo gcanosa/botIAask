@@ -2,7 +2,6 @@ package irc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"botIAask/internal/guard"
+	"botIAask/internal/httpx"
+	"botIAask/internal/ttlcache"
 	"botIAask/meta"
 )
 
@@ -46,7 +47,7 @@ func linuxGetJSON(ctx context.Context, url string, v any) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(v)
+	return httpx.DecodeJSON(resp.Body, httpx.MaxBody, v)
 }
 
 // eolRelease is the subset of an endoflife.date release cycle we use.
@@ -207,16 +208,31 @@ func fetchLinux(ctx context.Context) (distros, bsd, kernel string) {
 	return tagLine("LINUX", parts), tagLine("BSD", bsds), kernel
 }
 
+// linuxCache keeps a complete !linux answer for 10 minutes: one call is 11 upstream requests and
+// release data moves on a scale of days. Incomplete answers (a source was down) are not kept.
+var linuxCache = linuxCache0()
+
+func linuxCache0() ttlcache.Cache[string, [3]string] {
+	return ttlcache.Cache[string, [3]string]{TTL: 10 * time.Minute, Max: 1}
+}
+
 // handleLinuxCommand reports the newest release of popular distros, the kernel.org trees and the BSDs (!linux).
 func (b *ircNetwork) handleLinuxCommand(target, sender string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	distros, bsd, kernel := fetchLinux(ctx)
-	if distros == "" && bsd == "" && kernel == "" {
+	lines, ok := linuxCache.Get("linux")
+	if !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		distros, bsd, kernel := fetchLinux(ctx)
+		lines = [3]string{distros, kernel, bsd}
+		if distros != "" && bsd != "" && kernel != "" {
+			linuxCache.Put("linux", lines)
+		}
+	}
+	if lines == [3]string{} {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: linux: release sources unreachable", sender)))
 		return
 	}
-	for _, l := range []string{distros, kernel, bsd} {
+	for _, l := range lines {
 		if l != "" {
 			b.sendPrivmsg(target, b.sanitize(l))
 		}

@@ -58,3 +58,43 @@ func TestChanRollupMergesSpellings(t *testing.T) {
 		t.Fatalf("report: %+v", rep)
 	}
 }
+
+// The 10-minute refresh must only re-parse a day whose log files changed.
+func TestChanRollupSkipsUnchangedDays(t *testing.T) {
+	db, err := NewDatabase(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	logs := t.TempDir()
+	today := time.Now().Format("2006-01-02")
+	path := filepath.Join(logs, "libera_linux_"+today+".log")
+	os.WriteFile(path, []byte("[09:00:00] <alice> one\n"), 0644)
+	nets := []NetNick{{"libera", "Bot"}}
+
+	if n := db.RollupLogs([]string{logs}, nets, "!", 2); n != 1 {
+		t.Fatalf("first pass wrote %d, want 1", n)
+	}
+	if n := db.RollupLogs([]string{logs}, nets, "!", 2); n != 0 {
+		t.Fatalf("unchanged log was re-parsed (%d rows written)", n)
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f.WriteString("[09:05:00] <bob> two\n")
+	f.Close()
+	if n := db.RollupLogs([]string{logs}, nets, "!", 2); n != 1 {
+		t.Fatalf("grown log not re-parsed (%d)", n)
+	}
+	rep, _ := db.ChanReport(7, "libera", "#linux")
+	if len(rep.Channels) != 1 || rep.Channels[0].Msgs != 2 {
+		t.Fatalf("report after growth: %+v", rep.Channels)
+	}
+	// once the file is gone from the candidate set its signature is forgotten
+	os.Remove(path)
+	db.RollupLogs([]string{logs}, nets, "!", 2)
+	db.rolledMu.Lock()
+	left := len(db.rolled)
+	db.rolledMu.Unlock()
+	if left != 0 {
+		t.Fatalf("stale signatures kept: %d", left)
+	}
+}

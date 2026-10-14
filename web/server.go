@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
 	"encoding/hex"
@@ -1238,29 +1239,46 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type staticAsset struct {
+	contentType string
+	body        []byte
+	etag        string
+}
+
+// staticAssets are the embedded dashboard files, read and hashed once.
+var staticAssets = sync.OnceValue(func() map[string]staticAsset {
+	files := map[string]string{
+		"/static/app.js":    "application/javascript; charset=utf-8",
+		"/static/style.css": "text/css; charset=utf-8",
+	}
+	out := make(map[string]staticAsset, len(files))
+	for path, ctype := range files {
+		data, err := templatesFS.ReadFile("templates/" + strings.TrimPrefix(path, "/static/"))
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		out[path] = staticAsset{contentType: ctype, body: data, etag: `"` + hex.EncodeToString(sum[:8]) + `"`}
+	}
+	return out
+})
+
+// handleStatic serves app.js / style.css (~250 KB together) with an ETag, so a reload costs a 304
+// instead of re-sending them; no-cache keeps a new release visible immediately.
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if path == "/static/app.js" {
-		data, err := templatesFS.ReadFile("templates/app.js")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/javascript")
-		w.Write(data)
+	a, ok := staticAssets()[r.URL.Path]
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-	if path == "/static/style.css" {
-		data, err := templatesFS.ReadFile("templates/style.css")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/css")
-		w.Write(data)
+	w.Header().Set("ETag", a.etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Header.Get("If-None-Match") == a.etag {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	http.NotFound(w, r)
+	w.Header().Set("Content-Type", a.contentType)
+	w.Write(a.body)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
