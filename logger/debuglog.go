@@ -29,7 +29,7 @@ func (d *dailyFile) Write(p []byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if today := time.Now().Format("2006-01-02"); today != d.date || d.f == nil {
-		f, err := os.OpenFile(filepath.Join(d.dir, "bot_"+today+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		f, err := os.OpenFile(filepath.Join(d.dir, "bot_"+today+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, securefs.FileMode())
 		if err != nil {
 			return 0, err
 		}
@@ -49,10 +49,10 @@ func (d *dailyFile) Write(p []byte) (int, error) {
 // archived and purged by the log rotator like channel logs.
 func StartDebugLog() error {
 	dir := DebugDir()
-	if err := securefs.MkdirPrivate(logsDir); err != nil {
+	if err := securefs.Mkdir(logsDir); err != nil {
 		return err
 	}
-	if err := securefs.MkdirPrivate(dir); err != nil {
+	if err := securefs.Mkdir(dir); err != nil {
 		return err
 	}
 	w := &dailyFile{dir: dir}

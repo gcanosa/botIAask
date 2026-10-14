@@ -68,15 +68,15 @@ func openLogLocked(path string, now time.Time) (*os.File, error) {
 		return h.f, nil
 	}
 	if !logsDirExists {
-		if err := securefs.MkdirPrivate(logsDir); err != nil {
+		if err := securefs.Mkdir(logsDir); err != nil {
 			return nil, err
 		}
 		logsDirExists = true
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, securefs.FileMode())
 	if errors.Is(err, fs.ErrNotExist) { // logs/ was removed while we ran
-		if err = securefs.MkdirPrivate(logsDir); err == nil {
-			f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err = securefs.Mkdir(logsDir); err == nil {
+			f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, securefs.FileMode())
 		}
 	}
 	if err != nil {
@@ -271,7 +271,7 @@ func rotateLogs(dir string, days int) {
 	}
 
 	archiveDir := filepath.Join(dir, "archive")
-	if err := securefs.MkdirPrivate(archiveDir); err != nil {
+	if err := securefs.Mkdir(archiveDir); err != nil {
 		log.Printf("Error creating archive directory: %v\n", err)
 		return
 	}

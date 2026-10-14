@@ -152,6 +152,9 @@ type BotConfig struct {
 	CommandName   string           `yaml:"command_name"`
 	Debug         bool             `yaml:"debug"`
 	RateLimiting  *RateLimitConfig `yaml:"rate_limiting,omitempty"`
+	// PrivateFiles makes newly created data/log directories 0700 and log files 0600. Off by default so
+	// a rootless-Podman/Quadlet host operator can still read the bind-mounted logs and backups.
+	PrivateFiles bool `yaml:"private_files,omitempty"`
 }
 
 // RateLimitConfig holds settings for rate limiting.
@@ -286,11 +289,6 @@ func LoadConfig(path string) (*Config, error) {
 func applyStatsDefaults(cfg *Config) {
 	if cfg.Stats.Interval <= 0 {
 		cfg.Stats.Interval = 60
-	}
-	// Snapshots are written every interval; without a retention window the table (and the history
-	// endpoint's cost) would grow without bound.
-	if cfg.Stats.RetentionDays <= 0 {
-		cfg.Stats.RetentionDays = 30
 	}
 }
 

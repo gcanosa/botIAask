@@ -158,5 +158,9 @@ All 29 items and the Tier 4 cleanup landed, one commit per tier. Differences fro
   `db.go` (a clean clone could not build); the pattern is gone and the package is tracked.
 - `rate_limiting.limit` is documented as unused rather than removed (old configs still load).
 - Pacer: burst 5, one line per 500 ms (`irc/pacer.go`); `!download` now lists at most 10 files.
+- Item 5 (0700/0600) is **opt-in** (`bot.private_files`) and the stats `retention_days` default of 30 was dropped
+  (unset still means keep everything): the production Quadlet unit runs rootless with `User=%U` and no `keep-id`, so
+  the host operator reads `/opt/botiaask/logs` and `data` through the "other" mode bits, and a new default must not start
+  deleting existing history. The history endpoint is bounded by bucketing instead.
 - Verified: build, vet, `go test -race ./...` (also in a clean clone of the branch) and a live run of the built
   binary (perms 0700, forced password change + policy, SSE cap 6 then 429, ETag 304, web off/on via SIGHUP, clean SIGTERM).

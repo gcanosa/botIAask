@@ -110,6 +110,8 @@ func main() {
 		log.Printf("Warning: stats enabled but save_to_db is false; activity history will not be stored in the stats database")
 	}
 
+	securefs.SetPrivate(cfg.Bot.PrivateFiles)
+
 	// CLI flag overrides.
 	if *debug {
 		cfg.Bot.Debug = true
@@ -147,7 +149,7 @@ func main() {
 	}
 
 	// Ensure data directory exists
-	if err := securefs.MkdirPrivate("data"); err != nil {
+	if err := securefs.Mkdir("data"); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 

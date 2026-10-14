@@ -1,9 +1,12 @@
 package bookmarks
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func newTestDB(t *testing.T) *Database {
@@ -195,5 +198,33 @@ func TestSeenScrubsPrivateText(t *testing.T) {
 	}
 	if s, _, _ := d.GetSeen(testNet, "erin"); s.Message != "public line" {
 		t.Fatalf("channel text lost: %q", s.Message)
+	}
+}
+
+// A production database created before owner_fold existed (reminders without the column) upgrades
+// in place on open: column added, rows backfilled, lookups work.
+func TestOpenUpgradesPreOwnerFoldDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE reminders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, public_id TEXT NOT NULL UNIQUE, owner_nick TEXT NOT NULL,
+			note TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, due_at DATETIME,
+			network TEXT NOT NULL DEFAULT '');
+		INSERT INTO reminders (public_id, owner_nick, note, network) VALUES ('aaaa1111', 'Old[Nick]', 'from the old schema', 'libera');`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	d, err := NewDatabase(path)
+	if err != nil {
+		t.Fatalf("upgrade failed: %v", err)
+	}
+	defer d.Close()
+	got, err := d.ListReminders("libera", "old{nick}")
+	if err != nil || len(got) != 1 || got[0].Note != "from the old schema" {
+		t.Fatalf("old reminder not found after upgrade: %+v %v", got, err)
 	}
 }

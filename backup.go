@@ -35,7 +35,7 @@ func startBackupScheduler(dataDir string, intervalHrs, keep int) {
 
 func runBackup(dataDir string, keep int) {
 	backupDir := filepath.Join(dataDir, "backups")
-	if err := securefs.MkdirPrivate(backupDir); err != nil {
+	if err := securefs.Mkdir(backupDir); err != nil {
 		log.Printf("backup: mkdir %s: %v", backupDir, err)
 		return
 	}
