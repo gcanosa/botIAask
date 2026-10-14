@@ -11,12 +11,18 @@ import (
 // Go runs fn in a new goroutine; a panic inside fn is recovered and logged
 // instead of crashing the process. name identifies the goroutine in logs.
 func Go(name string, fn func()) {
-	go func() {
+	go Wrap(name, fn)()
+}
+
+// Wrap returns fn with the same panic recovery as Go, for callbacks that run on a goroutine
+// the runtime creates (time.AfterFunc, http handlers' helpers, ...).
+func Wrap(name string, fn func()) func() {
+	return func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("panic in %s: %v\n%s", name, r, debug.Stack())
 			}
 		}()
 		fn()
-	}()
+	}
 }

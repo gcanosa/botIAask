@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"botIAask/internal/guard"
 	"botIAask/meta"
 )
 
@@ -150,7 +151,7 @@ func fetchEOL(ctx context.Context, wg *sync.WaitGroup, list []struct{ label, pro
 	today := time.Now().UTC().Format("2006-01-02")
 	for i, d := range list {
 		wg.Add(1)
-		go func() {
+		guard.Go("linux eol", func() {
 			defer wg.Done()
 			var p eolProduct
 			if linuxGetJSON(ctx, linuxEOLAPI+d.product, &p) == nil {
@@ -158,7 +159,7 @@ func fetchEOL(ctx context.Context, wg *sync.WaitGroup, list []struct{ label, pro
 					out[slot(i)] = r.format(d.label)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -188,20 +189,20 @@ func fetchLinux(ctx context.Context) (distros, bsd, kernel string) {
 	})
 	fetchEOL(ctx, &wg, bsdDistros, bsds, func(i int) int { return i })
 	wg.Add(2)
-	go func() {
+	guard.Go("linux rpi", func() {
 		defer wg.Done()
 		var l rpiList
 		if linuxGetJSON(ctx, linuxRPiList, &l) == nil {
 			parts[3] = l.format()
 		}
-	}()
-	go func() {
+	})
+	guard.Go("linux kernel", func() {
 		defer wg.Done()
 		var k kernelReleases
 		if linuxGetJSON(ctx, linuxKernel, &k) == nil && len(k.Releases) > 0 {
 			kernel = k.format()
 		}
-	}()
+	})
 	wg.Wait()
 	return tagLine("LINUX", parts), tagLine("BSD", bsds), kernel
 }

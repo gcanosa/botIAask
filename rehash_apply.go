@@ -10,6 +10,7 @@ import (
 	"botIAask/ai"
 	"botIAask/config"
 	"botIAask/github"
+	"botIAask/internal/guard"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -90,14 +91,15 @@ func (s *rehashState) applyWebHot(before, newCfg *config.Config, fromWeb bool) e
 			return ref.Stop(ctx)
 		}
 		if fromWeb {
-			go func(r *web.Server) {
+			guard.Go("web stop", func() {
 				if err := doStop(); err != nil {
 					log.Printf("web: stop: %v", err)
 				}
 				s.webMu.Lock()
 				*s.webRef = nil
 				s.webMu.Unlock()
-			}(ref)
+				ref.Close()
+			})
 			return nil
 		}
 		if err := doStop(); err != nil {
@@ -106,6 +108,7 @@ func (s *rehashState) applyWebHot(before, newCfg *config.Config, fromWeb bool) e
 		s.webMu.Lock()
 		*s.webRef = nil
 		s.webMu.Unlock()
+		ref.Close()
 		return nil
 	}
 
@@ -128,11 +131,11 @@ func (s *rehashState) applyWebHot(before, newCfg *config.Config, fromWeb bool) e
 	}
 	if fromWeb {
 		r := ref
-		go func() {
+		guard.Go("web rebind", func() {
 			if err := runRebindFor(r, newCfg); err != nil {
 				log.Printf("web: rebind: %v", err)
 			}
-		}()
+		})
 		return nil
 	}
 	if err := runRebindFor(ref, newCfg); err != nil {

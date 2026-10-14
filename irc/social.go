@@ -121,10 +121,16 @@ func (b *ircNetwork) recordSeen(nick, channel, action, message string) {
 
 // --- !tell delivery ---
 
-const (
-	maxTellsPerTarget = 5 // pending !tell cap per recipient, so one user can't queue a flood
-	tellDeliveryPace  = 500 * time.Millisecond
-)
+const maxTellsPerTarget = 5 // pending !tell cap per recipient, so one user can't queue a flood
+
+// deliverTellsAsync delivers pending tells off the IRC read loop (sending is paced and may wait);
+// the cheap "anything pending?" check stays synchronous so ordinary chat costs nothing.
+func (b *ircNetwork) deliverTellsAsync(nick, replyTarget string) {
+	if b.bookmarksDB == nil || !b.hasPendingTell(b.name, nick) {
+		return
+	}
+	guard.Go("tell delivery", func() { b.deliverTells(nick, replyTarget) })
+}
 
 // deliverTells flushes any pending !tell messages for nick (on this network) to
 // replyTarget (the channel they spoke/joined in, or their nick for a PM).
@@ -138,10 +144,7 @@ func (b *ircNetwork) deliverTells(nick, replyTarget string) {
 		return
 	}
 	b.clearPendingTell(b.name, nick)
-	for i, t := range tells {
-		if i > 0 {
-			time.Sleep(tellDeliveryPace) // stay under the server's flood limit
-		}
+	for _, t := range tells {
 		b.sendPrivmsg(replyTarget, fmt.Sprintf("%s: %s left a message %s ago: %s",
 			nick, t.FromNick, humanizeSince(t.CreatedAt), t.Message))
 	}
@@ -303,4 +306,27 @@ func humanizeDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// maxJoinReminders is how many on-join reminders are delivered at once; the rest wait for !reminder list.
+const maxJoinReminders = 5
+
+// deliverJoinReminders sends nick's on-join reminders (as NOTICEs) and any pending tells.
+func (b *ircNetwork) deliverJoinReminders(nick, channel string) {
+	rems, err := b.bookmarksDB.ListJoinReminders(b.name, nick)
+	if err != nil {
+		if b.getCfg().Bot.Debug {
+			log.Printf("[DEBUG] ListJoinReminders on JOIN: %v", err)
+		}
+	} else {
+		const maxJoinNoteBytes = 380
+		extra := max(len(rems)-maxJoinReminders, 0)
+		for _, r := range rems[:len(rems)-extra] {
+			b.sendNotice(nick, fmt.Sprintf("[Reminder %s] %s", r.PublicID, truncateReminderNotice(r.Note, maxJoinNoteBytes)))
+		}
+		if extra > 0 {
+			b.sendNotice(nick, fmt.Sprintf("(+%d more reminders: %sreminder list)", extra, b.pfx()))
+		}
+	}
+	b.deliverTells(nick, channel)
 }

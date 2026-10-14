@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"botIAask/internal/guard"
 )
 
 const userAgent = "botIAask/flight (+https://github.com/)"
@@ -118,17 +120,17 @@ func Fetch(ctx context.Context, p FetchParams) (*Snapshot, error) {
 	var wg sync.WaitGroup
 	if depI != "" {
 		wg.Add(1)
-		go func() {
+		guard.Go("flight airport", func() {
 			defer wg.Done()
 			depAP, _ = fetchAirport(ctx, client, base, key, depI)
-		}()
+		})
 	}
 	if arrI != "" {
 		wg.Add(1)
-		go func() {
+		guard.Go("flight airport", func() {
 			defer wg.Done()
 			arrAP, _ = fetchAirport(ctx, client, base, key, arrI)
-		}()
+		})
 	}
 	wg.Wait()
 	mergeAirport(snap, depAP, arrAP)
@@ -297,13 +299,6 @@ func getJSON(ctx context.Context, client *http.Client, base, path, key string, q
 		}
 	}
 	return any, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 type rawAirlabs struct {

@@ -128,6 +128,16 @@ func (b *ircNetwork) disableBotMode() {
 	}
 }
 
+// isSelf reports whether nick is the bot's own nick on this connection.
+func (b *ircNetwork) isSelf(nick string) bool {
+	fold := bookmarks.IRCCaseFoldNick(nick)
+	if fold == bookmarks.IRCCaseFoldNick(b.netCfg().Nickname) {
+		return true
+	}
+	// The live nick can differ from the configured one (nick collision handling).
+	return b.conn != nil && b.conn.CurrentNick() != "" && fold == bookmarks.IRCCaseFoldNick(b.conn.CurrentNick())
+}
+
 func (b *ircNetwork) isConnected() bool {
 	b.statsMu.Lock()
 	defer b.statsMu.Unlock()
@@ -491,7 +501,11 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		n.authMu.Lock()
 		n.authenticated = false
 		n.authMu.Unlock()
-		log.Printf("[ERROR] irc[%s]: Authentication failed: %s", n.name, e.Params[len(e.Params)-1])
+		reason := ""
+		if len(e.Params) > 0 {
+			reason = e.Params[len(e.Params)-1]
+		}
+		log.Printf("[ERROR] irc[%s]: Authentication failed: %s", n.name, reason)
 	}
 	n.conn.AddCallback("902", authFail)
 	n.conn.AddCallback("904", authFail)
@@ -535,7 +549,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		// +B is the only user mode the bot sets, so a 501 while bot_mode is on means the
 		// network doesn't support it: turn it off for this network so reconnects stop retrying.
 		if n.netCfg().BotMode {
-			log.Printf("irc[%s]: server rejected user mode (501: %s); network doesn't support +B, disabling bot_mode for it", n.name, strings.Join(e.Params[1:], " "))
+			log.Printf("irc[%s]: server rejected user mode (501: %s); network doesn't support +B, disabling bot_mode for it", n.name, strings.Join(e.Params[min(1, len(e.Params)):], " "))
 			guard.Go("irc:"+n.name+" disable bot_mode", n.disableBotMode) // off the read loop: rehash touches connections
 		}
 	})
@@ -577,6 +591,9 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 	})
 
 	n.conn.AddCallback("PRIVMSG", func(e ircmsg.Message) {
+		if len(e.Params) < 2 { // malformed line from the server; indexing below would panic
+			return
+		}
 		target := e.Params[0] // Channel or Nick
 		message := e.Params[1]
 		sender := e.Nick()
@@ -602,7 +619,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 				}
 				ch, reply := seenTargets(target, sender)
 				n.recordSeen(sender, ch, "action", actionMsg)
-				n.deliverTells(sender, reply)
+				n.deliverTellsAsync(sender, reply)
 			} else {
 				n.handleCTCPRequest(sender, target, ctcpContent)
 			}
@@ -619,7 +636,7 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 				cmdTarget = sender
 			}
 			n.dispatchCommand(cmdTarget, message, sender, e.Source)
-			n.deliverTells(sender, reply)
+			n.deliverTellsAsync(sender, reply)
 		}
 	})
 
@@ -658,25 +675,14 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 
 		if b.tracker != nil {
 			b.tracker.LogJoin(n.name)
-			n.updateTrackerAdmins()
+			n.refreshAdminsFor(sender)
 		}
 
 		n.recordSeen(sender, target, "join", "")
 
 		if b.bookmarksDB != nil && bookmarks.IRCCaseFoldNick(sender) != bookmarks.IRCCaseFoldNick(n.netCfg().Nickname) {
-			rems, err := b.bookmarksDB.ListJoinReminders(n.name, sender)
-			if err != nil {
-				if b.getCfg().Bot.Debug {
-					log.Printf("[DEBUG] ListJoinReminders on JOIN: %v", err)
-				}
-			} else {
-				const maxJoinNoteBytes = 380
-				for _, r := range rems {
-					note := truncateReminderNotice(r.Note, maxJoinNoteBytes)
-					n.sendNotice(sender, fmt.Sprintf("[Reminder %s] %s", r.PublicID, note))
-				}
-			}
-			n.deliverTells(sender, target)
+			// Off the read loop: a DB lookup plus several paced lines must not delay PING/PONG.
+			guard.Go("join delivery", func() { n.deliverJoinReminders(sender, target) })
 		}
 	})
 
@@ -696,11 +702,14 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		if members, exists := n.channelMembers[target]; exists {
 			delete(members, sender)
 		}
+		if n.isSelf(sender) { // we left: nobody in that channel is tracked any more
+			delete(n.channelMembers, target)
+		}
 		n.membersMu.Unlock()
 
 		if b.tracker != nil {
 			b.tracker.LogPart(n.name)
-			n.updateTrackerAdmins()
+			n.refreshAdminsFor(sender)
 		}
 
 		n.recordSeen(sender, target, "part", message)
@@ -723,10 +732,13 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		if members, exists := n.channelMembers[target]; exists {
 			delete(members, kicked)
 		}
+		if n.isSelf(kicked) {
+			delete(n.channelMembers, target)
+		}
 		n.membersMu.Unlock()
 
 		if b.tracker != nil {
-			n.updateTrackerAdmins()
+			n.refreshAdminsFor(kicked)
 		}
 	})
 
@@ -765,12 +777,16 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		// A quit ends the admin session: whoever takes the nick next must not inherit it
 		// (admin notices, "logged-in admin" stats).
 		b.loginsMu.Lock()
-		delete(b.loggedInAdmins, adminSessionKey(n.name, sender))
+		quitKey := adminSessionKey(n.name, sender)
+		wasAdmin := b.loggedInAdmins[quitKey]
+		delete(b.loggedInAdmins, quitKey)
 		b.loginsMu.Unlock()
 
 		if b.tracker != nil {
 			b.tracker.LogPart(n.name)
-			n.updateTrackerAdmins()
+			if wasAdmin {
+				n.updateTrackerAdmins()
+			}
 		}
 
 		n.recordSeen(sender, "", "quit", message)
@@ -797,13 +813,14 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 
 		b.loginsMu.Lock()
 		oldKey := adminSessionKey(n.name, sender)
-		if b.loggedInAdmins[oldKey] {
+		moved := b.loggedInAdmins[oldKey]
+		if moved {
 			delete(b.loggedInAdmins, oldKey)
 			b.loggedInAdmins[adminSessionKey(n.name, newNick)] = true
 		}
 		b.loginsMu.Unlock()
 
-		if b.tracker != nil {
+		if b.tracker != nil && moved {
 			n.updateTrackerAdmins()
 		}
 	})
@@ -812,6 +829,11 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		n.statsMu.Lock()
 		n.connected = false
 		n.statsMu.Unlock()
+		// Membership is rebuilt from JOIN/PART events after reconnecting; anyone who quit while we
+		// were away would otherwise stay "present" (and "online" for reminders) forever.
+		n.membersMu.Lock()
+		n.channelMembers = make(map[string]map[string]struct{})
+		n.membersMu.Unlock()
 		// Also clear authenticated: left true across a disconnect, it made
 		// Bot.IsAuthenticated() (an OR across networks) report stale SASL success for a
 		// network that's no longer even connected.
@@ -966,6 +988,14 @@ func (b *Bot) RequestQuit(override string) {
 	}
 }
 
+// WaitDisconnected blocks until no network is connected any more, or timeout passes. Call it after
+// RequestQuit so the QUIT lines are flushed before the process exits.
+func (b *Bot) WaitDisconnected(timeout time.Duration) {
+	for deadline := time.Now().Add(timeout); b.IsConnected() && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // IsConnected returns true if the bot is connected to at least one IRC network.
 func (b *Bot) IsConnected() bool {
 	for _, net := range b.networksSnapshot() {
@@ -1016,10 +1046,8 @@ func (b *ircNetwork) broadcastOne(channel, msg string) {
 		if strings.TrimSpace(chunk) == "" {
 			continue
 		}
-		b.sendPrivmsg(channel, b.sanitize(chunk))
-		time.Sleep(200 * time.Millisecond)
+		b.sendPrivmsg(channel, b.sanitize(chunk)) // paced by sendPrivmsg
 	}
-	time.Sleep(500 * time.Millisecond)
 }
 
 // SendMessage sends a message to a channel or user on the given network (used by the

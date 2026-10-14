@@ -63,9 +63,9 @@ bot:
     debug: false
     rate_limiting:
         enabled: true
-        limit: 3
-        burst: 2
-        window: 60
+        limit: 3   # not used any more (kept so old configs still load); burst + window decide
+        burst: 2   # max commands per sender (per network) in each window
+        window: 60 # seconds
 admin:
     admins:
         # Use hostmask format: ~nickname@user/host-ip (editable from web Identity panel or here)

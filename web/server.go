@@ -32,6 +32,7 @@ import (
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/github"
+	"botIAask/internal/guard"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
@@ -97,6 +98,9 @@ type Server struct {
 
 	httpSvr   *http.Server
 	httpSvrMu sync.Mutex
+
+	done      chan struct{} // closed by Close; stops the server's background loops
+	closeOnce sync.Once
 }
 
 type cryptoChartCacheEntry struct {
@@ -150,16 +154,17 @@ func ownConfig(cfg *config.Config) *config.Config {
 	return cfg
 }
 
-// NewServer creates a new web server instance
-func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, githubFetcher *github.Fetcher, aiClient *ai.Client, rehashExt func(source string, fromWeb bool) error) *Server {
+// NewServer creates a new web server instance. Call Close when it is discarded (web disabled by a
+// rehash) so its database handles and background loops are released.
+func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsTracker *stats.Tracker, bookmarksDB *bookmarks.Database, uploadsDB *uploads.Database, cryptoDB *crypto.Database, progtodoDB *progtodo.Database, githubFetcher *github.Fetcher, aiClient *ai.Client, rehashExt func(source string, fromWeb bool) error) (*Server, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
-		log.Fatalf("Failed to parse templates: %v", err)
+		return nil, fmt.Errorf("parse templates: %w", err)
 	}
 
 	authDB, err := NewAuthDatabase("data/web_auth.db")
 	if err != nil {
-		log.Fatalf("Failed to initialize auth database: %v", err)
+		return nil, fmt.Errorf("initialize auth database: %w", err)
 	}
 
 	if err := authDB.CheckAndSeedInitialAdmin(cfg); err != nil {
@@ -184,9 +189,46 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 		weatherClient: &http.Client{
 			Timeout: 22 * time.Second,
 		},
+		done: make(chan struct{}),
 	}
 	srv.initShortLinks()
-	return srv
+	guard.Go("web auth purge", srv.purgeAuthLoop)
+	return srv, nil
+}
+
+// purgeAuthLoop deletes expired dashboard sessions and CSRF tokens (they were only dropped when
+// the same token was presented again) until the server is closed.
+func (s *Server) purgeAuthLoop() {
+	for {
+		if err := s.authDB.PurgeExpired(); err != nil {
+			log.Printf("auth purge: %v", err)
+		}
+		select {
+		case <-s.done:
+			return
+		case <-time.After(6 * time.Hour):
+		}
+	}
+}
+
+// Close releases what NewServer opened: background loops, the auth and short-link databases and
+// the "self" shortener hook. Stop must have been called first; the Server is unusable afterwards.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() {
+		if s.done != nil {
+			close(s.done)
+		}
+		if s.loginRateLimiter != nil {
+			s.loginRateLimiter.Close()
+		}
+		if s.shortlinks != nil {
+			rss.SetSelfShortener(nil)
+			s.shortlinks.Close()
+		}
+		if s.authDB != nil {
+			s.authDB.Close()
+		}
+	})
 }
 
 // Open SSE streams allowed per client IP / in total (the dashboard itself uses one or two per tab).
@@ -1341,7 +1383,7 @@ func (s *Server) handleRSSFetchNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.rssFetcher.Fetch()
+	guard.Go("rss fetch now", s.rssFetcher.Fetch)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "Fetching started"})
@@ -2947,7 +2989,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if time.Since(upload.CreatedAt) > 30*time.Minute {
+	if time.Since(upload.CreatedAt) > uploads.SessionTTL {
 		http.Error(w, "This token has expired", http.StatusBadRequest)
 		return
 	}

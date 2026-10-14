@@ -307,6 +307,27 @@ func (d *Database) CreateFileUploadSession(token, username, channel, network str
 	return err
 }
 
+// SessionTTL is how long a !paste/!upload link can still be used to submit.
+const SessionTTL = 30 * time.Minute
+
+// CountOpenSessions returns the unused, unexpired !paste/!upload links username holds on network.
+func (d *Database) CountOpenSessions(username, network string) (int, error) {
+	var n int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM uploads WHERE username = ? AND COALESCE(network,'') = ? AND status = 'pending_form' AND created_at > ?`,
+		username, network, time.Now().Add(-SessionTTL)).Scan(&n)
+	return n, err
+}
+
+// PurgeStaleSessions deletes upload links that were never submitted (or were cancelled/rejected)
+// and are older than maxAge. Approved and pending-approval items are never touched.
+func (d *Database) PurgeStaleSessions(maxAge time.Duration) (int64, error) {
+	res, err := d.db.Exec(`DELETE FROM uploads WHERE status IN ('pending_form', 'cancelled') AND created_at < ?`, time.Now().Add(-maxAge))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (d *Database) GetUploadByToken(token string) (*Upload, error) {
 	row := d.db.QueryRow(`
 		SELECT id, COALESCE(ticket_id,''), token,

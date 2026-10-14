@@ -157,8 +157,8 @@ type BotConfig struct {
 // RateLimitConfig holds settings for rate limiting.
 type RateLimitConfig struct {
 	Enabled bool `yaml:"enabled"`
-	Limit   int  `yaml:"limit"`  // commands per minute
-	Burst   int  `yaml:"burst"`  // allowance
+	Limit   int  `yaml:"limit"`  // unused (older configs still carry it)
+	Burst   int  `yaml:"burst"`  // commands allowed per sender in each window
 	Window  int  `yaml:"window"` // window in seconds (default 60)
 }
 

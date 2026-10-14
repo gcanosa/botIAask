@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"botIAask/internal/guard"
 	"botIAask/internal/securefs"
 )
 
@@ -135,7 +136,7 @@ func rotationDaysSnapshot() int {
 func StartLogRotator(initial int) {
 	SetRotationDays(initial)
 	rotatorOnce.Do(func() {
-		go logRotatorLoop()
+		guard.Go("log rotator", logRotatorLoop)
 	})
 }
 

@@ -6,26 +6,62 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"botIAask/config"
 )
 
-// WritePIDFile writes the current process ID to the specified file.
+// pidLock keeps the daemon's PID file flock'ed for the life of the process: the lock, not the pid
+// number, is what proves a daemon is alive (a pid recorded before a crash or reboot may belong to an
+// unrelated process by now).
+var pidLock *os.File
+
+// WritePIDFile locks the PID file and writes the current process ID into it. It fails when another
+// instance already holds the lock.
 func WritePIDFile(pidFile string) error {
-	pid := os.Getpid()
 	absPath, err := filepath.Abs(pidFile)
 	if err != nil {
 		return fmt.Errorf("failed to resolve absolute path for pid file: %w", err)
 	}
 
-	err = os.WriteFile(absPath, []byte(fmt.Sprintf("%d", pid)), 0644)
+	f, err := os.OpenFile(absPath, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
+		return fmt.Errorf("failed to open pid file: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return fmt.Errorf("pid file %s is locked: another instance is running", absPath)
+	}
+	if err := f.Truncate(0); err != nil {
+		f.Close()
 		return fmt.Errorf("failed to write pid file: %w", err)
 	}
-
+	if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to write pid file: %w", err)
+	}
+	pidLock = f // deliberately never closed: the lock lives as long as the process
 	return nil
+}
+
+// PIDFileInUse reports whether a running daemon holds the lock on pidFile.
+func PIDFileInUse(pidFile string) bool {
+	absPath, err := filepath.Abs(pidFile)
+	if err != nil {
+		return false
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return true // held exclusively by a live daemon
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
 }
 
 // ReadPIDFile reads the process ID from the specified file.
@@ -106,14 +142,11 @@ func StartDaemon(w io.Writer, cfg *config.Config, color bool) error {
 	}
 
 	// Check if already running.
-	pid, err := ReadPIDFile(cfg.Daemon.PIDFile)
-	if err == nil {
-		if IsProcessRunning(pid) {
-			return fmt.Errorf("bot is already running (PID: %d)", pid)
-		}
-		// Stale PID file, remove it.
-		DeletePIDFile(cfg.Daemon.PIDFile)
+	if PIDFileInUse(cfg.Daemon.PIDFile) {
+		pid, _ := ReadPIDFile(cfg.Daemon.PIDFile)
+		return fmt.Errorf("bot is already running (PID: %d)", pid)
 	}
+	DeletePIDFile(cfg.Daemon.PIDFile) // stale (or absent) PID file
 
 	// Filter out -mode start and -mode restart from child arguments to prevent loops
 	var childArgs []string
@@ -149,8 +182,7 @@ func StartDaemon(w io.Writer, cfg *config.Config, color bool) error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
-	err = cmd.Start()
-	if err != nil {
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
@@ -166,7 +198,8 @@ func StopDaemon(w io.Writer, cfg *config.Config, color bool) error {
 		return fmt.Errorf("failed to read PID file: %w", err)
 	}
 
-	if !IsProcessRunning(pid) {
+	// A pid alone is not proof: it may have been reused by an unrelated process since a crash.
+	if !PIDFileInUse(cfg.Daemon.PIDFile) {
 		DeletePIDFile(cfg.Daemon.PIDFile)
 		return fmt.Errorf("bot is not running (stale PID file removed)")
 	}

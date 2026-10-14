@@ -330,6 +330,7 @@ func main() {
 			}
 		}
 		bot.SetUploadsDatabase(uploadsDB)
+		guard.Go("uploads purge", func() { purgeStaleUploadLinks(uploadsDB) })
 	}
 
 	// Initialize Crypto Database
@@ -470,6 +471,7 @@ func runAsDaemon(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssFetch
 	}
 
 	bot.RequestQuit("")
+	bot.WaitDisconnected(3 * time.Second) // let the QUIT reach the server before the process exits
 
 	// Clean up PID file on exit
 	DeletePIDFile(pidFile)
@@ -516,13 +518,15 @@ func runInForeground(cfg *config.Config, bot *irc.Bot, aiClient *ai.Client, rssF
 	}
 
 	bot.RequestQuit("")
-
-	// Give some time for graceful shutdown
-	time.Sleep(1 * time.Second)
+	bot.WaitDisconnected(3 * time.Second)
 }
 
 func startWebServer(cfg *config.Config, bot *irc.Bot, rf *rss.Fetcher, st *stats.Tracker, bdb *bookmarks.Database, udb *uploads.Database, cdb *crypto.Database, tdb *progtodo.Database, ghf *github.Fetcher, aiClient *ai.Client, rehash func(string, bool) error, webMu *sync.Mutex, webRef **web.Server) {
-	ws := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, ghf, aiClient, rehash)
+	ws, err := web.NewServer(cfg, bot, rf, st, bdb, udb, cdb, tdb, ghf, aiClient, rehash)
+	if err != nil {
+		log.Printf("Web server not started: %v", err)
+		return
+	}
 	webMu.Lock()
 	*webRef = ws
 	webMu.Unlock()
@@ -539,7 +543,7 @@ func signalDaemonRehash(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("read pid file: %w", err)
 	}
-	if !IsProcessRunning(pid) {
+	if !PIDFileInUse(cfg.Daemon.PIDFile) {
 		return fmt.Errorf("no running process for PID %d", pid)
 	}
 	proc, err := os.FindProcess(pid)
@@ -582,4 +586,17 @@ func resolveUploadsDBPath(configPath, dbPath string) (string, error) {
 	}
 	projectRoot := filepath.Dir(filepath.Dir(cfgAbs))
 	return filepath.Join(projectRoot, dbPath), nil
+}
+
+// purgeStaleUploadLinks deletes !paste/!upload links that were never used (they expire after 30
+// minutes anyway) and cancelled/rejected tickets once a day; approved items are never touched.
+func purgeStaleUploadLinks(db *uploads.Database) {
+	for {
+		if n, err := db.PurgeStaleSessions(24 * time.Hour); err != nil {
+			log.Printf("uploads purge: %v", err)
+		} else if n > 0 {
+			log.Printf("uploads purge: removed %d stale upload rows", n)
+		}
+		time.Sleep(24 * time.Hour)
+	}
 }
