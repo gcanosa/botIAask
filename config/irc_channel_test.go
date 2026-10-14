@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,5 +121,22 @@ func TestIsKeyedChannel(t *testing.T) {
 	}
 	if IsKeyedChannel(cfg, "#staff", "b") || IsKeyedChannel(cfg, "#pub", "a") {
 		t.Fatal("unkeyed channel reported as keyed")
+	}
+}
+
+// Older config.yaml files still carry keys that no longer exist (web.auth.enabled, rate_limiting.limit
+// is still read but unused); loading must not fail on them.
+func TestLoadConfigIgnoresRemovedKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yml := "irc:\n  networks:\n    - name: n\n      server: s\n      port: 6667\n      nickname: b\nweb:\n  enabled: true\n  auth:\n    enabled: false\n    username: admin\n    password: ''\n"
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("legacy config refused: %v", err)
+	}
+	if cfg.Web.Auth.Username != "admin" {
+		t.Fatalf("auth.username lost: %+v", cfg.Web.Auth)
 	}
 }

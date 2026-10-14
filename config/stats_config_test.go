@@ -31,15 +31,12 @@ func TestStatsConfig_ShouldSaveToDB(t *testing.T) {
 	})
 }
 
-func TestStatsRetentionDefault(t *testing.T) {
+// retention_days unset (0) still means "keep everything": defaults must never start deleting an
+// existing deployment's history. The history endpoint is bounded by bucketing instead.
+func TestStatsRetentionUnsetKeepsEverything(t *testing.T) {
 	cfg := &Config{}
 	applyStatsDefaults(cfg)
-	if cfg.Stats.RetentionDays != 30 {
-		t.Fatalf("retention_days default = %d, want 30", cfg.Stats.RetentionDays)
-	}
-	cfg.Stats.RetentionDays = 7
-	applyStatsDefaults(cfg)
-	if cfg.Stats.RetentionDays != 7 {
-		t.Fatal("explicit retention_days must be kept")
+	if cfg.Stats.RetentionDays != 0 {
+		t.Fatalf("retention_days default = %d, want 0 (keep forever)", cfg.Stats.RetentionDays)
 	}
 }

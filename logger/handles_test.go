@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"botIAask/internal/securefs"
 )
 
 func withTempLogs(t *testing.T) string {
@@ -43,8 +45,25 @@ func TestLogChannelEventReusesHandleAndWritesThrough(t *testing.T) {
 	if !strings.Contains(got, "<alice> one\n") || !strings.Contains(got, "* bob waves\n") {
 		t.Fatalf("unexpected log:\n%s", got)
 	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("logs dir mode %v, want the default 0755", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, ChannelFileKey("#chan", "net")+"_"+time.Now().Format("2006-01-02")+".log")); fi.Mode().Perm() != 0o644 {
+		t.Fatalf("log file mode %v, want the default 0644", fi.Mode().Perm())
+	}
+}
+
+// bot.private_files: owner-only dirs and files.
+func TestLogChannelEventPrivateModes(t *testing.T) {
+	securefs.SetPrivate(true)
+	t.Cleanup(func() { securefs.SetPrivate(false) })
+	dir := withTempLogs(t)
+	LogChannelEvent("net", "#chan", EventMessage, "alice", "one", "")
 	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
 		t.Fatalf("logs dir mode %v, want 0700", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, ChannelFileKey("#chan", "net")+"_"+time.Now().Format("2006-01-02")+".log")); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("log file mode %v, want 0600", fi.Mode().Perm())
 	}
 }
 

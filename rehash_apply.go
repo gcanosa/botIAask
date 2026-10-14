@@ -11,6 +11,7 @@ import (
 	"botIAask/config"
 	"botIAask/github"
 	"botIAask/internal/guard"
+	"botIAask/internal/securefs"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -51,6 +52,7 @@ func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
 	diff := config.RehashDiff(before, newCfg)
 	t := time.Now().Format(time.RFC3339)
 
+	securefs.SetPrivate(newCfg.Bot.PrivateFiles)
 	s.aiClient.UpdateConfig(newCfg.AI.LMStudioURL, newCfg.AI.Model)
 	s.bot.ApplyLiveConfig(newCfg)
 	s.rssFetcher.ApplyConfig(newCfg)

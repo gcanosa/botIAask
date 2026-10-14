@@ -104,3 +104,41 @@ func TestExpiresAtBackfill(t *testing.T) {
 		t.Fatalf("backfilled expires_at = %d, want ~%d", exp, want)
 	}
 }
+
+// An uploads.db from before expires_at existed upgrades on open: approved, still-valid pastes keep
+// showing up in the public list and expired ones stay hidden.
+func TestOpenUpgradesPreExpiresAtDatabase(t *testing.T) {
+	path := t.TempDir() + "/u.db"
+	pastes, files := t.TempDir(), t.TempDir()
+	d, err := NewDatabase(path, pastes, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvePaste(t, d, "fresh", 30)
+	approvePaste(t, d, "stale", 1)
+	approvePaste(t, d, "forever", 0)
+	old := time.Now().Add(-72 * time.Hour)
+	if _, err := d.db.Exec(`UPDATE uploads SET approved_at = ? WHERE ticket_id = 'stale'`, old); err != nil {
+		t.Fatal(err)
+	}
+	// drop the column the way an old database would not have it
+	if _, err := d.db.Exec(`ALTER TABLE uploads DROP COLUMN expires_at`); err != nil {
+		t.Skipf("sqlite cannot drop the column here: %v", err)
+	}
+	d.Close()
+
+	d, err = NewDatabase(path, pastes, files)
+	if err != nil {
+		t.Fatalf("upgrade failed: %v", err)
+	}
+	defer d.Close()
+	page, total, err := d.GetApprovedPastes(10, 0, time.Now(), true)
+	if err != nil || total != 2 || len(page) != 2 {
+		t.Fatalf("public list after upgrade: total=%d len=%d err=%v", total, len(page), err)
+	}
+	for _, u := range page {
+		if u.TicketID == "stale" {
+			t.Fatal("expired paste visible after upgrade")
+		}
+	}
+}
