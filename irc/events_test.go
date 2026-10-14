@@ -9,6 +9,7 @@ import (
 
 	"botIAask/bookmarks"
 	"botIAask/config"
+	"botIAask/logger"
 	"botIAask/progtodo"
 	"botIAask/stats"
 
@@ -20,6 +21,7 @@ import (
 func newEventNetwork(t *testing.T) (*ircNetwork, *sink) {
 	t.Helper()
 	t.Chdir(t.TempDir())
+	t.Cleanup(logger.CloseAll)
 	cfg := &config.Config{}
 	cfg.Bot.CommandPrefix = "!"
 	cfg.IRC.Networks = []config.IRCNetworkConfig{{Name: "test", Server: "irc.example.org", Port: 6667, Nickname: "bot"}}

@@ -124,6 +124,14 @@ func parseLogFileName(name string) (key, day string, gz bool, ok bool) {
 	return base[:len(base)-11], base[len(base)-10:], gz, true
 }
 
+// dayFiles are all the log files of one network+channel+day (several spellings may exist).
+type dayFiles struct {
+	network, channel, day string
+	dir                   int
+	paths                 []string
+	gz                    []bool
+}
+
 // RollupLogs parses log files under dirs into chan_activity. Days already stored are skipped
 // unless they're within the last recentDays (today is still being written), so the first run
 // backfills everything on disk and later runs are cheap. Returns rows written.
@@ -150,12 +158,6 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 	// Collect every file per (network, channel, day) first: before log keys were lower-cased
 	// one day could be split across spellings (#News / #news), and all of them count. Plain
 	// logs win over archived copies of the same day (an earlier dir wins over a later one).
-	type dayFiles struct {
-		network, channel, day string
-		dir                   int
-		paths                 []string
-		gz                    []bool
-	}
 	byID := map[string]*dayFiles{}
 	var order []string
 	for di, dir := range dirs {
@@ -195,6 +197,10 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 	written := 0
 	for _, id := range order {
 		df := byID[id]
+		sig := fileSignature(df.paths)
+		if d.unchangedSinceRollup(id, sig) {
+			continue // quiet channels are not re-read every 10 minutes
+		}
 		var readers []io.Reader
 		var closers []io.Closer
 		for i, p := range df.paths {
@@ -225,8 +231,10 @@ func (d *Database) RollupLogs(dirs []string, nets []NetNick, prefix string, rece
 			log.Printf("chan rollup %s %s %s: %v", df.network, df.channel, df.day, err)
 			continue
 		}
+		d.markRolledUp(id, sig)
 		written++
 	}
+	d.forgetRolledExcept(byID)
 	return written
 }
 
@@ -237,5 +245,46 @@ func (d *Database) PruneChanActivity(keepDays int) {
 	}
 	if _, err := d.db.Exec(`DELETE FROM chan_activity WHERE day < ?`, time.Now().AddDate(0, 0, -keepDays).Format("2006-01-02")); err != nil {
 		log.Printf("chan_activity prune: %v", err)
+	}
+}
+
+// fileSignature identifies the current content of a day's log files by name, size and mtime.
+func fileSignature(paths []string) string {
+	var sb strings.Builder
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			sb.WriteString(p + "|missing;")
+			continue
+		}
+		fmt.Fprintf(&sb, "%s|%d|%d;", p, fi.Size(), fi.ModTime().UnixNano())
+	}
+	return sb.String()
+}
+
+func (d *Database) unchangedSinceRollup(id, sig string) bool {
+	d.rolledMu.Lock()
+	defer d.rolledMu.Unlock()
+	return d.rolled[id] == sig
+}
+
+func (d *Database) markRolledUp(id, sig string) {
+	d.rolledMu.Lock()
+	defer d.rolledMu.Unlock()
+	if d.rolled == nil {
+		d.rolled = make(map[string]string)
+	}
+	d.rolled[id] = sig
+}
+
+// forgetRolledExcept drops signatures of days that are no longer candidates (yesterday's files
+// once they are stored and old), so the map stays as small as the recent window.
+func (d *Database) forgetRolledExcept(current map[string]*dayFiles) {
+	d.rolledMu.Lock()
+	defer d.rolledMu.Unlock()
+	for id := range d.rolled {
+		if _, ok := current[id]; !ok {
+			delete(d.rolled, id)
+		}
 	}
 }

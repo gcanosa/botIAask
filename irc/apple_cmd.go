@@ -2,7 +2,6 @@ package irc
 
 import (
 	"context"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"botIAask/internal/httpx"
+	"botIAask/internal/ttlcache"
 	"botIAask/meta"
 )
 
@@ -110,7 +111,7 @@ func fetchAppleReleases(ctx context.Context) (map[string]appleRelease, error) {
 			Title string `xml:"title"`
 		} `xml:"channel>item"`
 	}
-	if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
+	if err := httpx.DecodeXML(resp.Body, httpx.MaxBody, &feed); err != nil {
 		return nil, fmt.Errorf("apple feed: %w", err)
 	}
 	titles := make([]string, len(feed.Items))
@@ -143,8 +144,15 @@ func formatAppleReleases(r map[string]appleRelease) string {
 	return "\x0303,01[APPLE]\x03 " + strings.Join(parts, " · ")
 }
 
+// appleCache keeps the formatted !apple line for 10 minutes (Apple publishes a few releases a month).
+var appleCache = ttlcache.Cache[string, string]{TTL: 10 * time.Minute, Max: 1}
+
 // handleAppleCommand reports the newest stable release of each Apple OS (!apple).
 func (b *ircNetwork) handleAppleCommand(target, sender string) {
+	if line, ok := appleCache.Get("apple"); ok {
+		b.sendPrivmsg(target, b.sanitize(line))
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	r, err := fetchAppleReleases(ctx)
@@ -155,5 +163,7 @@ func (b *ircNetwork) handleAppleCommand(target, sender string) {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: apple: %v", sender, err)))
 		return
 	}
-	b.sendPrivmsg(target, b.sanitize(formatAppleReleases(r)))
+	line := formatAppleReleases(r)
+	appleCache.Put("apple", line)
+	b.sendPrivmsg(target, b.sanitize(line))
 }

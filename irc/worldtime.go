@@ -3,7 +3,9 @@ package irc
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
+	_ "time/tzdata" // zone data in the binary: slim container images may not ship /usr/share/zoneinfo
 )
 
 // worldTimeCities is west→east. Each IANA location appears at most once; labels are the display names.
@@ -29,22 +31,38 @@ var worldTimeCities = []struct {
 	{"Auckland", "Pacific/Auckland"},
 }
 
-// handleTimeCommand shows current local times for major world cities, one per IANA zone.
-func (b *ircNetwork) handleTimeCommand(target string) {
-	now := time.Now()
+// worldTimeZones loads each distinct zone once (zoneinfo is parsed from disk on every LoadLocation);
+// zones that fail to load are left out.
+var worldTimeZones = sync.OnceValue(func() []struct {
+	label string
+	loc   *time.Location
+} {
+	var out []struct {
+		label string
+		loc   *time.Location
+	}
 	seen := make(map[string]struct{})
-	var parts []string
 	for _, c := range worldTimeCities {
 		if _, dup := seen[c.Location]; dup {
 			continue
 		}
 		seen[c.Location] = struct{}{}
-		loc, err := time.LoadLocation(c.Location)
-		if err != nil {
-			continue
+		if loc, err := time.LoadLocation(c.Location); err == nil {
+			out = append(out, struct {
+				label string
+				loc   *time.Location
+			}{c.Label, loc})
 		}
-		t := now.In(loc)
-		parts = append(parts, fmt.Sprintf("%s %s", c.Label, t.Format("Mon 2 15:04:05 MST 2006")))
+	}
+	return out
+})
+
+// handleTimeCommand shows current local times for major world cities, one per IANA zone.
+func (b *ircNetwork) handleTimeCommand(target string) {
+	now := time.Now()
+	var parts []string
+	for _, c := range worldTimeZones() {
+		parts = append(parts, fmt.Sprintf("%s %s", c.label, now.In(c.loc).Format("Mon 2 15:04:05 MST 2006")))
 	}
 	msg := "World time: " + strings.Join(parts, " | ")
 	for _, chunk := range splitUTF8ByByteBudget(msg, ircTextBudget) {

@@ -2,8 +2,10 @@ package logger
 
 import (
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -41,19 +43,82 @@ const (
 	EventTopic // sender = who changed it, message = new topic
 )
 
+// logHandleIdle is how long an open log file may sit unused before its handle is closed.
+const logHandleIdle = 10 * time.Minute
+
+// logHandles caches one open append handle per day file. Opening, writing and closing a file for
+// every single line (plus a MkdirAll) under the global lock made every event cost four syscalls
+// and serialised all channels behind disk latency; a netsplit writes thousands of QUIT lines.
+type logHandle struct {
+	f    *os.File
+	used time.Time
+}
+
+var (
+	logHandles    = map[string]*logHandle{} // guarded by mu
+	lastHandleGC  time.Time
+	logsDirExists bool
+)
+
+// openLogLocked returns the append handle for path, opening it (and creating logs/) on first use.
+// Caller holds mu.
+func openLogLocked(path string, now time.Time) (*os.File, error) {
+	if h, ok := logHandles[path]; ok {
+		h.used = now
+		return h.f, nil
+	}
+	if !logsDirExists {
+		if err := securefs.MkdirPrivate(logsDir); err != nil {
+			return nil, err
+		}
+		logsDirExists = true
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if errors.Is(err, fs.ErrNotExist) { // logs/ was removed while we ran
+		if err = securefs.MkdirPrivate(logsDir); err == nil {
+			f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	logHandles[path] = &logHandle{f: f, used: now}
+	return f, nil
+}
+
+// closeIdleLocked closes handles unused for logHandleIdle (yesterday's files after midnight,
+// channels that went quiet). Runs at most once a minute. Caller holds mu.
+func closeIdleLocked(now time.Time) {
+	if now.Sub(lastHandleGC) < time.Minute {
+		return
+	}
+	lastHandleGC = now
+	for path, h := range logHandles {
+		if now.Sub(h.used) > logHandleIdle {
+			h.f.Close()
+			delete(logHandles, path)
+		} else if _, err := os.Stat(path); err != nil {
+			// The file was removed or rotated away under us: stop writing into the unlinked inode.
+			h.f.Close()
+			delete(logHandles, path)
+		}
+	}
+}
+
+// CloseAll closes every cached log handle (shutdown, and tests that change directory).
+func CloseAll() {
+	mu.Lock()
+	defer mu.Unlock()
+	for path, h := range logHandles {
+		h.f.Close()
+		delete(logHandles, path)
+	}
+	logsDirExists = false
+}
+
 // LogChannelEvent logs an event to the daily channel log file.
 // Format resembles traditional IRC logs.
 func LogChannelEvent(serverName, channel string, eventType EventType, sender, message, target string) {
-	if channel == "" || (channel[0] != '#' && channel[0] != '&') {
-		// Possibly a private message, you can choose to log this or not.
-		// For PMs, we use the "channel" as the target nick.
-	}
-
-	if err := securefs.MkdirPrivate(logsDir); err != nil {
-		log.Printf("Error creating logs directory: %v\n", err)
-		return
-	}
-
 	now := time.Now()
 	dateStr := now.Format("2006-01-02")
 	timeStr := now.Format("15:04:05")
@@ -62,16 +127,6 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 
 	filename := fmt.Sprintf("%s_%s.log", safeChannel, dateStr)
 	fullpath := filepath.Join(logsDir, filename)
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	f, err := os.OpenFile(fullpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		log.Printf("Error opening log file: %v\n", err)
-		return
-	}
-	defer f.Close()
 
 	var logLine string
 	switch eventType {
@@ -106,7 +161,20 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 		logLine = fmt.Sprintf("[%s] <%s> %s\n", timeStr, sender, message)
 	}
 
-	f.WriteString(logLine)
+	mu.Lock()
+	defer mu.Unlock()
+	closeIdleLocked(now)
+	f, err := openLogLocked(fullpath, now)
+	if err != nil {
+		log.Printf("Error opening log file: %v\n", err)
+		return
+	}
+	// One write per line to an O_APPEND file: readers (web tail, rollups) never see half a line.
+	if _, err := f.WriteString(logLine); err != nil {
+		log.Printf("Error writing log file: %v\n", err)
+		f.Close() // reopen on the next line (disk was full, file was removed, ...)
+		delete(logHandles, fullpath)
+	}
 }
 
 // SetRotationDays updates how far back daily .log files are kept before archival.

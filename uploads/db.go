@@ -92,6 +92,10 @@ func NewDatabase(dbPath, pastesDir, filesDir string) (*Database, error) {
 		sqldb.Close()
 		return nil, err
 	}
+	if err := d.backfillExpiresAt(); err != nil {
+		sqldb.Close()
+		return nil, err
+	}
 
 	if err := os.MkdirAll(pastesDir, 0755); err != nil {
 		return nil, err
@@ -154,6 +158,48 @@ func migrateUploadsSchema(db *sql.DB) error {
 	}
 	if err := add("network", "TEXT DEFAULT ''"); err != nil {
 		return err
+	}
+	// expires_at: unix time when public access ends (NULL = never); lets SQL page the public list.
+	if err := add("expires_at", "INTEGER"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// backfillExpiresAt fills expires_at for items approved before the column existed.
+func (d *Database) backfillExpiresAt() error {
+	rows, err := d.db.Query(`SELECT id, approved_at, expires_in_days FROM uploads
+		WHERE status = 'approved' AND expires_at IS NULL AND COALESCE(expires_in_days, 0) > 0 AND approved_at IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("backfill expires_at select: %w", err)
+	}
+	type fix struct {
+		id  int64
+		exp int64
+	}
+	var fixes []fix
+	for rows.Next() {
+		var id int64
+		var at sql.NullTime
+		var days int
+		if err := rows.Scan(&id, &at, &days); err != nil {
+			rows.Close()
+			return err
+		}
+		if u := (&Upload{ExpiresInDays: days, ApprovedAt: at}); at.Valid {
+			if exp, ok := u.AccessExpiresAt(); ok {
+				fixes = append(fixes, fix{id, exp.Unix()})
+			}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, f := range fixes {
+		if _, err := d.db.Exec(`UPDATE uploads SET expires_at = ? WHERE id = ?`, f.exp, f.id); err != nil {
+			return fmt.Errorf("backfill expires_at update: %w", err)
+		}
 	}
 	return nil
 }
@@ -437,8 +483,11 @@ func (d *Database) CancelUploadByToken(token string) (username, channel, network
 func (d *Database) ApproveTicket(ticketID string) error {
 	// Only a pending ticket can be approved: an already approved one would get its expiry clock
 	// reset, and a rejected/cancelled one has had its file deleted.
-	q := `UPDATE uploads SET status = 'approved', approved_at = ? WHERE ticket_id = ? AND status = 'pending_approval'`
-	res, err := d.db.Exec(q, time.Now(), ticketID)
+	now := time.Now()
+	q := `UPDATE uploads SET status = 'approved', approved_at = ?,
+		expires_at = CASE WHEN COALESCE(expires_in_days, 0) > 0 THEN ? + MIN(expires_in_days, ?) * 86400 ELSE NULL END
+		WHERE ticket_id = ? AND status = 'pending_approval'`
+	res, err := d.db.Exec(q, now, now.Unix(), maxExpiryDays, ticketID)
 	if err != nil {
 		return err
 	}
@@ -481,47 +530,41 @@ func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
 	return &u, nil
 }
 
-// GetApprovedPastes returns approved text pastes, newest first.
-// If excludePublicExpired is true, rows past their public expiry (approved_at + expires_in_days) are omitted; use for non-staff list views.
-// Expiry is applied in Go (IsAccessExpired) so it matches /p/ and survives SQLite/driver timestamp formats.
+// GetApprovedPastes returns one page of approved text pastes, newest first, and the total count.
+// If excludePublicExpired is true, pastes past their public expiry (expires_at) are omitted; use
+// for non-staff list views. Paging is done in SQL: this backs a public endpoint.
 func (d *Database) GetApprovedPastes(limit, offset int, now time.Time, excludePublicExpired bool) ([]*Upload, int, error) {
 	where := `status = 'approved' AND COALESCE(upload_type,'paste') = 'paste'`
+	var args []any
+	if excludePublicExpired {
+		where += ` AND (expires_at IS NULL OR expires_at >= ?)`
+		args = append(args, now.Unix())
+	}
+	var total int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM uploads WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := d.db.Query(`
 		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
 		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
 		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
 		       COALESCE(is_public, 1)
-		FROM uploads WHERE ` + where + ` ORDER BY approved_at DESC`)
+		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	list, _, err := scanUploadRows(rows, 0)
+	list, _, err := scanUploadRows(rows, total)
 	if err != nil {
 		return nil, 0, err
 	}
-	var filtered []*Upload
-	if excludePublicExpired {
-		for _, u := range list {
-			if !u.IsAccessExpired(now) {
-				filtered = append(filtered, u)
-			}
-		}
-	} else {
-		filtered = list
+	if list == nil {
+		list = []*Upload{}
 	}
-	total := len(filtered)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= total {
-		return []*Upload{}, total, nil
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	return filtered[offset:end], total, nil
+	return list, total, nil
 }
 
 func (d *Database) GetApprovedFiles(limit, offset int, publicOnly bool) ([]*Upload, int, error) {

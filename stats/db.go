@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Database struct {
 	db *sql.DB
+
+	// rolled remembers the size+mtime of every day's log files at their last rollup, so the 10-minute
+	// refresh only re-parses days whose logs actually changed (see RollupLogs).
+	rolledMu sync.Mutex
+	rolled   map[string]string
 }
 
 type StatEntry struct {

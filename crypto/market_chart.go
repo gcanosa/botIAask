@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"botIAask/internal/httpx"
 )
 
 // FetchMarketChart returns [timestamp_ms, price] pairs from CoinGecko (sorted ascending by time).
@@ -46,7 +47,7 @@ func FetchMarketChart(client *http.Client, geckoID, days string) ([][2]float64, 
 	var body struct {
 		Prices [][2]float64 `json:"prices"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, httpx.MaxBody, &body); err != nil {
 		return nil, err
 	}
 	return body.Prices, nil

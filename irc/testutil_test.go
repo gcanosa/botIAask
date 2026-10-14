@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"botIAask/config"
+	"botIAask/logger"
 )
 
 // sink collects what a test network "sent".
@@ -31,6 +32,7 @@ func (s *sink) all() []string {
 func newCaptureNetwork(t *testing.T, cfg *config.Config) (*ircNetwork, *sink) {
 	t.Helper()
 	t.Chdir(t.TempDir())
+	t.Cleanup(logger.CloseAll) // handles are cached per relative path; this dir is about to vanish
 	if len(cfg.IRC.Networks) == 0 {
 		cfg.IRC.Networks = []config.IRCNetworkConfig{{Name: "test", Nickname: "bot"}}
 	}

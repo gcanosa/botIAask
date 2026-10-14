@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/net/publicsuffix"
+
+	"botIAask/internal/httpx"
 )
 
 var ipcheckHTTP = &http.Client{Timeout: 10 * time.Second}
@@ -95,7 +97,7 @@ func fetchIPWho(ctx context.Context, ip net.IP) (*ipwhoResp, error) {
 		return nil, fmt.Errorf("lookup service returned HTTP %d", resp.StatusCode)
 	}
 	var r ipwhoResp
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 64<<10)).Decode(&r); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, 64<<10, &r); err != nil {
 		return nil, fmt.Errorf("bad response from lookup service")
 	}
 	if !r.Success {
@@ -274,7 +276,7 @@ func fetchRDAP(ctx context.Context, domain string) (*rdapResp, error) {
 		return nil, fmt.Errorf("rdap: HTTP %d", resp.StatusCode)
 	}
 	var r rdapResp
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 512<<10)).Decode(&r); err != nil {
+	if err := httpx.DecodeJSON(resp.Body, 512<<10, &r); err != nil {
 		return nil, err
 	}
 	return &r, nil
