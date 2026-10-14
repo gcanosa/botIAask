@@ -2,8 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"botIAask/config"
@@ -37,9 +39,7 @@ func (s *Server) joinAnnounceChannels(channels []string) {
 // handleGitHubTrackerSettings: GET returns enabled/interval + per-repo poll status; POST
 // updates enabled/interval. Mirrors handleRSSSettings.
 func (s *Server) handleGitHubTrackerSettings(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.requireAdminCSRF(r)
-	if !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if !s.requireAdmin(w, r) {
 		return
 	}
 
@@ -72,18 +72,17 @@ func (s *Server) handleGitHubTrackerSettings(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		s.cfgMu.Lock()
-		oldEnabled := s.cfg.GitHubTracker.Enabled
-		oldInterval := s.cfg.GitHubTracker.IntervalMinutes
-		s.cfg.GitHubTracker.Enabled = req.Enabled
-		s.cfg.GitHubTracker.IntervalMinutes = req.IntervalMinutes
-		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-			s.cfgMu.Unlock()
-			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		var oldEnabled bool
+		var oldInterval int
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			oldEnabled, oldInterval = cfg.GitHubTracker.Enabled, cfg.GitHubTracker.IntervalMinutes
+			cfg.GitHubTracker.Enabled = req.Enabled
+			cfg.GitHubTracker.IntervalMinutes = req.IntervalMinutes
+			return 0, nil
+		}) {
 			return
 		}
-		cfg := s.cfg
-		s.cfgMu.Unlock()
+		cfg := s.getConfig()
 
 		if oldEnabled != req.Enabled || oldInterval != req.IntervalMinutes {
 			s.githubFetcher.ApplyConfig(cfg)
@@ -131,9 +130,7 @@ func githubRepoRowFrom(r config.GitHubTrackerRepoConfig, status map[string]githu
 // handleGitHubTrackerRepos: GET lists tracked repos, POST adds one, DELETE removes one by
 // ?owner=&repo=. Mirrors handleIRCNetworks.
 func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request) {
-	isAdmin, _ := s.requireAdminCSRF(r)
-	if !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if !s.requireAdmin(w, r) {
 		return
 	}
 
@@ -188,27 +185,21 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 			TokenEncrypted: tokenEncrypted,
 		}
 
-		s.cfgMu.Lock()
-		if _, _, exists := config.FindGitHubTrackerRepo(s.cfg.GitHubTracker.Repos, owner, repo); exists {
-			s.cfgMu.Unlock()
-			http.Error(w, "Repo already tracked", http.StatusConflict)
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			if _, _, exists := config.FindGitHubTrackerRepo(cfg.GitHubTracker.Repos, owner, repo); exists {
+				return http.StatusConflict, errors.New("Repo already tracked")
+			}
+			newRepos := append(slices.Clone(cfg.GitHubTracker.Repos), entry)
+			if err := config.ValidateConfig(&config.Config{IRC: cfg.IRC, GitHubTracker: config.GitHubTrackerConfig{
+				Enabled: cfg.GitHubTracker.Enabled, IntervalMinutes: cfg.GitHubTracker.IntervalMinutes, Repos: newRepos,
+			}}); err != nil {
+				return http.StatusBadRequest, err
+			}
+			cfg.GitHubTracker.Repos = newRepos
+			return 0, nil
+		}) {
 			return
 		}
-		newRepos := append(append([]config.GitHubTrackerRepoConfig(nil), s.cfg.GitHubTracker.Repos...), entry)
-		if err := config.ValidateConfig(&config.Config{IRC: s.cfg.IRC, GitHubTracker: config.GitHubTrackerConfig{
-			Enabled: s.cfg.GitHubTracker.Enabled, IntervalMinutes: s.cfg.GitHubTracker.IntervalMinutes, Repos: newRepos,
-		}}); err != nil {
-			s.cfgMu.Unlock()
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		s.cfg.GitHubTracker.Repos = newRepos
-		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-			s.cfgMu.Unlock()
-			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.cfgMu.Unlock()
 
 		if err := s.runFullRehashFromWeb("web (github repos add)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
@@ -226,25 +217,17 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Missing owner/repo query", http.StatusBadRequest)
 			return
 		}
-		s.cfgMu.Lock()
-		if _, _, ok := config.FindGitHubTrackerRepo(s.cfg.GitHubTracker.Repos, owner, repo); !ok {
-			s.cfgMu.Unlock()
-			http.Error(w, "Repo not found", http.StatusNotFound)
-			return
-		}
-		var out []config.GitHubTrackerRepoConfig
-		for _, repoCfg := range s.cfg.GitHubTracker.Repos {
-			if !(strings.EqualFold(repoCfg.Owner, owner) && strings.EqualFold(repoCfg.Repo, repo)) {
-				out = append(out, repoCfg)
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			if _, _, ok := config.FindGitHubTrackerRepo(cfg.GitHubTracker.Repos, owner, repo); !ok {
+				return http.StatusNotFound, errors.New("Repo not found")
 			}
-		}
-		s.cfg.GitHubTracker.Repos = out
-		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-			s.cfgMu.Unlock()
-			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+			cfg.GitHubTracker.Repos = slices.DeleteFunc(slices.Clone(cfg.GitHubTracker.Repos), func(r config.GitHubTrackerRepoConfig) bool {
+				return strings.EqualFold(r.Owner, owner) && strings.EqualFold(r.Repo, repo)
+			})
+			return 0, nil
+		}) {
 			return
 		}
-		s.cfgMu.Unlock()
 
 		if err := s.runFullRehashFromWeb("web (github repos remove)"); err != nil {
 			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
@@ -267,9 +250,7 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isAdmin, _ := s.requireAdminCSRF(r)
-	if !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if !s.requireAdmin(w, r) {
 		return
 	}
 
@@ -291,42 +272,36 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	s.cfgMu.Lock()
-	_, idx, ok := config.FindGitHubTrackerRepo(s.cfg.GitHubTracker.Repos, owner, repo)
-	if !ok {
-		s.cfgMu.Unlock()
-		http.Error(w, "Repo not found", http.StatusNotFound)
-		return
-	}
-	if req.Channels != nil {
-		s.cfg.GitHubTracker.Repos[idx].Channels = *req.Channels
-	}
-	if req.EventTypes != nil {
-		s.cfg.GitHubTracker.Repos[idx].EventTypes = *req.EventTypes
-	}
-	// req.Token nil means "leave the stored token as-is" (the field was omitted); a
-	// non-nil empty string is an explicit clear (repo becomes public/unauthenticated);
-	// a non-nil non-empty string replaces the stored ciphertext.
-	if req.Token != nil {
-		if *req.Token == "" {
-			s.cfg.GitHubTracker.Repos[idx].TokenEncrypted = ""
-		} else {
-			enc, err := s.githubFetcher.EncryptToken(*req.Token)
-			if err != nil {
-				s.cfgMu.Unlock()
-				http.Error(w, "Failed to encrypt token: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			s.cfg.GitHubTracker.Repos[idx].TokenEncrypted = enc
+	if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+		_, idx, ok := config.FindGitHubTrackerRepo(cfg.GitHubTracker.Repos, owner, repo)
+		if !ok {
+			return http.StatusNotFound, errors.New("Repo not found")
 		}
-	}
-	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-		s.cfgMu.Unlock()
-		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		repoCfg := &cfg.GitHubTracker.Repos[idx]
+		if req.Channels != nil {
+			repoCfg.Channels = *req.Channels
+		}
+		if req.EventTypes != nil {
+			repoCfg.EventTypes = *req.EventTypes
+		}
+		// req.Token nil means "leave the stored token as-is" (the field was omitted); a
+		// non-nil empty string is an explicit clear (repo becomes public/unauthenticated);
+		// a non-nil non-empty string replaces the stored ciphertext.
+		if req.Token != nil {
+			if *req.Token == "" {
+				repoCfg.TokenEncrypted = ""
+			} else {
+				enc, err := s.githubFetcher.EncryptToken(*req.Token)
+				if err != nil {
+					return http.StatusInternalServerError, errors.New("Failed to encrypt token: " + err.Error())
+				}
+				repoCfg.TokenEncrypted = enc
+			}
+		}
+		return 0, nil
+	}) {
 		return
 	}
-	s.cfgMu.Unlock()
-
 	if err := s.runFullRehashFromWeb("web (github repos edit)"); err != nil {
 		http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
 		return

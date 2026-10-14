@@ -18,7 +18,7 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `ai/` | OpenAI-compatible HTTP client wrapping `go-openai` |
 | `irc/` | IRC connection, command dispatch, all bot commands |
 | `config/` | YAML config load/save, struct definitions |
-| `web/` | HTTP server, dashboard handlers, auth, CSRF |
+| `web/` | HTTP server and dashboard handlers, split by topic (`server.go` core/routes, `auth_handlers.go`, `irc_admin.go`, `uploads_api.go`, `settings_api.go`, `finance_api.go`, `logs_api.go`, `stats_api.go`, `news_api.go`, `changelog_api.go`, `weather_api.go`, …), auth DB, CSRF |
 | `uploads/` | Paste and file upload DB + disk storage |
 | `rss/` | RSS feed fetching, deduplication, IRC announcements |
 | `github/` | GitHub repo activity tracking (pushes/PRs/releases via the Events API), PAT encryption, IRC announcements |
@@ -33,6 +33,9 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `progtodo/` | Programmer TODO list DB |
 | `db/` | Shared SQLite connection pooling and PRAGMA helpers |
 | `meta/` | Version, name, author constants |
+| `internal/guard/` | `guard.Go` / `guard.Wrap`: run goroutines and timer callbacks with panic recovery |
+| `internal/securefs/` | `MkdirPrivate`: 0700 dirs for `data/`, backups and `logs/` |
+| `internal/ttlcache/`, `internal/httpx/`, `internal/ircfold/` | size-bounded TTL cache; capped JSON/XML decoding of third-party responses; IRC nick case folding |
 | `internal/ircusage/` | Command usage tables; source for `-usage`, `!help` and `!help <cmd>` (alphabetical, `Names`/`Lookup`) |
 | `internal/sysinfo/` | System info (gopsutil wrapper) |
 
@@ -43,6 +46,8 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 All configuration lives in `config/config.yaml` (active) and `config/config.yaml.template` (reference). The config is YAML-only — no `.env` file. Some API keys fall back to environment variables (see `config/config.go`).
 
 **Secrets at rest**: `config/secrets.go` AES-256-GCM-encrypts every secret in `config.yaml` (IRC services/SASL password, channel keys, `web.auth.password`, `flight.api_key`, `omdb.api_key`, `github.token`) as `enc:<base64>`, using `data/github_secret.key` (same key as GitHub PATs). `LoadConfig` decrypts into memory; `SaveConfig` encrypts a copy. Plaintext values are accepted and auto-migrated (file rewritten encrypted) on next load. To change a secret by hand, write it in plaintext and restart. New secret field → add it to `mapSecrets`. Lose the key = re-enter secrets. The key file is only auto-created when it does not exist; an unreadable or wrong-length file is a startup error (never silently regenerated). `-debug` defaults to off (debug logs raw IRC lines incl. credentials). Also encrypted: `services.nickserv_password` and `services.client_cert` (PEM cert+key).
+
+`github.token` is also used by `!latest` for any `owner/repo` an IRC user types: give it **no private-repo access** (no scope or `public_repo`); a classic `repo`-scope token is logged as a warning. `bot.rate_limiting`: `burst` commands per sender per `window` seconds, per network (`limit` is unused). `stats.retention_days` defaults to 30. The shipped template has no default dashboard password: with `web.auth.password` empty a random one is generated and logged once. `data/`, `data/backups/` and `logs/` are created 0700 (log files 0600).
 
 **IRC network auth** (per network, dashboard-only — no IRC commands, by design): SASL PLAIN or EXTERNAL (`services.mechanism`, needs `use_ssl` + client cert); NickServ `IDENTIFY` on connect when SASL is off and a NickServ password is stored; dashboard "Network authentication" panel does NickServ register/identify (`web/irc_auth.go`, `irc/nickserv.go`) and generates/uploads/removes the client cert (only its SHA-256 fingerprint is ever returned). With `bot.debug: true`, irc-go logs raw sent lines, including IDENTIFY/REGISTER passwords — keep debug off in production.
 
@@ -67,6 +72,8 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 | `github_seen.db` | `github` package (event dedup, per-repo ETag cache) |
 
 The `db/` package provides shared `OpenDB()` with connection pooling and WAL-mode pragmas.
+
+Notable columns: `reminders.owner_fold` (indexed, case-folded owner), `uploads.expires_at` (unix; the public paste list pages in SQL on it). `!seen` never stores or repeats private-message text, and repeats channel text only in the channel it was said in. The daemon holds an `flock` on the PID file (`WritePIDFile`); `PIDFileInUse` is the liveness check (a recorded pid alone can be reused by another process).
 
 Schema migrations use `ALTER TABLE ADD COLUMN` with "duplicate column" error tolerance — errors are logged but don't abort startup.
 
@@ -102,7 +109,10 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 
 - Session cookies: `admin_session` (HttpOnly, Secure, SameSite=Strict, 24h TTL)
 - CSRF: every mutating request (POST/PUT/PATCH/DELETE) must include `X-CSRF-Token` header or `csrf_token` form field. The CSRF token is returned at login.
-- `requireAdminCSRF(r)` — use this instead of `checkAuth(r)` for any handler that mutates state.
+- `requireAdmin(w, r)` (wraps `requireAdminCSRF(r)` and writes the 401) — first line of every admin handler; GET handlers that return staff-only data use `staffAdminFromRequest(r)`. A session with a pending forced password change never passes either.
+- `mutateConfig(w, fn)` (`web/config_edit.go`) — the only way a handler edits `s.cfg`: it locks, applies `fn`, saves, and **rolls the in-memory config back** if `fn` rejects or the save fails. Use `config.IRCNetworkIndex` / `adminList` instead of hand-written loops.
+- Passwords: 12–72 bytes (`ValidatePassword`); changing your own needs `current_password` unless it is the forced first change; you cannot delete yourself or the last user.
+- Public SSE streams (`/api/logs/stream`, `/api/stats/stream`) are capped per IP/total (`connLimiter`); `/api/logs/catalog` is cached 30s; log history/stream read only the file tail; `/api/stats/history` is bucketed to ≤600 points.
 - `csrfValid(r, sessionToken)` — use this when session is already validated separately. `staffAdminFromRequest(r)` already enforces CSRF on mutating methods.
 - `web/middleware.go` `secure()` wraps the mux: `nosniff`/`X-Frame-Options`/`Referrer-Policy` headers and a 1 MiB body cap (all routes except `/upload`). No CSP yet (dashboard uses inline `onclick`).
 - In `web/templates/app.js`, never interpolate IRC/feed/user text into `innerHTML` raw: use `financeEscapeHtml()`, `safeHref()` for `href`, and `jsq()` inside single-quoted inline-handler strings.
@@ -125,10 +135,11 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 
 ## Adding a New IRC Command
 
+0. Output goes through `sendPrivmsg`/`sendNotice` only: they are paced (`irc/pacer.go`, ircevent has no flood control), so **never `time.Sleep` in a handler** (it pins one of the 4 command slots) and cap lists at `maxListLines`. Rate-limit anything expensive with `b.rateLimited(target, sender)`. Anything slow or multi-line triggered from an IRC event callback (join, privmsg) must run in `guard.Go`, not on the read loop. Tests use `newCaptureNetwork` (captures output, no network).
 1. Add a handler method on `*Bot` in `irc/bot.go` (or a new file in `irc/`).
 2. Register it in the command dispatch map in `bot.go`.
 3. Add usage text in `internal/ircusage/print.go` (rows are sorted automatically; `!help` and `!help <cmd>` read them — add an optional intro in `about` in `lookup.go` for commands needing explanation).
-4. If it fetches external data, set an explicit HTTP client timeout.
+4. If it fetches external data, set an explicit HTTP client timeout, decode with `httpx.DecodeJSON`/`DecodeXML` (size cap), and cache slow-changing answers with `ttlcache` (see `!linux`, `!apple`, `!latest`).
 
 ---
 

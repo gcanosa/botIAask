@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,35 +38,43 @@ func secretKey() ([]byte, error) {
 	if keyBuf != nil && keyFor == SecretKeyPath {
 		return keyBuf, nil
 	}
-	key, err := os.ReadFile(SecretKeyPath)
-	if err == nil && len(key) != secretKeyLen {
-		// Never overwrite an existing key: a stray newline or truncation must not destroy the only copy.
-		return nil, fmt.Errorf("secret key %s has %d bytes, want %d (fix or restore it; not regenerating)", SecretKeyPath, len(key), secretKeyLen)
-	}
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("read secret key %s: %w", SecretKeyPath, err)
-	}
+	key, err := LoadKey(SecretKeyPath)
 	if err != nil {
-		key = make([]byte, secretKeyLen)
-		if _, err := rand.Read(key); err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(filepath.Dir(SecretKeyPath), 0700); err != nil {
-			return nil, err
-		}
-		if err := writeNewKey(SecretKeyPath, key); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	keyBuf, keyFor = key, SecretKeyPath
 	return key, nil
 }
 
-func newGCM() (cipher.AEAD, error) {
-	key, err := secretKey()
-	if err != nil {
-		return nil, fmt.Errorf("secret key: %w", err)
+// LoadKey reads the 32-byte AES-256 key at path, creating a random one (mode 0600, O_EXCL) when the
+// file does not exist yet. An existing file of the wrong size or one that cannot be read is an
+// error: it is never overwritten, since it may be the only copy of the key.
+func LoadKey(path string) ([]byte, error) {
+	key, err := os.ReadFile(path)
+	if err == nil && len(key) != secretKeyLen {
+		return nil, fmt.Errorf("secret key %s has %d bytes, want %d (fix or restore it; not regenerating)", path, len(key), secretKeyLen)
 	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read secret key %s: %w", path, err)
+	}
+	if err == nil {
+		return key, nil
+	}
+	key = make([]byte, secretKeyLen)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	if err := writeNewKey(path, key); err != nil {
+		return nil, err
+	}
+	log.Printf("[SECURITY] Generated encryption key at %s (mode 0600) — back it up; losing it makes stored secrets unrecoverable (re-enter them)", path)
+	return key, nil
+}
+
+func gcmFor(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -73,11 +82,13 @@ func newGCM() (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-func encryptSecret(s string) (string, error) {
-	if s == "" || strings.HasPrefix(s, encPrefix) {
-		return s, nil
+// Seal encrypts plaintext with key (AES-256-GCM) and returns base64(nonce || ciphertext). Empty
+// input stays empty (no secret configured).
+func Seal(key []byte, plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
 	}
-	gcm, err := newGCM()
+	gcm, err := gcmFor(key)
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +96,45 @@ func encryptSecret(s string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	return encPrefix + base64.StdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(s), nil)), nil
+	return base64.StdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(plaintext), nil)), nil
+}
+
+// Open reverses Seal. Empty input stays empty.
+func Open(key []byte, encoded string) (string, error) {
+	if encoded == "" {
+		return "", nil
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("decode ciphertext: %w", err)
+	}
+	gcm, err := gcmFor(key)
+	if err != nil {
+		return "", err
+	}
+	if len(data) < gcm.NonceSize() {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	pt, err := gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(pt), nil
+}
+
+func encryptSecret(s string) (string, error) {
+	if s == "" || strings.HasPrefix(s, encPrefix) {
+		return s, nil
+	}
+	key, err := secretKey()
+	if err != nil {
+		return "", fmt.Errorf("secret key: %w", err)
+	}
+	enc, err := Seal(key, s)
+	if err != nil {
+		return "", err
+	}
+	return encPrefix + enc, nil
 }
 
 // decryptSecret returns the plaintext; legacy plaintext values pass through with plain=true.
@@ -93,22 +142,15 @@ func decryptSecret(s string) (out string, plain bool, err error) {
 	if !strings.HasPrefix(s, encPrefix) {
 		return s, s != "", nil
 	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, encPrefix))
+	key, err := secretKey()
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("secret key: %w", err)
 	}
-	gcm, err := newGCM()
+	out, err = Open(key, strings.TrimPrefix(s, encPrefix))
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("%w (wrong or missing %s?)", err, SecretKeyPath)
 	}
-	if len(data) < gcm.NonceSize() {
-		return "", false, fmt.Errorf("ciphertext too short")
-	}
-	pt, err := gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], nil)
-	if err != nil {
-		return "", false, fmt.Errorf("decrypt (wrong or missing %s?): %w", SecretKeyPath, err)
-	}
-	return string(pt), false, nil
+	return out, false, nil
 }
 
 // mapSecrets applies fn to every secret field of cfg in place. Add new secret fields here.

@@ -13,21 +13,21 @@ import (
 func (s *Server) updateNetworkServices(name string, fn func(*config.ServicesConfig) error) (status int, err error) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
-	for i := range s.cfg.IRC.Networks {
-		if !strings.EqualFold(s.cfg.IRC.Networks[i].Name, name) {
-			continue
-		}
-		svc := s.cfg.IRC.Networks[i].Services
-		if err := fn(&svc); err != nil {
-			return http.StatusBadRequest, err
-		}
-		s.cfg.IRC.Networks[i].Services = svc
-		if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
-			return http.StatusInternalServerError, err
-		}
-		return 0, nil
+	i := config.IRCNetworkIndex(s.cfg.IRC.Networks, name)
+	if i < 0 {
+		return http.StatusNotFound, errNetworkNotFound
 	}
-	return http.StatusNotFound, errNetworkNotFound
+	backup := s.cfg.IRC.Networks[i].Services
+	svc := backup
+	if err := fn(&svc); err != nil {
+		return http.StatusBadRequest, err
+	}
+	s.cfg.IRC.Networks[i].Services = svc
+	if err := config.SaveConfig(config.DefaultConfigPath, s.cfg); err != nil {
+		s.cfg.IRC.Networks[i].Services = backup // keep memory in step with disk
+		return http.StatusInternalServerError, err
+	}
+	return 0, nil
 }
 
 type simpleErr string
@@ -45,8 +45,7 @@ func (s *Server) handleIRCNickServ(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if isAdmin, _ := s.requireAdminCSRF(r); !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	var req struct {
@@ -148,8 +147,7 @@ func (s *Server) handleIRCNetworkCert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if isAdmin, _ := s.requireAdminCSRF(r); !isAdmin {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	var req struct {

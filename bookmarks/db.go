@@ -2,6 +2,7 @@ package bookmarks
 
 import (
 	"botIAask/db"
+	"botIAask/internal/ircfold"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -460,29 +461,7 @@ func generateReminderPublicID() (string, error) {
 }
 
 // IRCCaseFoldNick applies RFC 1459 ASCII case mapping for IRC nick comparison ([→{, ]→}, etc.).
-func IRCCaseFoldNick(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch r {
-		case '^':
-			b.WriteRune('~')
-		case '\\':
-			b.WriteRune('|')
-		case '[':
-			b.WriteRune('{')
-		case ']':
-			b.WriteRune('}')
-		default:
-			if r >= 'A' && r <= 'Z' {
-				b.WriteRune(r + ('a' - 'A'))
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	return b.String()
-}
+func IRCCaseFoldNick(s string) string { return ircfold.Nick(s) }
 
 // AddReminder inserts a reminder for network; returns the new public_id (8 hex chars,
 // paste-ticket style). dueAt nil = legacy on-join delivery; a non-nil dueAt is fired

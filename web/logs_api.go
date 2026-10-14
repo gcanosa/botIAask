@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -559,4 +560,170 @@ func readFileTail(path string, maxLines int) (lines []string, truncated bool, er
 		lines = append(lines, partial)
 	}
 	return lines, truncated, err
+}
+
+func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	// dir/key name the file tailed: a channel log, or (debug=1, admins only) the bot's process log.
+	dir, key := logsDir, ""
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+	if r.URL.Query().Get("debug") == "1" {
+		if !s.staffAdminFromRequest(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		dir, key, channel = logger.DebugDir(), debugLogKey, "debug"
+	} else {
+		if channel == "" {
+			http.Error(w, "Channel is required", http.StatusBadRequest)
+			return
+		}
+		network := strings.TrimSpace(r.URL.Query().Get("network"))
+		if !validLogTarget(s.getConfig(), channel, network) {
+			http.Error(w, "invalid channel or network", http.StatusBadRequest)
+			return
+		}
+		if network == "" {
+			if nets := s.getConfig().IRC.Networks; len(nets) > 0 {
+				network = nets[0].Name
+			}
+		}
+		if config.IsKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		key = logger.ChannelFileKey(channel, network)
+	}
+
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	localToday := time.Now().Format("2006-01-02")
+	if date == "" {
+		date = localToday
+	}
+	if _, err := time.ParseInLocation("2006-01-02", date, time.Local); err != nil {
+		http.Error(w, "invalid date", http.StatusBadRequest)
+		return
+	}
+	if date != localToday {
+		http.Error(w, "live stream is only available for server local today; use /api/logs/history for past dates", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// The live tail follows the canonical (lower-cased) file the logger writes to. Other
+	// spellings of today's file, written before keys were lower-cased, are replayed once on
+	// connect and merged by timestamp so earlier lines from today don't go missing.
+	var file *os.File
+	var reader *bufio.Reader
+	var pending string // a line the logger was still writing when we hit EOF
+	openCanon := func() {
+		// A missing file just means nothing has been logged for this channel yet today;
+		// the poll loop below retries every tick.
+		if f, err := os.Open(filepath.Join(dir, fmt.Sprintf("%s_%s.log", key, date))); err == nil {
+			file, reader, pending = f, bufio.NewReader(f), ""
+		}
+	}
+	// readLines returns the complete lines available; a trailing partial line is kept in
+	// pending and finished on a later tick instead of being dropped.
+	readLines := func() ([]string, error) {
+		var out []string
+		for {
+			chunk, err := reader.ReadString('\n')
+			pending += chunk
+			if err != nil {
+				if err == io.EOF {
+					return out, nil
+				}
+				return out, err
+			}
+			out = append(out, strings.TrimSuffix(pending, "\n"))
+			pending = ""
+		}
+	}
+
+	openCanon()
+	var initial []string
+	var canonInfo os.FileInfo
+	if file != nil {
+		// Replay only the tail (a busy channel's day file can be tens of MB) and then follow from
+		// that point; an unfinished last line is completed by the live loop below.
+		if fi, err := file.Stat(); err == nil {
+			canonInfo = fi
+			initial, pending, _, _ = tailLines(file, fi.Size(), maxHistoryLines)
+			_, _ = file.Seek(fi.Size(), io.SeekStart)
+			reader.Reset(file)
+		}
+	}
+	merged := false
+	for _, p := range logger.DayLogPaths(dir, key, date, ".log") {
+		if fi, err := os.Stat(p); err != nil || (canonInfo != nil && os.SameFile(fi, canonInfo)) {
+			continue
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		more, _ := readLogLinesTail(f, maxHistoryLines)
+		f.Close()
+		initial = append(initial, more...)
+		merged = true
+	}
+	if merged {
+		sort.SliceStable(initial, func(i, j int) bool { return logLineTime(initial[i]) < logLineTime(initial[j]) })
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	defer func() {
+		if file != nil {
+			file.Close()
+		}
+	}()
+
+	fmt.Fprintf(w, "data: [CONNECTED %s %s]\n\n", channel, date)
+	for _, line := range initial {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+	}
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if newToday := time.Now().Format("2006-01-02"); newToday != date {
+				date = newToday
+				if file != nil {
+					file.Close()
+					file, reader = nil, nil
+				}
+				fmt.Fprintf(w, "data: [ROLLOVER %s]\n\n", date)
+				flusher.Flush()
+			}
+			if file == nil {
+				if openCanon(); file == nil {
+					continue
+				}
+			}
+			lines, err := readLines()
+			for _, line := range lines {
+				fmt.Fprintf(w, "data: %s\n\n", line)
+			}
+			if err != nil {
+				fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
+			}
+			if len(lines) > 0 || err != nil {
+				flusher.Flush()
+			}
+		}
+	}
 }
