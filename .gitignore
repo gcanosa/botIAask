@@ -54,9 +54,8 @@ data/
 logs/
 *.log
 
-# Uploads and pastes
+# Uploaded pastes and files (runtime data). Not "uploads/": that is the Go package.
 pastes/
-uploads/
 upload_files/
 
 # Scratch folder
