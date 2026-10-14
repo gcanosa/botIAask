@@ -2,6 +2,7 @@ package uploads
 
 import (
 	"botIAask/db"
+	"botIAask/internal/ircfold"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
@@ -512,22 +513,7 @@ func (d *Database) CancelTicket(ticketID string) error {
 }
 
 func (d *Database) GetUploadByTicketID(ticketID string) (*Upload, error) {
-	row := d.db.QueryRow(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, COALESCE(network,''), approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE ticket_id = ?`, ticketID)
-	var u Upload
-	var ipub int
-	err := row.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.Network, &u.ApprovedAt,
-		&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-		&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-	if err != nil {
-		return nil, err
-	}
-	u.IsPublic = ipub != 0
-	return &u, nil
+	return scanUpload(d.db.QueryRow(`SELECT `+ticketCols+` FROM uploads WHERE ticket_id = ?`, ticketID), ticketRow)
 }
 
 // GetApprovedPastes returns one page of approved text pastes, newest first, and the total count.
@@ -547,17 +533,12 @@ func (d *Database) GetApprovedPastes(limit, offset int, now time.Time, excludePu
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := d.db.Query(`SELECT `+approvedCols+` FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	list, _, err := scanUploadRows(rows, total)
+	list, err := scanUploads(rows, approvedRow)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -577,17 +558,13 @@ func (d *Database) GetApprovedFiles(limit, offset int, publicOnly bool) ([]*Uplo
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	rows, err := d.db.Query(`SELECT `+approvedCols+` FROM uploads WHERE `+where+` ORDER BY approved_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanUploadRows(rows, total)
+	list, err := scanUploads(rows, approvedRow)
+	return list, total, err
 }
 
 // SetFileIsPublic sets whether an approved file is anonymously downloadable / listed for non-staff users.
@@ -622,15 +599,11 @@ func (d *Database) ListApprovedFilesByUser(username, network string, limit int) 
 		return nil, fmt.Errorf("limit must be positive")
 	}
 	uname := strings.TrimSpace(username)
-	targetFold := ircFoldNick(uname)
+	targetFold := ircfold.Nick(uname)
 
 	// Align with GetApprovedFiles (no expiry filter in SQL — dashboard lists all approved files).
 	// IRC nicks: trim + case-insensitive; LOWER matches most cases.
-	q := `
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
+	q := `SELECT ` + approvedCols + `
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file'
 			AND LOWER(TRIM(COALESCE(username,''))) = LOWER(?) AND COALESCE(network,'') = ?
 		ORDER BY approved_at DESC LIMIT ?`
@@ -638,7 +611,8 @@ func (d *Database) ListApprovedFilesByUser(username, network string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	list, err := scanApprovedFileRows(rows)
+	list, err := scanUploads(rows, approvedRow)
+	rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -647,11 +621,7 @@ func (d *Database) ListApprovedFilesByUser(username, network string, limit int) 
 	}
 
 	// Fallback: RFC 1459 casefold can differ from ASCII LOWER (e.g. [ vs {).
-	rows2, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, approved_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
+	rows2, err := d.db.Query(`SELECT `+approvedCols+`
 		FROM uploads WHERE status = 'approved' AND upload_type = 'file' AND COALESCE(network,'') = ?
 		ORDER BY approved_at DESC`, network)
 	if err != nil {
@@ -660,17 +630,12 @@ func (d *Database) ListApprovedFilesByUser(username, network string, limit int) 
 	defer rows2.Close()
 	var out []*Upload
 	for rows2.Next() {
-		var u Upload
-		var ipub int
-		err := rows2.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
+		u, err := scanUpload(rows2, approvedRow)
 		if err != nil {
 			return nil, err
 		}
-		u.IsPublic = ipub != 0
-		if ircFoldNick(strings.TrimSpace(u.Username)) == targetFold {
-			out = append(out, &u)
+		if ircfold.Nick(strings.TrimSpace(u.Username)) == targetFold {
+			out = append(out, u)
 			if len(out) >= limit {
 				break
 			}
@@ -679,151 +644,27 @@ func (d *Database) ListApprovedFilesByUser(username, network string, limit int) 
 	return out, rows2.Err()
 }
 
-func scanApprovedFileRows(rows *sql.Rows) ([]*Upload, error) {
+// pendingUploads lists the pending_approval rows matching extra (an optional "AND ..." clause), oldest first.
+func (d *Database) pendingUploads(extra string) ([]*Upload, error) {
+	rows, err := d.db.Query(`SELECT ` + pendingCols + ` FROM uploads WHERE status = 'pending_approval' ` + extra + ` ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
-	var list []*Upload
-	for rows.Next() {
-		var u Upload
-		var ipub int
-		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-		if err != nil {
-			return nil, err
-		}
-		u.IsPublic = ipub != 0
-		list = append(list, &u)
-	}
-	return list, rows.Err()
-}
-
-// ircFoldNick applies RFC 1459 ASCII case mapping for IRC nick comparison ([→{, ]→}, etc.).
-func ircFoldNick(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch r {
-		case '^':
-			b.WriteRune('~')
-		case '\\':
-			b.WriteRune('|')
-		case '[':
-			b.WriteRune('{')
-		case ']':
-			b.WriteRune('}')
-		default:
-			if r >= 'A' && r <= 'Z' {
-				b.WriteRune(r + ('a' - 'A'))
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	return b.String()
-}
-
-func scanUploadRows(rows *sql.Rows, total int) ([]*Upload, int, error) {
-	var list []*Upload
-	for rows.Next() {
-		var u Upload
-		var ipub int
-		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.ApprovedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-		if err != nil {
-			return nil, 0, err
-		}
-		u.IsPublic = ipub != 0
-		list = append(list, &u)
-	}
-	return list, total, rows.Err()
+	return scanUploads(rows, pendingRow)
 }
 
 // GetPendingTickets returns all items awaiting approval (pastes and files) — for IRC.
-func (d *Database) GetPendingTickets() ([]*Upload, error) {
-	rows, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE status = 'pending_approval' ORDER BY created_at ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var list []*Upload
-	for rows.Next() {
-		var u Upload
-		var ipub int
-		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-		if err != nil {
-			return nil, err
-		}
-		u.IsPublic = ipub != 0
-		list = append(list, &u)
-	}
-	return list, rows.Err()
-}
+func (d *Database) GetPendingTickets() ([]*Upload, error) { return d.pendingUploads("") }
 
 // GetPendingPastes returns only text pastes pending approval — for web Pastes panel.
 func (d *Database) GetPendingPastes() ([]*Upload, error) {
-	rows, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       COALESCE(upload_type,'paste'), COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE status = 'pending_approval' AND COALESCE(upload_type,'paste') = 'paste' ORDER BY created_at ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var list []*Upload
-	for rows.Next() {
-		var u Upload
-		var ipub int
-		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-		if err != nil {
-			return nil, err
-		}
-		u.IsPublic = ipub != 0
-		list = append(list, &u)
-	}
-	return list, rows.Err()
+	return d.pendingUploads(`AND COALESCE(upload_type,'paste') = 'paste'`)
 }
 
 // GetPendingFiles returns only file uploads pending approval.
 func (d *Database) GetPendingFiles() ([]*Upload, error) {
-	rows, err := d.db.Query(`
-		SELECT id, ticket_id, username, title, description, content_path, expires_in_days, status, channel, created_at,
-		       upload_type, COALESCE(original_filename,''), COALESCE(content_type,''), COALESCE(size_bytes,0), COALESCE(download_count, 0),
-		       COALESCE(public_ref,''), COALESCE(paste_kind,''), COALESCE(client_host,''), COALESCE(md5_hex,''), COALESCE(sha256_hex,''),
-		       COALESCE(is_public, 1)
-		FROM uploads WHERE status = 'pending_approval' AND upload_type = 'file' ORDER BY created_at ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var list []*Upload
-	for rows.Next() {
-		var u Upload
-		var ipub int
-		err := rows.Scan(&u.ID, &u.TicketID, &u.Username, &u.Title, &u.Description, &u.ContentPath, &u.ExpiresInDays, &u.Status, &u.Channel, &u.CreatedAt,
-			&u.UploadType, &u.OriginalFilename, &u.ContentType, &u.SizeBytes, &u.DownloadCount,
-			&u.PublicRef, &u.PasteKind, &u.ClientHost, &u.MD5Hex, &u.SHA256Hex, &ipub)
-		if err != nil {
-			return nil, err
-		}
-		u.IsPublic = ipub != 0
-		list = append(list, &u)
-	}
-	return list, rows.Err()
+	return d.pendingUploads(`AND upload_type = 'file'`)
 }
 
 // IncrementFileDownloadCount bumps the counter for an approved file ticket (no-op if row missing or not a file).

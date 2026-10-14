@@ -156,3 +156,22 @@ func TestIRCNetworkEdit_TLSSkipVerifyPreservedWhenOmitted(t *testing.T) {
 		t.Fatal("tls_skip_verify was silently cleared by an edit that omitted the field")
 	}
 }
+
+// An edit the validator refuses (SASL EXTERNAL without a client certificate) answers 400 and must
+// not stay applied in memory: a later, unrelated save would otherwise persist it.
+func TestIRCNetworkEdit_RejectedEditIsRolledBack(t *testing.T) {
+	cfg := &config.Config{IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{
+		{Name: "libera", Server: "irc.libera.chat", Port: 6697, Nickname: "bot"},
+	}}}
+	s, cookie, csrfToken := setupNetworkEditTest(t, cfg)
+
+	body := `{"name":"libera","server":"evil.example.org","port":1234,"use_ssl":true,"nickname":"changed","sasl":{"enabled":true,"mechanism":"external"}}`
+	rec := doNetworkEdit(t, s, cookie, csrfToken, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid edit: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	n := s.getConfig().IRC.Networks[0]
+	if n.Server != "irc.libera.chat" || n.Port != 6697 || n.Nickname != "bot" || n.Services.Enabled {
+		t.Fatalf("rejected edit left in memory: %+v", n)
+	}
+}

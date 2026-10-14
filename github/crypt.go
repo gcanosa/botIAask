@@ -1,110 +1,30 @@
 package github
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"errors"
-	"fmt"
-	"io"
-	"io/fs"
-	"log"
-	"os"
+	"botIAask/config"
 )
 
-const secretKeyLen = 32 // AES-256
-
-// Cryptor encrypts/decrypts GitHub PATs at rest with AES-256-GCM. The key is a random
-// 32-byte value generated once and persisted to disk (0600) — there is no human-chosen
-// passphrase to strengthen, so no KDF (argon2/scrypt) is involved; the key IS the key.
+// Cryptor encrypts/decrypts GitHub PATs at rest with AES-256-GCM. The key is a random 32-byte value
+// generated once and persisted to disk (0600) — there is no human-chosen passphrase to strengthen,
+// so no KDF is involved; the key IS the key. The primitives live in config (the same key also
+// protects the secrets in config.yaml); this type only binds them to one key file.
 type Cryptor struct {
 	key []byte
 }
 
 // NewCryptor loads the encryption key from keyPath, generating and persisting one if it
-// doesn't exist yet (mirrors the auto-generated admin password in web/auth_db.go).
+// doesn't exist yet. A key file of the wrong size is an error, never silently replaced.
 func NewCryptor(keyPath string) (*Cryptor, error) {
-	key, err := os.ReadFile(keyPath)
-	if err == nil && len(key) == secretKeyLen {
-		return &Cryptor{key: key}, nil
+	key, err := config.LoadKey(keyPath)
+	if err != nil {
+		return nil, err
 	}
-	if err == nil {
-		return nil, fmt.Errorf("github: secret key %s has %d bytes, want %d (fix or restore it; not regenerating)", keyPath, len(key), secretKeyLen)
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("github: read secret key %s: %w", keyPath, err)
-	}
-
-	key = make([]byte, secretKeyLen)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("github: generate secret key: %w", err)
-	}
-	if err := writeKeyExcl(keyPath, key); err != nil {
-		return nil, fmt.Errorf("github: persist secret key: %w", err)
-	}
-	log.Printf("[SECURITY] Generated GitHub tracker PAT encryption key at %s (mode 0600) — back this up; losing it makes stored tokens unrecoverable (re-enter them via the dashboard)", keyPath)
 	return &Cryptor{key: key}, nil
 }
 
-// Encrypt returns the base64-encoded AES-256-GCM ciphertext of plaintext. An empty
-// plaintext (no token configured) passes through unchanged.
-func (c *Cryptor) Encrypt(plaintext string) (string, error) {
-	if plaintext == "" {
-		return "", nil
-	}
-	block, err := aes.NewCipher(c.key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
+// Encrypt returns the base64-encoded AES-256-GCM ciphertext of plaintext. An empty plaintext (no
+// token configured) passes through unchanged.
+func (c *Cryptor) Encrypt(plaintext string) (string, error) { return config.Seal(c.key, plaintext) }
 
 // Decrypt reverses Encrypt. An empty input passes through unchanged.
-func (c *Cryptor) Decrypt(encoded string) (string, error) {
-	if encoded == "" {
-		return "", nil
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", fmt.Errorf("github: decode ciphertext: %w", err)
-	}
-	block, err := aes.NewCipher(c.key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	if len(data) < gcm.NonceSize() {
-		return "", fmt.Errorf("github: ciphertext too short")
-	}
-	nonce, ciphertext := data[:gcm.NonceSize()], data[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", fmt.Errorf("github: decrypt: %w", err)
-	}
-	return string(plaintext), nil
-}
-
-func writeKeyExcl(path string, key []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(key); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
+func (c *Cryptor) Decrypt(encoded string) (string, error) { return config.Open(c.key, encoded) }

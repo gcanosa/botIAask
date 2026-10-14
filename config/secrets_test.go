@@ -66,3 +66,25 @@ func TestNickServAndClientCertEncrypted(t *testing.T) {
 		t.Fatal("EXTERNAL without cert must be rejected")
 	}
 }
+
+// Seal/Open are what github.Cryptor uses too: round trip, empty passthrough, wrong key rejected.
+func TestSealOpen(t *testing.T) {
+	k1, k2 := make([]byte, secretKeyLen), make([]byte, secretKeyLen)
+	k2[0] = 1
+	enc, err := Seal(k1, "ghp_secret")
+	if err != nil || enc == "" || enc == "ghp_secret" {
+		t.Fatalf("Seal = %q, %v", enc, err)
+	}
+	if got, err := Open(k1, enc); err != nil || got != "ghp_secret" {
+		t.Fatalf("Open = %q, %v", got, err)
+	}
+	if _, err := Open(k2, enc); err == nil {
+		t.Fatal("wrong key decrypted the value")
+	}
+	if e, _ := Seal(k1, ""); e != "" {
+		t.Fatal("empty plaintext must stay empty")
+	}
+	if p, _ := Open(k1, ""); p != "" {
+		t.Fatal("empty ciphertext must stay empty")
+	}
+}

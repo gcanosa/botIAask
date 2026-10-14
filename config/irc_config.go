@@ -99,6 +99,16 @@ func FindIRCNetworkByName(nets []IRCNetworkConfig, name string) (IRCNetworkConfi
 	return IRCNetworkConfig{}, false
 }
 
+// IRCNetworkIndex returns the index of the network called name (case-insensitive), or -1.
+func IRCNetworkIndex(nets []IRCNetworkConfig, name string) int {
+	for i, n := range nets {
+		if strings.EqualFold(n.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
 // IRCNetworkNames returns network names in order (for list diff, logging, etc.).
 func IRCNetworkNames(nets []IRCNetworkConfig) []string {
 	out := make([]string, len(nets))
