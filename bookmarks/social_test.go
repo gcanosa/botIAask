@@ -121,3 +121,79 @@ func TestSeenScopedByNetwork(t *testing.T) {
 		t.Fatalf("netb GetSeen = %+v ok=%v err=%v", sb, ok, err)
 	}
 }
+
+// Reminder lookups go through owner_fold: case/bracket variants of a nick are one owner, and
+// another nick's reminders never leak in.
+func TestReminderOwnerFold(t *testing.T) {
+	d := newTestDB(t)
+	if _, err := d.AddReminder(testNet, "Al[ice]", "mine", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.AddReminder(testNet, "bob", "his", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.ListReminders(testNet, "al{ice}")
+	if err != nil || len(got) != 1 || got[0].Note != "mine" {
+		t.Fatalf("ListReminders = %+v, %v", got, err)
+	}
+	join, err := d.ListJoinReminders(testNet, "AL[ICE]")
+	if err != nil || len(join) != 1 {
+		t.Fatalf("ListJoinReminders = %+v, %v", join, err)
+	}
+	if n, _ := d.CountRemindersFor(testNet, "alice"); n != 0 {
+		t.Fatalf("alice != Al[ice] folded; CountRemindersFor = %d", n)
+	}
+	if n, _ := d.CountRemindersFor(testNet, "al{ice}"); n != 1 {
+		t.Fatalf("CountRemindersFor = %d, want 1", n)
+	}
+}
+
+// A DB created before owner_fold existed is backfilled on open and re-opening is a no-op.
+func TestReminderOwnerFoldMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.db")
+	d, err := NewDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.AddReminder(testNet, "Carol", "old", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.db.Exec(`UPDATE reminders SET owner_fold = ''`); err != nil { // simulate a pre-migration row
+		t.Fatal(err)
+	}
+	d.Close()
+	for i := 0; i < 2; i++ { // second open proves idempotence
+		d, err = NewDatabase(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := d.ListReminders(testNet, "carol")
+		if len(got) != 1 {
+			t.Fatalf("open %d: backfill missing, got %+v", i, got)
+		}
+		d.Close()
+	}
+}
+
+// Text of private messages stored by older versions is wiped on open.
+func TestSeenScrubsPrivateText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.db")
+	d, err := NewDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = d.RecordSeen(testNet, "dave", "", "message", "secret pm")
+	_ = d.RecordSeen(testNet, "erin", "#chan", "message", "public line")
+	d.Close()
+	d, err = NewDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if s, _, _ := d.GetSeen(testNet, "dave"); s.Message != "" {
+		t.Fatalf("private text survived: %q", s.Message)
+	}
+	if s, _, _ := d.GetSeen(testNet, "erin"); s.Message != "public line" {
+		t.Fatalf("channel text lost: %q", s.Message)
+	}
+}

@@ -189,9 +189,8 @@ type WebConfig struct {
 
 // AuthConfig holds authentication settings for the web dashboard.
 type AuthConfig struct {
-	Enabled  bool   `yaml:"enabled"`
 	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Password string `yaml:"password"` // seeds the first admin; empty = random password printed once in the log
 }
 
 // LoggerConfig holds settings for log rotation.
@@ -287,6 +286,11 @@ func LoadConfig(path string) (*Config, error) {
 func applyStatsDefaults(cfg *Config) {
 	if cfg.Stats.Interval <= 0 {
 		cfg.Stats.Interval = 60
+	}
+	// Snapshots are written every interval; without a retention window the table (and the history
+	// endpoint's cost) would grow without bound.
+	if cfg.Stats.RetentionDays <= 0 {
+		cfg.Stats.RetentionDays = 30
 	}
 }
 

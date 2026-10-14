@@ -73,10 +73,34 @@ func (b *ircNetwork) isUserOnline(nick string) bool {
 // seenTargets returns the channel to record (empty for a PM) and the target to
 // reply to (the channel for channel messages, the sender's nick for a PM).
 func seenTargets(target, sender string) (channel, reply string) {
-	if strings.HasPrefix(target, "#") {
+	if ircChannelTarget(target) {
 		return target, target
 	}
 	return "", sender
+}
+
+// seenStoredText is what !seen may remember of a line: text said outside a channel (a PM to the
+// bot) is private and never stored.
+func seenStoredText(channel, message string) string {
+	if channel == "" {
+		return ""
+	}
+	return message
+}
+
+// seenDetail renders the ", saying: ..." / " (join)" suffix for !seen. The text is only repeated in
+// the channel it was said in, so asking elsewhere can't read a private or keyed channel.
+func seenDetail(s bookmarks.Seen, askedIn string) string {
+	if s.Action == "message" && s.Message != "" {
+		if s.Channel != "" && strings.EqualFold(s.Channel, askedIn) {
+			return fmt.Sprintf(`, saying: %s`, truncateReminderNotice(s.Message, 120))
+		}
+		return ""
+	}
+	if s.Action != "" {
+		return fmt.Sprintf(" (%s)", s.Action)
+	}
+	return ""
 }
 
 // --- last-seen tracking ---
@@ -90,7 +114,7 @@ func (b *ircNetwork) recordSeen(nick, channel, action, message string) {
 	if bookmarks.IRCCaseFoldNick(nick) == bookmarks.IRCCaseFoldNick(b.netCfg().Nickname) {
 		return // don't track the bot itself
 	}
-	if err := b.bookmarksDB.RecordSeen(b.name, nick, channel, action, message); err != nil && b.getCfg().Bot.Debug {
+	if err := b.bookmarksDB.RecordSeen(b.name, nick, channel, action, seenStoredText(channel, message)); err != nil && b.getCfg().Bot.Debug {
 		log.Printf("[DEBUG] recordSeen: %v", err)
 	}
 }
@@ -190,17 +214,11 @@ func (b *ircNetwork) handleSeenCommand(target, sender, message string) {
 		return
 	}
 	where := ""
-	if s.Channel != "" && strings.HasPrefix(s.Channel, "#") {
+	if ircChannelTarget(s.Channel) {
 		where = " in " + s.Channel
 	}
-	detail := ""
-	if s.Action == "message" && s.Message != "" {
-		detail = fmt.Sprintf(`, saying: %s`, truncateReminderNotice(s.Message, 120))
-	} else if s.Action != "" {
-		detail = fmt.Sprintf(" (%s)", s.Action)
-	}
-	b.sendPrivmsg(target, fmt.Sprintf("@%s: %s was last seen %s ago%s%s.",
-		sender, s.Nick, humanizeSince(s.LastSeen), where, detail))
+	b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s was last seen %s ago%s%s.",
+		sender, s.Nick, humanizeSince(s.LastSeen), where, seenDetail(s, target))))
 }
 
 // --- timed-reminder scheduler ---

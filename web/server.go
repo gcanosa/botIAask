@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -74,11 +75,18 @@ type Server struct {
 	forexChartCache map[string]cryptoChartCacheEntry
 	forexChartMu    sync.Mutex
 
-	weatherMu     sync.Mutex
-	weatherCache  []byte
-	weatherAt     time.Time
-	weatherKey    string
-	weatherClient *http.Client
+	catalogMu   sync.Mutex // guards the cached /api/logs/catalog bodies: [0] public, [1] admin
+	catalogAt   [2]time.Time
+	catalogBody [2][]byte
+
+	weatherMu      sync.Mutex
+	weatherFetchMu sync.Mutex // serialises upstream fetches; held only while fetching
+	weatherCache   []byte
+	weatherAt      time.Time
+	weatherKey     string
+	weatherFail    []byte // last failure payload, replayed for weatherRetryAfter
+	weatherFailAt  time.Time
+	weatherClient  *http.Client
 
 	aiClient *ai.Client
 	// rehashExt runs the same full apply as IRC/SIGHUP; fromWeb is true for any HTTP-originated reload
@@ -116,6 +124,7 @@ func (s *Server) clearWeatherCache() {
 	s.weatherCache = nil
 	s.weatherKey = ""
 	s.weatherAt = time.Time{}
+	s.weatherFail = nil
 	s.weatherMu.Unlock()
 }
 
@@ -125,6 +134,9 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	s.cfg = ownConfig(cfg)
 	s.cfgMu.Unlock()
 	s.clearWeatherCache()
+	s.catalogMu.Lock()
+	s.catalogBody = [2][]byte{}
+	s.catalogMu.Unlock()
 }
 
 // ownConfig returns a private copy of cfg for the web server. Handlers mutate s.cfg in
@@ -177,6 +189,12 @@ func NewServer(cfg *config.Config, bot *irc.Bot, rssFetcher *rss.Fetcher, statsT
 	return srv
 }
 
+// Open SSE streams allowed per client IP / in total (the dashboard itself uses one or two per tab).
+const (
+	maxStreamsPerIP = 6
+	maxStreamsTotal = 64
+)
+
 // newServeMux builds the HTTP route table (reused on hot rebind after Shutdown).
 func (s *Server) newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -186,7 +204,8 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/logs/catalog", s.handleLogCatalog)
 	mux.HandleFunc("/api/logs/history", s.handleLogHistory)
-	mux.HandleFunc("/api/logs/stream", s.handleLogStream)
+	streams := newConnLimiter(maxStreamsPerIP, maxStreamsTotal)
+	mux.HandleFunc("/api/logs/stream", streams.wrap(s.handleLogStream, s.clientHostFromRequest))
 	mux.HandleFunc("/api/rss/toggle", s.handleRSSToggle)
 	mux.HandleFunc("/api/rss/news", s.handleRSSNews)
 	mux.HandleFunc("/api/rss/fetch", s.handleRSSFetchNow)
@@ -206,7 +225,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/irc/networks/cert", s.handleIRCNetworkCert)
 	mux.HandleFunc("/api/irc/networks", s.handleIRCNetworks)
 	mux.HandleFunc("/api/config/irc-admins", s.handleConfigIRCAdmins)
-	mux.HandleFunc("/api/stats/stream", s.handleStatsStream)
+	mux.HandleFunc("/api/stats/stream", streams.wrap(s.handleStatsStream, s.clientHostFromRequest))
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)
 	mux.HandleFunc("/api/chanstats", s.handleChanStats)
@@ -453,16 +472,36 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	if loc == "" {
 		loc = "Barcelona, Spain"
 	}
-
-	s.weatherMu.Lock()
-	if len(s.weatherCache) > 0 && s.weatherKey == loc && time.Since(s.weatherAt) < s.weatherCacheTTL() {
-		b := append([]byte(nil), s.weatherCache...)
-		s.weatherMu.Unlock()
+	writeJSON := func(b []byte) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write(b)
+	}
+
+	// cached returns a fresh success payload, or the last failure while it is still cooling down.
+	cached := func() ([]byte, bool) {
+		s.weatherMu.Lock()
+		defer s.weatherMu.Unlock()
+		if len(s.weatherCache) > 0 && s.weatherKey == loc && time.Since(s.weatherAt) < s.weatherCacheTTL() {
+			return append([]byte(nil), s.weatherCache...), true
+		}
+		if s.weatherFail != nil && time.Since(s.weatherFailAt) < weatherRetryAfter {
+			return s.weatherFail, true
+		}
+		return nil, false
+	}
+	if b, ok := cached(); ok {
+		writeJSON(b)
 		return
 	}
-	s.weatherMu.Unlock()
+
+	// One upstream fetch at a time: concurrent misses (and a failing upstream) must not each
+	// start their own 20s request from an unauthenticated endpoint.
+	s.weatherFetchMu.Lock()
+	defer s.weatherFetchMu.Unlock()
+	if b, ok := cached(); ok {
+		writeJSON(b)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
@@ -478,8 +517,10 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 			"message":     "weather service temporarily unavailable",
 			"attribution": "open-meteo.com",
 		})
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write(out)
+		s.weatherMu.Lock()
+		s.weatherFail, s.weatherFailAt = out, time.Now()
+		s.weatherMu.Unlock()
+		writeJSON(out)
 		return
 	}
 	out, err := json.Marshal(snap)
@@ -487,17 +528,22 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encode error", http.StatusInternalServerError)
 		return
 	}
-	// Only cache successful payloads so a bad spell of API errors is not stuck for 10m.
+	s.weatherMu.Lock()
 	if snap != nil && snap.OK {
-		s.weatherMu.Lock()
 		s.weatherCache = append([]byte(nil), out...)
 		s.weatherKey = loc
 		s.weatherAt = time.Now()
-		s.weatherMu.Unlock()
+		s.weatherFail = nil
+	} else {
+		// A failed snapshot is only replayed for weatherRetryAfter, never cached like a success.
+		s.weatherFail, s.weatherFailAt = out, time.Now()
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	s.weatherMu.Unlock()
+	writeJSON(out)
 }
+
+// weatherRetryAfter is how long a failed Open-Meteo call is answered from memory before trying again.
+const weatherRetryAfter = time.Minute
 
 const (
 	weatherSettingsMin = 1
@@ -869,7 +915,6 @@ func parseGitLog(gitLog string) []map[string]interface{} {
 			commit := map[string]interface{}{
 				"id":        parts[0],
 				"author":    parts[1],
-				"email":     parts[2],
 				"timestamp": commitTime.Format(time.RFC3339),
 				"date":      commitTime.Format("2006-01-02"),
 				"time":      commitTime.Format("15:04:05"),
@@ -963,7 +1008,6 @@ func fetchFromGitHub(ghCfg config.GitHubConfig, limit int) []map[string]interfac
 		commit := map[string]interface{}{
 			"id":        c.SHA,
 			"author":    c.Commit.Author.Name,
-			"email":     c.Commit.Author.Email,
 			"timestamp": commitTime.Format(time.RFC3339),
 			"date":      commitTime.Format("2006-01-02"),
 			"time":      commitTime.Format("15:04:05"),
@@ -1011,7 +1055,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 				network = nets[0].Name
 			}
 		}
-		if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+		if config.IsKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -1077,8 +1121,14 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	var initial []string
 	var canonInfo os.FileInfo
 	if file != nil {
-		initial, _ = readLines()
-		canonInfo, _ = file.Stat()
+		// Replay only the tail (a busy channel's day file can be tens of MB) and then follow from
+		// that point; an unfinished last line is completed by the live loop below.
+		if fi, err := file.Stat(); err == nil {
+			canonInfo = fi
+			initial, pending, _, _ = tailLines(file, fi.Size(), maxHistoryLines)
+			_, _ = file.Seek(fi.Size(), io.SeekStart)
+			reader.Reset(file)
+		}
 	}
 	merged := false
 	for _, p := range logger.DayLogPaths(dir, key, date, ".log") {
@@ -2489,15 +2539,6 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func (s *Server) checkAuth(r *http.Request) (bool, bool) {
-	cookie, err := r.Cookie("admin_session")
-	if err != nil {
-		return false, false
-	}
-	_, needsChange, err := s.authDB.ValidateSession(cookie.Value)
-	return err == nil, needsChange
-}
-
 // handleCSRFToken issues a fresh CSRF token for the caller's existing admin
 // session, so the frontend can pick one up without re-authenticating (the
 // token minted at login expires after 1h, well before the 24h session).
@@ -2719,7 +2760,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.authDB.AddUser(req.Username, req.Password); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAuthError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -2734,7 +2775,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.authDB.UpdateUserPassword(req.ID, req.NewPassword); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAuthError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -2745,6 +2786,15 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ID required", http.StatusBadRequest)
 			return
 		}
+		// Deleting yourself or the last user would lock everyone out of the dashboard.
+		if uid, _, err := s.authDB.ValidateSession(cookie.Value); err == nil && strconv.Itoa(uid) == id {
+			http.Error(w, "You cannot delete your own account", http.StatusBadRequest)
+			return
+		}
+		if n, err := s.authDB.UserCount(); err == nil && n <= 1 {
+			http.Error(w, "Cannot delete the last user", http.StatusBadRequest)
+			return
+		}
 		if err := s.authDB.RemoveUser(id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2752,6 +2802,17 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
 	}
+}
+
+// writeAuthError maps a password-policy failure to 400 and anything else to a generic 500.
+func writeAuthError(w http.ResponseWriter, err error) {
+	var pe *PasswordPolicyError
+	if errors.As(err, &pe) {
+		http.Error(w, pe.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("auth: %v", err)
+	http.Error(w, "Internal error", http.StatusInternalServerError)
 }
 
 func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
@@ -2766,7 +2827,7 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, _, err := s.authDB.ValidateSession(cookie.Value)
+	userID, needsChange, err := s.authDB.ValidateSession(cookie.Value)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -2778,7 +2839,8 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Password string `json:"password"`
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2786,8 +2848,21 @@ func (s *Server) handlePasswordUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A stolen session must not be able to lock the owner out: changing the password needs the
+	// current one, except in the forced first-login change (the user is only holding the default).
+	if !needsChange {
+		if !s.loginRateLimiter.IsAllowed(GetClientIP(r, s.getConfig().Web.TrustForwardedFor)) {
+			http.Error(w, "Too many attempts. Please try again later.", http.StatusTooManyRequests)
+			return
+		}
+		if !s.authDB.VerifyPassword(userID, req.CurrentPassword) {
+			http.Error(w, "Current password is incorrect", http.StatusForbidden)
+			return
+		}
+	}
+
 	if err := s.authDB.UpdatePassword(userID, req.Password); err != nil {
-		http.Error(w, "Internal error", http.StatusInternalServerError)
+		writeAuthError(w, err)
 		return
 	}
 	// A leaked/old password must not keep other sessions alive.
@@ -2907,12 +2982,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		content := r.FormValue("content")
 		expiresStr := r.FormValue("expires")
 
-		expiresDays := 7
-		fmt.Sscanf(expiresStr, "%d", &expiresDays)
+		expiresDays := parseExpiryDays(expiresStr)
 
-		ticketID := generateHex(4)
-
-		err := s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays, s.clientHostFromRequest(r))
+		var ticketID string
+		var err error
+		for attempt := 0; attempt < ticketIDAttempts; attempt++ {
+			ticketID = newTicketID()
+			err = s.uploadsDB.SubmitUpload(token, ticketID, title, desc, content, expiresDays, s.clientHostFromRequest(r))
+			if !errors.Is(err, uploads.ErrTicketIDTaken) {
+				break
+			}
+		}
 		if errors.Is(err, uploads.ErrTokenUsed) {
 			http.Error(w, "This upload link was already used", http.StatusConflict)
 			return
@@ -3021,18 +3101,25 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 		return
 	}
 	desc := r.FormValue("description")
-	expiresStr := r.FormValue("expires")
-	expiresDays := 7
-	fmt.Sscanf(expiresStr, "%d", &expiresDays)
+	expiresDays := parseExpiryDays(r.FormValue("expires"))
 
-	ticketID := generateHex(4)
 	ext := uploads.SafeFileExt(hdr.Filename)
-	diskName := ticketID + ext
-	diskPath := filepath.Join(s.uploadsDB.FilesDiskDir(), diskName)
-
-	out, err := os.Create(diskPath)
-	if err != nil {
-		http.Error(w, "Could not store file", http.StatusInternalServerError)
+	// O_EXCL: a random id that happens to match an existing file must never overwrite it.
+	var ticketID, diskPath string
+	var out *os.File
+	for attempt := 0; attempt < ticketIDAttempts && out == nil; attempt++ {
+		ticketID = newTicketID()
+		diskPath = filepath.Join(s.uploadsDB.FilesDiskDir(), ticketID+ext)
+		f, err := os.OpenFile(diskPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			out = f
+		} else if !errors.Is(err, fs.ErrExist) {
+			http.Error(w, "Could not store file", http.StatusInternalServerError)
+			return
+		}
+	}
+	if out == nil {
+		http.Error(w, "Could not allocate a ticket id, try again", http.StatusServiceUnavailable)
 		return
 	}
 	n, err := io.Copy(out, io.LimitReader(file, s.maxUploadBytes()+1))
@@ -3076,6 +3163,10 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token 
 		os.Remove(diskPath)
 		if errors.Is(err, uploads.ErrTokenUsed) {
 			http.Error(w, "This upload link was already used", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, uploads.ErrTicketIDTaken) {
+			http.Error(w, "Could not allocate a ticket id, try again", http.StatusServiceUnavailable)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3206,8 +3297,7 @@ func (s *Server) handlePastesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionOK, _ := s.checkAuth(r)
-	if !sessionOK {
+	if !staff {
 		redacted := make([]*uploads.Upload, len(items))
 		for i, u := range items {
 			c := *u
@@ -4143,4 +4233,21 @@ func generateHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// ticketIDAttempts is how often a submission retries after a (very unlikely) id collision.
+const ticketIDAttempts = 5
+
+// newTicketID is a 48-bit random id (12 hex chars): it names the stored file and is the only
+// secret in the /p/<id> and /f/<id> URLs, so 32 bits were both collision-prone and guessable.
+func newTicketID() string { return generateHex(6) }
+
+// parseExpiryDays reads the form's expiry in days: default 7, clamped to 0..MaxExpiryDays
+// (0 = never expires).
+func parseExpiryDays(s string) int {
+	days := 7
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &days); err != nil {
+		return 7
+	}
+	return min(max(days, 0), uploads.MaxExpiryDays)
 }

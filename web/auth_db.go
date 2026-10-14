@@ -263,7 +263,56 @@ func (a *AuthDatabase) GetUsers() ([]User, error) {
 	return users, rows.Err()
 }
 
+// Dashboard password bounds: bcrypt only uses the first 72 bytes, so longer inputs are refused
+// instead of silently truncated.
+const (
+	minPasswordLen = 12
+	maxPasswordLen = 72
+)
+
+// PasswordPolicyError is returned for a password that is too short/long; handlers map it to 400.
+type PasswordPolicyError struct{ msg string }
+
+func (e *PasswordPolicyError) Error() string { return e.msg }
+
+// ValidatePassword enforces the dashboard password policy.
+func ValidatePassword(pw string) error {
+	if n := len(pw); n < minPasswordLen || n > maxPasswordLen {
+		return &PasswordPolicyError{fmt.Sprintf("password must be %d-%d bytes long", minPasswordLen, maxPasswordLen)}
+	}
+	return nil
+}
+
+// VerifyPassword reports whether pw is userID's current password.
+func (a *AuthDatabase) VerifyPassword(userID int, pw string) bool {
+	var hash string
+	if err := a.db.QueryRow("SELECT password_hash FROM web_users WHERE id = ?", userID).Scan(&hash); err != nil {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
+}
+
+// UserCount returns the number of dashboard users.
+func (a *AuthDatabase) UserCount() (int, error) {
+	var n int
+	err := a.db.QueryRow("SELECT COUNT(*) FROM web_users").Scan(&n)
+	return n, err
+}
+
+// PurgeExpired deletes expired sessions and CSRF tokens (they were only removed when presented again).
+func (a *AuthDatabase) PurgeExpired() error {
+	now := time.Now()
+	if _, err := a.db.Exec("DELETE FROM csrf_tokens WHERE expires_at < ?", now); err != nil {
+		return err
+	}
+	_, err := a.db.Exec("DELETE FROM web_sessions WHERE expires_at < ?", now)
+	return err
+}
+
 func (a *AuthDatabase) AddUser(username, password string) error {
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -274,6 +323,9 @@ func (a *AuthDatabase) AddUser(username, password string) error {
 }
 
 func (a *AuthDatabase) UpdatePassword(userID int, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -284,6 +336,9 @@ func (a *AuthDatabase) UpdatePassword(userID int, newPassword string) error {
 }
 
 func (a *AuthDatabase) UpdateUserPassword(id string, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return err

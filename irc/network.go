@@ -39,6 +39,10 @@ type ircNetwork struct {
 	connected      bool
 	connectionTime time.Time
 
+	// pace limits our outbound lines (see pacer.go); testSend, when set, captures them instead of using conn.
+	pace     pacer
+	testSend func(command, target, message string)
+
 	// Channel membership tracking for this network: channel -> set of users.
 	channelMembers map[string]map[string]struct{}
 	membersMu      sync.RWMutex

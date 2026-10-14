@@ -42,10 +42,15 @@ func TestParseConvertArgs(t *testing.T) {
 	}{
 		{"100 usd ars", 100, "USD", "ARS", false},
 		{"12.5 EUR usd", 12.5, "EUR", "USD", false},
-		{"100 usd", 0, "", "", true},          // too few args
+		{"100 usd", 0, "", "", true},           // too few args
 		{"100 usd ars extra", 0, "", "", true}, // too many args
 		{"abc usd ars", 0, "", "", true},       // non-numeric amount
 		{"", 0, "", "", true},                  // empty
+		{"1 usd?x eur", 0, "", "", true},       // URL metacharacters in a code
+		{"1 usd/../eur eur", 0, "", "", true},  // path injection
+		{"1 us eur", 0, "", "", true},          // not a 3-letter code
+		{"NaN usd eur", 0, "", "", true},       // non-finite amount
+		{"Inf usd eur", 0, "", "", true},
 	}
 	for _, c := range cases {
 		amount, from, to, err := parseConvertArgs(c.in)

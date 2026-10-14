@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"botIAask/meta"
@@ -167,6 +169,9 @@ func latestGetJSON(ctx context.Context, rawURL, token string, out any) error {
 		return fmt.Errorf("service unavailable")
 	}
 	defer resp.Body.Close()
+	if token != "" {
+		warnIfPrivateScope(resp.Header.Get("X-OAuth-Scopes"))
+	}
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return errLatestNotFound
@@ -179,6 +184,22 @@ func latestGetJSON(ctx context.Context, rawURL, token string, out any) error {
 		return fmt.Errorf("bad response")
 	}
 	return nil
+}
+
+var scopeWarnOnce sync.Once
+
+// warnIfPrivateScope logs (once) when github.token is a classic PAT with the full "repo" scope:
+// !latest sends it for any owner/repo an IRC user types, so such a token could reveal release and
+// tag names of private repositories. It should be a no-scope or public_repo token.
+func warnIfPrivateScope(scopes string) {
+	for _, s := range strings.Split(scopes, ",") {
+		if strings.TrimSpace(s) == "repo" {
+			scopeWarnOnce.Do(func() {
+				log.Printf("[SECURITY] github.token has the full \"repo\" scope; !latest uses it for any repository an IRC user names. Use a token without private-repo access (no scope or public_repo).")
+			})
+			return
+		}
+	}
 }
 
 // latestResult is what gets printed.

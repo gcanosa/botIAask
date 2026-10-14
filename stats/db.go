@@ -195,17 +195,44 @@ func (d *Database) GetStatsSince(since time.Time, network string) ([]StatEntry, 
 	}
 	defer rows.Close()
 
+	// The public history endpoint accepts ranges up to a year (~500k one-minute rows): merge rows
+	// into at most maxStatPoints buckets while scanning, so the result (and the JSON) stays small.
+	// Counters are summed; user_count / logged_in_admins are per-snapshot gauges, so keep the peak.
+	width := int64(time.Since(since).Seconds()) / maxStatPoints
+	if width < 1 {
+		width = 1
+	}
 	var entries []StatEntry
+	bucket := int64(-1)
 	for rows.Next() {
 		var e StatEntry
 		if err := rows.Scan(&e.Timestamp, &e.Messages, &e.Actions, &e.AIRequests, &e.UserCount, &e.Joins, &e.Parts, &e.AdminCommands, &e.LoggedInAdmins, &e.FailedAuths); err != nil {
 			return nil, err
 		}
 		e.Network = network
+		if b := e.Timestamp.Unix() / width; len(entries) > 0 && b == bucket {
+			last := &entries[len(entries)-1]
+			last.Timestamp = e.Timestamp
+			last.Messages += e.Messages
+			last.Actions += e.Actions
+			last.AIRequests += e.AIRequests
+			last.Joins += e.Joins
+			last.Parts += e.Parts
+			last.AdminCommands += e.AdminCommands
+			last.FailedAuths += e.FailedAuths
+			last.UserCount = max(last.UserCount, e.UserCount)
+			last.LoggedInAdmins = max(last.LoggedInAdmins, e.LoggedInAdmins)
+			continue
+		} else {
+			bucket = b
+		}
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
 }
+
+// maxStatPoints bounds the number of points GetStatsSince returns.
+const maxStatPoints = 600
 
 func (d *Database) Cleanup(days int) error {
 	if days <= 0 {

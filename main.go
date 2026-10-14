@@ -21,6 +21,7 @@ import (
 	"botIAask/github"
 	"botIAask/internal/guard"
 	"botIAask/internal/ircusage"
+	"botIAask/internal/securefs"
 	"botIAask/irc"
 	"botIAask/logger"
 	"botIAask/meta"
@@ -146,7 +147,7 @@ func main() {
 	}
 
 	// Ensure data directory exists
-	if err := os.MkdirAll("data", 0755); err != nil {
+	if err := securefs.MkdirPrivate("data"); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 

@@ -104,4 +104,21 @@ func TestLoadConfigTemplate(t *testing.T) {
 	if len(cfg.IRC.Networks[0].Channels) < 1 {
 		t.Fatalf("expected at least one irc channel in template, got %d", len(cfg.IRC.Networks[0].Channels))
 	}
+	// A fresh install must not ship a known dashboard password (the first admin gets a random one).
+	if cfg.Web.Auth.Password != "" {
+		t.Fatalf("template must not ship a default dashboard password, got %q", cfg.Web.Auth.Password)
+	}
+}
+
+func TestIsKeyedChannel(t *testing.T) {
+	cfg := &Config{IRC: IRCConfig{Networks: []IRCNetworkConfig{
+		{Name: "a", Channels: []IRChannel{{Name: "#Staff", Password: "k"}, {Name: "#pub"}}},
+		{Name: "b", Channels: []IRChannel{{Name: "#staff"}}},
+	}}}
+	if !IsKeyedChannel(cfg, "#staff", "a") || !IsKeyedChannel(cfg, "#STAFF", "") {
+		t.Fatal("keyed channel not detected (case-insensitive, any network)")
+	}
+	if IsKeyedChannel(cfg, "#staff", "b") || IsKeyedChannel(cfg, "#pub", "a") {
+		t.Fatal("unkeyed channel reported as keyed")
+	}
 }

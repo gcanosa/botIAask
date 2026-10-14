@@ -113,3 +113,20 @@ func (c IRChannel) MarshalYAML() (interface{}, error) {
 	}
 	return m, nil
 }
+
+// IsKeyedChannel reports whether channel is configured with a key (+k) on the given network (any
+// network when network is ""). Their conversation is treated as a secret: no public logs, no
+// !chanstats for non-admins.
+func IsKeyedChannel(cfg *Config, channel, network string) bool {
+	for _, n := range cfg.IRC.Networks {
+		if network != "" && n.Name != network {
+			continue
+		}
+		for _, ch := range n.Channels {
+			if ch.Password != "" && strings.EqualFold(ch.Name, channel) {
+				return true
+			}
+		}
+	}
+	return false
+}

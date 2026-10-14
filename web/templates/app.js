@@ -3429,7 +3429,8 @@ async function updatePassword(ev) {
         errEl.classList.add('hidden');
         fetchStatus();
     } else {
-        errEl.textContent = 'Update failed. Please try again.';
+        const msg = (await res.text()).trim();
+        errEl.textContent = res.status === 400 && msg ? msg : 'Update failed. Please try again.';
         errEl.classList.remove('hidden');
     }
 }

@@ -34,10 +34,10 @@ func setupNetworkEditTest(t *testing.T, cfg *config.Config) (*Server, *http.Cook
 		t.Fatalf("NewAuthDatabase: %v", err)
 	}
 	t.Cleanup(func() { authDB.Close() })
-	if err := authDB.AddUser("admin", "hunter2pass"); err != nil {
+	if err := authDB.AddUser("admin", "hunter2-pass-ok"); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
-	userID, _, err := authDB.Authenticate("admin", "hunter2pass")
+	userID, _, err := authDB.Authenticate("admin", "hunter2-pass-ok")
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}

@@ -1,6 +1,13 @@
 package irc
 
-import "testing"
+import (
+	"bytes"
+	"log"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+)
 
 func TestLatestParsing(t *testing.T) {
 	for in, want := range map[string]latestQuery{
@@ -30,5 +37,22 @@ func TestLatestParsing(t *testing.T) {
 	}
 	if got := sfVersion("/files/7.4/setup.exe"); got != "7.4" {
 		t.Errorf("sfVersion dir = %q", got)
+	}
+}
+
+func TestWarnIfPrivateScope(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	scopeWarnOnce = sync.Once{}
+
+	warnIfPrivateScope("public_repo, read:org")
+	if buf.Len() != 0 {
+		t.Fatalf("public_repo must not warn, got %q", buf.String())
+	}
+	warnIfPrivateScope("read:user, repo")
+	warnIfPrivateScope("repo")
+	if got := strings.Count(buf.String(), "[SECURITY]"); got != 1 {
+		t.Fatalf("want exactly one warning, got %d: %q", got, buf.String())
 	}
 }

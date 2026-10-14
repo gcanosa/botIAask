@@ -14,7 +14,7 @@ func (s *Server) handleChanStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if ok, _ := s.checkAuth(r); !ok {
+	if !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}

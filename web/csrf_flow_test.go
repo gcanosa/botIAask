@@ -22,10 +22,10 @@ func TestCSRFTokenEndpointUnblocksMutatingSaves(t *testing.T) {
 	}
 	defer authDB.Close()
 
-	if err := authDB.AddUser("admin", "hunter2pass"); err != nil {
+	if err := authDB.AddUser("admin", "hunter2-pass-ok"); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
-	userID, _, err := authDB.Authenticate("admin", "hunter2pass")
+	userID, _, err := authDB.Authenticate("admin", "hunter2-pass-ok")
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
@@ -82,10 +82,10 @@ func TestForcedPasswordChangeBlocksAdminAPIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer authDB.Close()
-	if err := authDB.AddUser("admin", "hunter2pass"); err != nil {
+	if err := authDB.AddUser("admin", "hunter2-pass-ok"); err != nil {
 		t.Fatal(err)
 	}
-	userID, _, _ := authDB.Authenticate("admin", "hunter2pass")
+	userID, _, _ := authDB.Authenticate("admin", "hunter2-pass-ok")
 	if _, err := authDB.db.Exec("UPDATE web_users SET needs_password_change = 1 WHERE id = ?", userID); err != nil {
 		t.Fatal(err)
 	}
