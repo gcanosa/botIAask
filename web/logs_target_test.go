@@ -54,10 +54,10 @@ func TestIsKeyedChannel(t *testing.T) {
 		{Name: "a", Channels: []config.IRChannel{{Name: "#pub"}, {Name: "#staff", Password: "k"}}},
 		{Name: "b", Channels: []config.IRChannel{{Name: "#staff"}}},
 	}
-	if !isKeyedChannel(cfg, "#staff", "a") || !isKeyedChannel(cfg, "#STAFF", "") {
+	if !config.IsKeyedChannel(cfg, "#staff", "a") || !config.IsKeyedChannel(cfg, "#STAFF", "") {
 		t.Fatal("keyed channel not detected")
 	}
-	if isKeyedChannel(cfg, "#staff", "b") || isKeyedChannel(cfg, "#pub", "a") {
+	if config.IsKeyedChannel(cfg, "#staff", "b") || config.IsKeyedChannel(cfg, "#pub", "a") {
 		t.Fatal("unkeyed channel misclassified")
 	}
 }
@@ -216,8 +216,8 @@ func TestDebugLog_AdminOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer authDB.Close()
-	authDB.AddUser("admin", "hunter2pass")
-	uid, _, _ := authDB.Authenticate("admin", "hunter2pass")
+	authDB.AddUser("admin", "hunter2-pass-ok")
+	uid, _, _ := authDB.Authenticate("admin", "hunter2-pass-ok")
 	tok, _ := authDB.CreateSession(uid)
 	s := &Server{cfg: &config.Config{}, authDB: authDB}
 

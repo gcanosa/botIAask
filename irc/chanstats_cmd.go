@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"botIAask/config"
 	"botIAask/logger"
 )
 
@@ -105,7 +106,7 @@ func chanStatsLines(channel string, days int, a logger.Activity) []string {
 }
 
 // handleChanStatsCommand: !chanstats [#chan] [days] — public, built from the channel's daily logs.
-func (b *ircNetwork) handleChanStatsCommand(target, sender, message string) {
+func (b *ircNetwork) handleChanStatsCommand(target, sender, message string, admin bool) {
 	channel, days := "", 7
 	if strings.HasPrefix(target, "#") || strings.HasPrefix(target, "&") {
 		channel = target
@@ -119,6 +120,11 @@ func (b *ircNetwork) handleChanStatsCommand(target, sender, message string) {
 	}
 	if channel == "" {
 		b.sendPrivmsg(target, fmt.Sprintf("Usage: %schanstats [#channel] [days]", b.pfx()))
+		return
+	}
+	// A keyed (+k) channel's web logs are admin-only, so its activity must not be readable from outside it.
+	if config.IsKeyedChannel(b.getCfg(), channel, b.name) && !admin {
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: no stats available for %s", sender, channel)))
 		return
 	}
 	days = min(max(days, 1), chanStatsMaxDays)

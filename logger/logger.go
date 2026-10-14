@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"botIAask/internal/securefs"
 )
 
 var (
@@ -46,7 +48,7 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 		// For PMs, we use the "channel" as the target nick.
 	}
 
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
+	if err := securefs.MkdirPrivate(logsDir); err != nil {
 		log.Printf("Error creating logs directory: %v\n", err)
 		return
 	}
@@ -63,7 +65,7 @@ func LogChannelEvent(serverName, channel string, eventType EventType, sender, me
 	mu.Lock()
 	defer mu.Unlock()
 
-	f, err := os.OpenFile(fullpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(fullpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		log.Printf("Error opening log file: %v\n", err)
 		return
@@ -200,7 +202,7 @@ func rotateLogs(dir string, days int) {
 	}
 
 	archiveDir := filepath.Join(dir, "archive")
-	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+	if err := securefs.MkdirPrivate(archiveDir); err != nil {
 		log.Printf("Error creating archive directory: %v\n", err)
 		return
 	}

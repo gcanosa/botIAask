@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -63,23 +64,6 @@ func validLogTarget(cfg *config.Config, channel, network string) bool {
 	return false
 }
 
-// isKeyedChannel reports whether channel is configured with a password (+k) on the given
-// network (any network when network is ""). Such logs are admin-only: the key is treated as a
-// secret everywhere else, so the conversation must not be world-readable either.
-func isKeyedChannel(cfg *config.Config, channel, network string) bool {
-	for _, n := range cfg.IRC.Networks {
-		if network != "" && n.Name != network {
-			continue
-		}
-		for _, ch := range n.Channels {
-			if ch.Password != "" && strings.EqualFold(ch.Name, channel) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // isNetworkLogKey reports whether a bare log key is a configured network name: that file is
 // the bot's private-message log (logs/<network>_<date>.log), never a channel.
 func isNetworkLogKey(cfg *config.Config, key string) bool {
@@ -123,11 +107,19 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isAdmin := s.staffAdminFromRequest(r)
+	// The listing walks logs/ and logs/archive/ (thousands of names after a year) and is public:
+	// serve a short-lived copy per audience (admins also see keyed channels and the debug log).
+	if body := s.cachedLogCatalog(isAdmin); body != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+		return
+	}
+
 	now := time.Now()
 	localToday := now.Format("2006-01-02")
 	maxDate := localToday
 	cfg := s.getConfig()
-	isAdmin := s.staffAdminFromRequest(r)
 	rotationDays := cfg.Logger.RotationDays
 
 	var minDate string
@@ -254,7 +246,7 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if !isAdmin && isKeyedChannel(cfg, info.label, info.network) {
+		if !isAdmin && config.IsKeyedChannel(cfg, info.label, info.network) {
 			continue
 		}
 		dateSet := diskDates[fileKey]
@@ -294,8 +286,40 @@ func (s *Server) handleLogCatalog(w http.ResponseWriter, r *http.Request) {
 		Channels: channels,
 	}
 
+	body, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, "encode error", http.StatusInternalServerError)
+		return
+	}
+	s.storeLogCatalog(isAdmin, body)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write(body)
+}
+
+const logCatalogTTL = 30 * time.Second
+
+func catalogSlot(isAdmin bool) int {
+	if isAdmin {
+		return 1
+	}
+	return 0
+}
+
+func (s *Server) cachedLogCatalog(isAdmin bool) []byte {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	i := catalogSlot(isAdmin)
+	if s.catalogBody[i] != nil && time.Since(s.catalogAt[i]) < logCatalogTTL {
+		return s.catalogBody[i]
+	}
+	return nil
+}
+
+func (s *Server) storeLogCatalog(isAdmin bool, body []byte) {
+	s.catalogMu.Lock()
+	i := catalogSlot(isAdmin)
+	s.catalogBody[i], s.catalogAt[i] = body, time.Now()
+	s.catalogMu.Unlock()
 }
 
 // debugLogEntry lists the days that have a process log in logs/debug (or its archive).
@@ -364,7 +388,7 @@ func (s *Server) handleLogHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid channel or network", http.StatusBadRequest)
 		return
 	}
-	if isKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
+	if config.IsKeyedChannel(s.getConfig(), channel, network) && !s.staffAdminFromRequest(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -416,21 +440,26 @@ func readDayLog(dir string, keys []string, date string, maxLines int) (lines []s
 		paths, archived = gz, true
 	}
 	for _, p := range paths {
+		if !archived { // plain file: read only its tail
+			got, trunc, err := readFileTail(p, maxLines)
+			if err != nil {
+				continue
+			}
+			lines = append(lines, got...)
+			truncated = truncated || trunc
+			continue
+		}
 		f, err := os.Open(p)
 		if err != nil {
 			continue
 		}
-		var r io.Reader = f
-		if archived {
-			zr, err := gzip.NewReader(f)
-			if err != nil {
-				f.Close()
-				return nil, false, false, err
-			}
-			defer zr.Close()
-			r = zr
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, false, false, err
 		}
-		got, trunc := readLogLinesTail(r, maxLines)
+		got, trunc := readLogLinesTail(zr, maxLines)
+		zr.Close()
 		f.Close()
 		lines = append(lines, got...)
 		truncated = truncated || trunc
@@ -466,4 +495,68 @@ func readLogLinesTail(r io.Reader, maxLines int) (lines []string, truncated bool
 		}
 	}
 	return lines, truncated
+}
+
+// tailLines returns the last maxLines complete lines of f's first size bytes without reading the
+// whole file (big channels log tens of MB a day, and these endpoints are public). partial is any
+// unterminated text after the last newline (a line still being written); truncated reports that
+// earlier lines were left out.
+func tailLines(f *os.File, size int64, maxLines int) (lines []string, partial string, truncated bool, err error) {
+	const chunk = 64 << 10
+	var chunks [][]byte
+	pos, newlines := size, 0
+	for pos > 0 && newlines <= maxLines {
+		n := int64(chunk)
+		if n > pos {
+			n = pos
+		}
+		pos -= n
+		b := make([]byte, n)
+		if _, err := f.ReadAt(b, pos); err != nil && err != io.EOF {
+			return nil, "", false, err
+		}
+		chunks = append(chunks, b)
+		newlines += bytes.Count(b, []byte{'\n'})
+	}
+	data := make([]byte, 0, size-pos)
+	for i := len(chunks) - 1; i >= 0; i-- {
+		data = append(data, chunks[i]...)
+	}
+	if pos > 0 { // we started mid-file: the first line may be cut, drop it
+		truncated = true
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:]
+		} else {
+			data = nil
+		}
+	}
+	if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
+		partial = string(data[i+1:])
+		data = data[:i]
+		lines = strings.Split(string(data), "\n")
+	} else {
+		partial = string(data)
+	}
+	if len(lines) > maxLines {
+		lines, truncated = lines[len(lines)-maxLines:], true
+	}
+	return lines, partial, truncated, nil
+}
+
+// readFileTail is tailLines over a whole plain-text log.
+func readFileTail(path string, maxLines int) (lines []string, truncated bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	lines, partial, truncated, err := tailLines(f, fi.Size(), maxLines)
+	if partial != "" {
+		lines = append(lines, partial)
+	}
+	return lines, truncated, err
 }

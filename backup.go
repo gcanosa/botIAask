@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"botIAask/internal/securefs"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -33,7 +35,7 @@ func startBackupScheduler(dataDir string, intervalHrs, keep int) {
 
 func runBackup(dataDir string, keep int) {
 	backupDir := filepath.Join(dataDir, "backups")
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+	if err := securefs.MkdirPrivate(backupDir); err != nil {
 		log.Printf("backup: mkdir %s: %v", backupDir, err)
 		return
 	}

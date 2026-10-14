@@ -6,10 +6,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"errors"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -326,12 +327,32 @@ func (d *Database) GetUploadByToken(token string) (*Upload, error) {
 	return &u, nil
 }
 
+// ErrTicketIDTaken means the random ticket id is already in use; callers retry with a new one.
+var ErrTicketIDTaken = errors.New("ticket id already in use")
+
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 func (d *Database) SubmitUpload(token, ticketID, title, description, content string, expiresInDays int, clientHost string) error {
 	fileName := fmt.Sprintf("%s.txt", ticketID)
 	filePath := filepath.Join(d.pastesDir, fileName)
 	body := []byte(content)
-	if err := os.WriteFile(filePath, body, 0644); err != nil {
+	// O_EXCL: never overwrite another paste's file, and the cleanup below only removes our own.
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return ErrTicketIDTaken
+		}
 		return err
+	}
+	_, werr := f.Write(body)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(filePath)
+		return werr
 	}
 	mdH, shH := HexMD5SHA256FromBytes(body)
 	size := int64(len(body))
@@ -345,6 +366,9 @@ func (d *Database) SubmitUpload(token, ticketID, title, description, content str
 	}
 	if err != nil {
 		os.Remove(filePath)
+		if isUniqueViolation(err) {
+			err = ErrTicketIDTaken
+		}
 	}
 	return err
 }
@@ -354,6 +378,9 @@ func (d *Database) SubmitFileUpload(token, ticketID, title, description string, 
 		upload_type = ?, original_filename = ?, content_type = ?, size_bytes = ?, client_host = ?, md5_hex = ?, sha256_hex = ? WHERE token = ? AND status = 'pending_form'`
 	res, err := d.db.Exec(q, ticketID, title, description, diskPath, expiresInDays, TypeFile, originalFilename, contentType, sizeBytes, clientHost, md5Hex, sha256Hex, token)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrTicketIDTaken
+		}
 		return err
 	}
 	return requireOneRow(res)

@@ -1262,7 +1262,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		if b.rateLimited(target, sender) {
 			return
 		}
-		b.handleChanStatsCommand(target, sender, message)
+		b.handleChanStatsCommand(target, sender, message, isAdmin && isLoggedInAdmin)
 		return
 	}
 
@@ -1596,25 +1596,14 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		// Get response from AI
 		response, err := b.aiClient.Ask(ctx, question)
 		if err != nil {
-			if b.getCfg().Bot.Debug {
-				log.Printf("Error contacting AI: %v\n", err)
-			}
-			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("Error contacting AI: %v", err)))
+			// The raw error embeds the LM Studio URL (internal host/port); keep it out of the channel.
+			log.Printf("irc[%s]: AI request failed: %v", b.name, err)
+			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: AI unavailable, try again later.", sender)))
 			return
 		}
 
-		// Format the response to mention the sender and sanitize it for IRC compatibility
-		formattedResponse := b.sanitize(fmt.Sprintf("@%s: %s", sender, response))
-
-		// Handle long responses by truncating to prevent IRC limits (512 bytes max)
-		if len(formattedResponse) > 500 {
-			// Truncate to prevent exceeding 520-byte IRC limit (including prefixing)
-			if len(formattedResponse) > 520 {
-				formattedResponse = formattedResponse[:517] + "..."
-			}
-		}
-
-		b.sendPrivmsg(target, formattedResponse)
+		// sanitize caps the line at ircTextBudget bytes (on a rune boundary).
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: %s", sender, response)))
 	}
 }
 
@@ -1644,9 +1633,23 @@ func (b *ircNetwork) handleCTCPRequest(sender, target, content string) {
 	}
 }
 
-// sendPrivmsg wraps conn.Privmsg and also logs the bot's own outbound messages
+// transmit writes one PRIVMSG/NOTICE; tests replace it via testSend to capture output.
+func (b *ircNetwork) transmit(command, target, message string) {
+	if b.testSend != nil {
+		b.testSend(command, target, message)
+		return
+	}
+	if command == "NOTICE" {
+		b.conn.Notice(target, message)
+	} else {
+		b.conn.Privmsg(target, message)
+	}
+}
+
+// sendPrivmsg paces and sends a PRIVMSG, and also logs the bot's own outbound messages.
 func (b *ircNetwork) sendPrivmsg(target, message string) {
-	b.conn.Privmsg(target, message)
+	b.pace.wait()
+	b.transmit("PRIVMSG", target, message)
 	logger.LogChannelEvent(b.name, target, logger.EventMessage, b.netCfg().Nickname, message, "")
 }
 
@@ -1776,9 +1779,10 @@ func splitStringByRunesToByteBudget(s string, max int) []string {
 	return res
 }
 
-// sendNotice wraps conn.Notice and logs outbound notices (e.g. join reminders).
+// sendNotice paces and sends a NOTICE and logs it (e.g. join reminders).
 func (b *ircNetwork) sendNotice(target, message string) {
-	b.conn.Notice(target, message)
+	b.pace.wait()
+	b.transmit("NOTICE", target, message)
 	logger.LogChannelEvent(b.name, target, logger.EventNotice, b.netCfg().Nickname, message, "")
 }
 

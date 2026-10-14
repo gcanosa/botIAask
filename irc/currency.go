@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+var currencyCodeRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
 type ExchangeRates struct {
 	Base  string             `json:"base"`
@@ -114,7 +118,7 @@ func (b *ircNetwork) handlePesoCommand(target string) {
 
 	// 1 USD = arsRate ARS
 	// 1 EUR = arsRate / eurRate ARS
-	
+
 	msg := fmt.Sprintf("\x0303,01[CURRENCY]\x03 1 USD = %.2f ARS", arsRate)
 	if okeur && eurRate != 0 {
 		eurToArs := arsRate / eurRate
@@ -132,10 +136,15 @@ func parseConvertArgs(rest string) (amount float64, from, to string, err error) 
 		return 0, "", "", fmt.Errorf("expected 3 arguments, got %d", len(fields))
 	}
 	amount, err = strconv.ParseFloat(fields[0], 64)
-	if err != nil {
+	if err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return 0, "", "", fmt.Errorf("invalid amount %q", fields[0])
 	}
-	return amount, strings.ToUpper(fields[1]), strings.ToUpper(fields[2]), nil
+	from, to = strings.ToUpper(fields[1]), strings.ToUpper(fields[2])
+	// The code goes straight into the rates URL and the cache key: only plain ISO-style codes.
+	if !currencyCodeRe.MatchString(from) || !currencyCodeRe.MatchString(to) {
+		return 0, "", "", fmt.Errorf("currency codes are 3 letters")
+	}
+	return amount, from, to, nil
 }
 
 // formatConvertReply renders the !convert reply line. Pure/no I/O so it's directly testable.
@@ -183,7 +192,7 @@ func (b *ircNetwork) handleCryptoCommand(target string) {
 
 	// We want BTC, ETH prominently, then others.
 	// The User said: "ethereum, bitcoin and top 5 crypto currencies values"
-	
+
 	var btc *crypto.PriceEntry
 	var eth *crypto.PriceEntry
 	var others []string

@@ -162,8 +162,62 @@ func NewDatabase(dbPath string) (*Database, error) {
 		sqldb.Close()
 		return nil, fmt.Errorf("failed to migrate seen table: %w", err)
 	}
+	// Older versions stored the text of private messages; !seen must never be able to repeat it.
+	_, _ = sqldb.Exec(`UPDATE seen SET message = '' WHERE COALESCE(channel, '') = '' AND COALESCE(message, '') != ''`)
+
+	if err := migrateReminderOwnerFold(sqldb); err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("failed to migrate reminders owner_fold: %w", err)
+	}
 
 	return &Database{db: sqldb}, nil
+}
+
+// migrateReminderOwnerFold adds the case-folded owner column (like tells.to_fold) so reminder
+// lookups for one nick use an index instead of loading every reminder of the network.
+func migrateReminderOwnerFold(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE reminders ADD COLUMN owner_fold TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	rows, err := db.Query(`SELECT id, owner_nick FROM reminders WHERE owner_fold = ''`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id   int64
+		nick string
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.nick); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(todo) > 0 {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, r := range todo {
+			if _, err := tx.Exec(`UPDATE reminders SET owner_fold = ? WHERE id = ?`, IRCCaseFoldNick(strings.TrimSpace(r.nick)), r.id); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_reminders_network_owner_fold ON reminders (network, owner_fold)`)
+	return err
 }
 
 // bookmarksTableColumns returns the set of column names on table (via PRAGMA table_info).
@@ -449,8 +503,8 @@ func (d *Database) AddReminder(network, ownerNick, note string, dueAt *time.Time
 			return "", err
 		}
 		_, err = d.db.Exec(
-			`INSERT INTO reminders (public_id, network, owner_nick, note, created_at, due_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			id, network, ownerNick, note, time.Now(), due,
+			`INSERT INTO reminders (public_id, network, owner_nick, owner_fold, note, created_at, due_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id, network, ownerNick, IRCCaseFoldNick(ownerNick), note, time.Now(), due,
 		)
 		if err == nil {
 			return id, nil
@@ -486,25 +540,22 @@ func (d *Database) ClearReminderDue(publicID string) error {
 // ListJoinReminders returns the legacy on-join reminders (due_at IS NULL) for ownerNick
 // on network.
 func (d *Database) ListJoinReminders(network, ownerNick string) ([]Reminder, error) {
-	targetFold := IRCCaseFoldNick(strings.TrimSpace(ownerNick))
 	rows, err := d.db.Query(`
 		SELECT public_id, network, owner_nick, note, created_at, due_at FROM reminders
-		WHERE due_at IS NULL AND network = ?
-		ORDER BY created_at ASC`, network)
+		WHERE due_at IS NULL AND network = ? AND owner_fold = ?
+		ORDER BY created_at ASC`, network, IRCCaseFoldNick(strings.TrimSpace(ownerNick)))
 	if err != nil {
 		return nil, err
 	}
-	all, err := scanReminders(rows)
-	if err != nil {
-		return nil, err
-	}
-	var out []Reminder
-	for _, r := range all {
-		if IRCCaseFoldNick(strings.TrimSpace(r.OwnerNick)) == targetFold {
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	return scanReminders(rows)
+}
+
+// CountRemindersFor returns how many reminders ownerNick has on network (for the per-nick cap).
+func (d *Database) CountRemindersFor(network, ownerNick string) (int, error) {
+	var n int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM reminders WHERE network = ? AND owner_fold = ?`,
+		network, IRCCaseFoldNick(strings.TrimSpace(ownerNick))).Scan(&n)
+	return n, err
 }
 
 // DeleteReminder removes a reminder on network if public_id exists and owner matches (IRC case fold).
@@ -564,27 +615,14 @@ func (d *Database) GetReminder(network, ownerNick, publicID string) (Reminder, b
 
 // ListReminders returns reminders for ownerNick on network, ordered by created_at ascending.
 func (d *Database) ListReminders(network, ownerNick string) ([]Reminder, error) {
-	uname := strings.TrimSpace(ownerNick)
-	targetFold := IRCCaseFoldNick(uname)
-
 	rows, err := d.db.Query(`
 		SELECT public_id, network, owner_nick, note, created_at, due_at FROM reminders
-		WHERE network = ?
-		ORDER BY created_at ASC`, network)
+		WHERE network = ? AND owner_fold = ?
+		ORDER BY created_at ASC`, network, IRCCaseFoldNick(strings.TrimSpace(ownerNick)))
 	if err != nil {
 		return nil, err
 	}
-	all, err := scanReminders(rows)
-	if err != nil {
-		return nil, err
-	}
-	var out []Reminder
-	for _, r := range all {
-		if IRCCaseFoldNick(strings.TrimSpace(r.OwnerNick)) == targetFold {
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	return scanReminders(rows)
 }
 
 // scanReminders reads a rows set of (public_id, network, owner_nick, note, created_at, due_at).

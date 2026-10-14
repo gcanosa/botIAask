@@ -74,15 +74,18 @@ web:
     enabled: true
     port: 3366
     host: 0.0.0.0
-    base_url: http://sekurnet.duckdns.org:3366
+    # Public URL of the dashboard (used in paste/upload/short links announced on IRC).
+    base_url: http://localhost:3366
     # Dashboard "server location" weather (Open-Meteo geocoding + forecast)
     server_location: 'Barcelona, Spain'
     # How often the web panel fetches /api/weather and server cache window (minutes)
     weather_refresh_minutes: 30
+    # Initial admin account, only used while no dashboard user exists. Leave the password empty:
+    # a random one is generated and printed once in the log (you must change it at first login).
     auth:
-        enabled: false
         username: admin
-        password: password
+        password: ''
+
 daemon:
     enabled: true
     pid_file: bot.pid
@@ -137,7 +140,8 @@ uploads:
 # GitHub for changelog (fetches commits from remote repository instead of local git).
 # Useful for Docker/pod deployments where git history is not available locally.
 # Set token for higher API rate limits (60 req/hr unauthenticated, 5000 req/hr authenticated).
-# Get a token at https://github.com/settings/tokens (needs public_repo scope at minimum).
+# Get a token at https://github.com/settings/tokens. Use a token WITHOUT private-repo access (no
+# scope, or public_repo): it is also used by !latest for any repository an IRC user names.
 # github:
 #     owner: your-github-username-or-org
 #     repo: repository-name
