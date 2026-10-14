@@ -23,7 +23,6 @@ func (s *Server) initShortLinks() {
 	}
 	s.shortlinks = st
 	rss.SetSelfShortener(s.shortenSelf)
-	// ponytail: never stopped (lives as long as the process); add a stop channel if Server gains a Close.
 	guard.Go("shortlinks-purge", func() {
 		for {
 			if age := s.getConfig().ShortLinks.ExpireAfter(); age > 0 {
@@ -33,7 +32,11 @@ func (s *Server) initShortLinks() {
 					log.Printf("shortlinks purge: removed %d expired links", n)
 				}
 			}
-			time.Sleep(24 * time.Hour)
+			select {
+			case <-s.done:
+				return
+			case <-time.After(24 * time.Hour):
+			}
 		}
 	})
 }

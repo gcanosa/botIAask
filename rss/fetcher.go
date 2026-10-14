@@ -536,7 +536,14 @@ var ErrSelfDisabled = errors.New("private shortener disabled")
 var selfShortener atomic.Pointer[func(string) (string, error)]
 
 // SetSelfShortener installs the private shortener ("self" service).
-func SetSelfShortener(fn func(string) (string, error)) { selfShortener.Store(&fn) }
+// A nil fn removes it (the owning web server was closed).
+func SetSelfShortener(fn func(string) (string, error)) {
+	if fn == nil {
+		selfShortener.Store(nil)
+		return
+	}
+	selfShortener.Store(&fn)
+}
 
 func shortenWithSelf(longURL string) (string, error) {
 	fn := selfShortener.Load()

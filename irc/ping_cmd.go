@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"botIAask/internal/guard"
+
 	"github.com/prometheus-community/pro-bing"
 )
 
@@ -130,7 +132,7 @@ func (b *ircNetwork) startCTCPPing(target, sender string) {
 
 	b.conn.Privmsg(sender, "\x01PING "+tok+"\x01")
 
-	time.AfterFunc(ctcpPingTimeout, func() {
+	time.AfterFunc(ctcpPingTimeout, guard.Wrap("ctcp ping timeout", func() {
 		b.pingMu.Lock()
 		p, ok := b.pendingPings[key]
 		if ok && p.token == tok {
@@ -142,7 +144,7 @@ func (b *ircNetwork) startCTCPPing(target, sender string) {
 		if ok {
 			b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: ping timeout (no CTCP PING reply)", sender)))
 		}
-	})
+	}))
 }
 
 // handlePingReply consumes a CTCP PING reply NOTICE; returns true if it was one.

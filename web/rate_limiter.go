@@ -6,25 +6,35 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"botIAask/internal/guard"
 )
 
 // LoginRateLimiter tracks login attempts per IP to prevent brute force attacks.
 type LoginRateLimiter struct {
-	mu      sync.Mutex
-	attempts map[string][]time.Time
-	window  time.Duration
+	mu          sync.Mutex
+	attempts    map[string][]time.Time
+	window      time.Duration
 	maxAttempts int
+	stop        chan struct{}
+	stopOnce    sync.Once
 }
 
 // NewLoginRateLimiter creates a new rate limiter with max attempts per window.
 func NewLoginRateLimiter(window time.Duration, maxAttempts int) *LoginRateLimiter {
 	l := &LoginRateLimiter{
-		attempts: make(map[string][]time.Time),
-		window:   window,
+		attempts:    make(map[string][]time.Time),
+		window:      window,
 		maxAttempts: maxAttempts,
+		stop:        make(chan struct{}),
 	}
-	go l.cleanupLoop()
+	guard.Go("login limiter cleanup", l.cleanupLoop)
 	return l
+}
+
+// Close stops the background cleanup (the owning Server is going away).
+func (l *LoginRateLimiter) Close() {
+	l.stopOnce.Do(func() { close(l.stop) })
 }
 
 // IsAllowed checks if the IP is allowed to attempt a login. Returns false if rate limited.
@@ -61,7 +71,12 @@ func (l *LoginRateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-l.stop:
+			return
+		case <-ticker.C:
+		}
 		l.mu.Lock()
 		now := time.Now()
 		cutoff := now.Add(-l.window * 2) // Keep entries older than 2x window

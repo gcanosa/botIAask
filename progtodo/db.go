@@ -175,6 +175,14 @@ func (d *Database) ListByAuthor(authorNick, network string) ([]Entry, error) {
 	return scanEntries(rows)
 }
 
+// CountByAuthor returns how many todos authorNick has on network (for the per-nick cap).
+func (d *Database) CountByAuthor(authorNick, network string) (int, error) {
+	var n int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM programmer_todos WHERE author_nick = ? AND network = ?`,
+		strings.TrimSpace(authorNick), network).Scan(&n)
+	return n, err
+}
+
 // DeleteByAuthor deletes a row only if it belongs to authorNick on network.
 func (d *Database) DeleteByAuthor(authorNick, network, publicID string) (bool, error) {
 	authorNick, publicID = strings.TrimSpace(authorNick), strings.TrimSpace(publicID)

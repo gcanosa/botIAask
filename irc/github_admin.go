@@ -12,6 +12,7 @@ import (
 
 	"botIAask/config"
 	"botIAask/github"
+	"botIAask/internal/guard"
 	"botIAask/rss"
 
 	"github.com/ergochat/irc-go/ircmsg"
@@ -199,7 +200,6 @@ func (b *ircNetwork) ghList(target string) {
 		}
 		b.sendPrivmsg(target, fmt.Sprintf("- %s  channels=%s  events=%s  %s%s",
 			r.FullName(), strings.Join(r.Channels, ","), events, tok, state))
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -255,7 +255,7 @@ func (b *ircNetwork) ghAdd(target, sender, rest string) {
 
 	key := adminSessionKey(b.name, sender)
 	deadline := time.Now().Add(ghTokenTimeout)
-	timer := time.AfterFunc(ghTokenTimeout, func() {
+	timer := time.AfterFunc(ghTokenTimeout, guard.Wrap("gh token timeout", func() {
 		b.ghTokenMu.Lock()
 		_, stillPending := b.pendingGHTokens[key]
 		if stillPending {
@@ -265,7 +265,7 @@ func (b *ircNetwork) ghAdd(target, sender, rest string) {
 		if stillPending {
 			b.sendNotice(sender, fmt.Sprintf("Timed out waiting for a token for %s/%s. Run !gh add again.", owner, repo))
 		}
-	})
+	}))
 	b.ghTokenMu.Lock()
 	b.pendingGHTokens[key] = pendingGHTokenRequest{
 		owner: owner, repo: repo, channels: channels, deadline: deadline,
@@ -447,6 +447,5 @@ func (b *ircNetwork) ghSearchLocal(target, repoKey, query string) {
 	}
 	for _, row := range rows {
 		b.sendPrivmsg(target, fmt.Sprintf("- [%s] %s", row.RefID, row.Message))
-		time.Sleep(500 * time.Millisecond)
 	}
 }

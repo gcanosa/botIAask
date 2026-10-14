@@ -12,18 +12,18 @@ func TestRateLimiter_NetworkIsolation(t *testing.T) {
 	rl := NewRateLimiter(time.Minute)
 	const burst = 2
 
-	if !rl.Allow("alpha", "bob", "botnick", 0, burst) {
+	if !rl.Allow("alpha", "bob", "botnick", burst) {
 		t.Fatal("alpha: 1st call should be allowed")
 	}
-	if !rl.Allow("alpha", "bob", "botnick", 0, burst) {
+	if !rl.Allow("alpha", "bob", "botnick", burst) {
 		t.Fatal("alpha: 2nd call should be allowed")
 	}
-	if rl.Allow("alpha", "bob", "botnick", 0, burst) {
+	if rl.Allow("alpha", "bob", "botnick", burst) {
 		t.Fatal("alpha: 3rd call should be rate-limited")
 	}
 
 	// Same sender+target on a different network must have its own, unexhausted budget.
-	if !rl.Allow("beta", "bob", "botnick", 0, burst) {
+	if !rl.Allow("beta", "bob", "botnick", burst) {
 		t.Fatal("beta: budget must be independent of alpha's")
 	}
 }
@@ -32,7 +32,7 @@ func TestRateLimiter_NetworkIsolation(t *testing.T) {
 // window must eventually be evicted rather than living forever in the map.
 func TestRateLimiter_EvictStale(t *testing.T) {
 	rl := NewRateLimiter(time.Millisecond)
-	rl.Allow("alpha", "bob", "botnick", 0, 5)
+	rl.Allow("alpha", "bob", "botnick", 5)
 	if len(rl.limits) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(rl.limits))
 	}
@@ -46,7 +46,7 @@ func TestRateLimiter_EvictStale(t *testing.T) {
 	rl.lastSweep = time.Now().Add(-time.Hour)
 	rl.mu.Unlock()
 
-	rl.Allow("gamma", "carol", "botnick", 0, 5) // triggers evictStaleLocked as a side effect
+	rl.Allow("gamma", "carol", "botnick", 5) // triggers evictStaleLocked as a side effect
 
 	rl.mu.RLock()
 	_, staleStillThere := rl.limits["alpha\x00bob\x00botnick"]
