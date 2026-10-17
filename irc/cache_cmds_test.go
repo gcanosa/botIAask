@@ -84,3 +84,37 @@ func TestLinuxPartialAnswerIsNotCached(t *testing.T) {
 		t.Fatalf("recovered source never showed up (partial answer was cached):\n%s", got)
 	}
 }
+
+// !kernel: dates on every tree, projected EOL on longterm, linux-next bare; cached like !linux.
+func TestKernelCommand(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if strings.Contains(r.URL.Path, "kernel") {
+			w.Write([]byte(`{"releases":[
+				{"moniker":"mainline","version":"7.3-rc7","released":{"isodate":"2026-10-12"}},
+				{"moniker":"longterm","version":"6.18.57","released":{"isodate":"2026-10-15"}},
+				{"moniker":"linux-next","version":"next-20261016","released":{"isodate":"2026-10-16"}}]}`))
+			return
+		}
+		w.Write([]byte(`{"result":{"releases":[{"name":"6.18","eolFrom":"2028-12-31"}]}}`))
+	}))
+	defer srv.Close()
+	oldE, oldK := linuxEOLAPI, linuxKernel
+	linuxEOLAPI, linuxKernel = srv.URL+"/eol/", srv.URL+"/kernel"
+	defer func() { linuxEOLAPI, linuxKernel = oldE, oldK }()
+	linuxCache = linuxCache0()
+
+	n, out := newCmdNetwork(t)
+	n.handleKernelCommand("#c", "alice")
+	n.handleKernelCommand("#c", "bob")
+	got := strings.Join(out.all(), "\n")
+	for _, want := range []string{"mainline \x027.3-rc7\x02 (2026-10-12)", "\x026.18.57\x02 (2026-10-15, EOL 2028-12-31)", "linux-next \x02next-20261016\x02"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if len(out.all()) != 4 || hits.Load() != 2 {
+		t.Fatalf("%d lines, %d upstream requests (want 4, 2)", len(out.all()), hits.Load())
+	}
+}
