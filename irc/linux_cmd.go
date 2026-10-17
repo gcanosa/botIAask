@@ -56,6 +56,7 @@ type eolRelease struct {
 	Codename    string `json:"codename"`
 	IsLts       bool   `json:"isLts"`
 	ReleaseDate string `json:"releaseDate"`
+	EOLFrom     string `json:"eolFrom"`
 	Latest      *struct {
 		Name string `json:"name"`
 	} `json:"latest"`
@@ -121,8 +122,12 @@ func (l rpiList) format() string {
 
 type kernelReleases struct {
 	Releases []struct {
-		Moniker string `json:"moniker"`
-		Version string `json:"version"`
+		Moniker  string `json:"moniker"`
+		Version  string `json:"version"`
+		IsEOL    bool   `json:"iseol"`
+		Released struct {
+			ISODate string `json:"isodate"`
+		} `json:"released"`
 	} `json:"releases"`
 }
 
@@ -145,6 +150,64 @@ func (k kernelReleases) format() string {
 		parts = append(parts, m+" "+strings.Join(v, ", "))
 	}
 	return "\x0303,01[KERNEL]\x03 " + strings.Join(parts, " · ")
+}
+
+// kernelCycle maps "6.18.57" to its endoflife.date cycle "6.18".
+func kernelCycle(v string) string {
+	if p := strings.SplitN(v, ".", 3); len(p) >= 2 {
+		return p[0] + "." + p[1]
+	}
+	return v
+}
+
+// formatDetail renders the !kernel lines: "[KERNEL] mainline 7.3-rc7 (2026-10-12) · stable … · linux-next …"
+// and "[LTS] 6.18.57 (2026-10-15, EOL 2028-12-31) · …". eolFrom maps cycle → projected EOL date (may be nil).
+func (k kernelReleases) formatDetail(eolFrom map[string]string) (trees, lts string) {
+	var top, lt []string
+	for _, r := range k.Releases {
+		meta := r.Released.ISODate
+		if r.Moniker == "longterm" {
+			if d := eolFrom[kernelCycle(r.Version)]; d != "" {
+				meta += ", EOL " + d
+			}
+		}
+		if r.IsEOL {
+			meta += ", EOL"
+		}
+		meta = strings.TrimPrefix(meta, ", ")
+		s := ircBold + r.Version + ircBold
+		if r.Moniker != "linux-next" && meta != "" {
+			s += " (" + meta + ")"
+		}
+		if r.Moniker == "longterm" {
+			lt = append(lt, s)
+		} else {
+			top = append(top, r.Moniker+" "+s)
+		}
+	}
+	return tagLine("KERNEL", top), tagLine("LTS", lt)
+}
+
+// fetchKernel returns the !kernel lines; the endoflife.date EOL dates are optional garnish.
+func fetchKernel(ctx context.Context) (trees, lts string) {
+	var k kernelReleases
+	var p eolProduct
+	var wg sync.WaitGroup
+	wg.Add(1)
+	guard.Go("kernel eol", func() {
+		defer wg.Done()
+		linuxGetJSON(ctx, linuxEOLAPI+"linux", &p)
+	})
+	err := linuxGetJSON(ctx, linuxKernel, &k)
+	wg.Wait()
+	if err != nil || len(k.Releases) == 0 {
+		return "", ""
+	}
+	eolFrom := map[string]string{}
+	for _, r := range p.Result.Releases {
+		eolFrom[r.Name] = r.EOLFrom
+	}
+	return k.formatDetail(eolFrom)
 }
 
 // fetchEOL fills out[slot(i)] with each product's newest release; failures stay "".
@@ -208,12 +271,12 @@ func fetchLinux(ctx context.Context) (distros, bsd, kernel string) {
 	return tagLine("LINUX", parts), tagLine("BSD", bsds), kernel
 }
 
-// linuxCache keeps a complete !linux answer for 10 minutes: one call is 11 upstream requests and
+// linuxCache keeps a complete !linux (and !kernel) answer for 10 minutes: one call is 11 upstream requests and
 // release data moves on a scale of days. Incomplete answers (a source was down) are not kept.
 var linuxCache = linuxCache0()
 
 func linuxCache0() ttlcache.Cache[string, [3]string] {
-	return ttlcache.Cache[string, [3]string]{TTL: 10 * time.Minute, Max: 1}
+	return ttlcache.Cache[string, [3]string]{TTL: 10 * time.Minute, Max: 2}
 }
 
 // handleLinuxCommand reports the newest release of popular distros, the kernel.org trees and the BSDs (!linux).
@@ -230,6 +293,29 @@ func (b *ircNetwork) handleLinuxCommand(target, sender string) {
 	}
 	if lines == [3]string{} {
 		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: linux: release sources unreachable", sender)))
+		return
+	}
+	for _, l := range lines {
+		if l != "" {
+			b.sendPrivmsg(target, b.sanitize(l))
+		}
+	}
+}
+
+// handleKernelCommand is !linux narrowed to kernel.org: every tree with release dates, longterm EOLs (!kernel).
+func (b *ircNetwork) handleKernelCommand(target, sender string) {
+	lines, ok := linuxCache.Get("kernel")
+	if !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		trees, lts := fetchKernel(ctx)
+		lines = [3]string{trees, lts}
+		if trees != "" {
+			linuxCache.Put("kernel", lines)
+		}
+	}
+	if lines == [3]string{} {
+		b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: kernel: kernel.org unreachable", sender)))
 		return
 	}
 	for _, l := range lines {

@@ -30,6 +30,7 @@ var userLines = []line{
 	{cmd: "!hostcheck <host>", desc: "!ipcheck for a hostname, plus a WHOIS line: owner org (if not redacted), registrar, reg/exp dates, nameservers"},
 	{cmd: "!latest <name|owner/repo|URL>", desc: "Newest released version: GitHub owner/repo, gitlab.com/codeberg.org/sourceforge.net URLs (or gh:/gl:/cb:/sf:), bare names via Repology, then the GitHub repo with that exact name. Alias !latestversion"},
 	{cmd: "!apple", desc: "Newest stable macOS, iOS, iPadOS, watchOS, tvOS and visionOS (version + build) from Apple's official developer releases feed"},
+	{cmd: "!kernel", desc: "kernel.org trees only: mainline, stable, linux-next, every longterm branch with release and projected EOL dates (kernel.org / endoflife.date)"},
 	{cmd: "!linux", desc: "Newest Ubuntu, Mint, Debian, Raspberry Pi OS, RHEL, CentOS Stream, Fedora (endoflife.date / raspberrypi.com), kernel.org mainline/stable/longterm/linux-next, FreeBSD/NetBSD/OpenBSD"},
 	{cmd: "!weather <place>", desc: "Current + 5-day forecast (e.g. Barcelona, Spain)"},
 	{cmd: "!movie <title>", desc: "Year, IMDb rating, short plot (OMDb; omdb.api_key or OMDB_API_KEY)"},
