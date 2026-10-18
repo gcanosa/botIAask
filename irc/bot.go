@@ -952,6 +952,19 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !wiki [lang:]<query> (Wikipedia search, best article URL)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"wiki" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %swiki [lang:]<query> — e.g. %swiki argentina, %swiki es:bitcoin", b.pfx(), b.pfx(), b.pfx()))
+			return
+		}
+		b.handleWikiCommand(target, sender, strings.Join(f[1:], " "))
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {
