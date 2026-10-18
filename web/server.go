@@ -232,6 +232,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/irc/networks/cert", s.handleIRCNetworkCert)
 	mux.HandleFunc("/api/irc/networks", s.handleIRCNetworks)
 	mux.HandleFunc("/api/config/irc-admins", s.handleConfigIRCAdmins)
+	mux.HandleFunc("/api/irc/access", s.handleIRCAccess)
 	mux.HandleFunc("/api/stats/stream", streams.wrap(s.handleStatsStream, s.clientHostFromRequest))
 	mux.HandleFunc("/api/stats/toggle", s.handleStatsToggle)
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory)

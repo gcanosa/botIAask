@@ -714,6 +714,22 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 			return
 		}
 
+		// !kick, and !akick / !aop / !avoice (channel access lists in config, applied on JOIN)
+		if f := strings.Fields(message); len(f) > 0 && strings.HasPrefix(f[0], b.pfx()) {
+			cmd := strings.TrimPrefix(f[0], b.pfx())
+			if _, isAccess := accessCmds[cmd]; isAccess || cmd == "kick" {
+				if b.tracker != nil {
+					b.tracker.LogAdminCommand(b.name)
+				}
+				if cmd == "kick" {
+					b.handleKickCommand(target, sender, f[1:])
+				} else {
+					b.handleAccessCommand(target, sender, cmd, f[1:])
+				}
+				return
+			}
+		}
+
 		// Operator and Voice management
 		if strings.HasPrefix(target, "#") {
 			parts := strings.Fields(message)
@@ -755,7 +771,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 	} else if isAdmin {
 		// Log failed attempts to use admin commands without session
 		if strings.HasPrefix(message, b.pfx()) {
-			adminCmds := []string{"join", "part", "ignore", "unignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice"}
+			adminCmds := []string{"join", "part", "ignore", "unignore", "stats", "say", "quit", "rehash", "op", "deop", "voice", "devoice", "kick", "akick", "aop", "avoice"}
 			parts := strings.Fields(message)
 			if len(parts) > 0 {
 				cmd := strings.TrimPrefix(parts[0], b.pfx())

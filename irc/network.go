@@ -679,6 +679,10 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 
 		n.recordSeen(sender, target, "join", "")
+		if len(n.netCfg().Access) > 0 {
+			src := e.Source
+			guard.Go("channel access", func() { n.applyAccess(target, src) })
+		}
 
 		if b.bookmarksDB != nil && bookmarks.IRCCaseFoldNick(sender) != bookmarks.IRCCaseFoldNick(n.netCfg().Nickname) {
 			// Off the read loop: a DB lookup plus several paced lines must not delay PING/PONG.

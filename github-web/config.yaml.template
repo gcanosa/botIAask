@@ -39,6 +39,14 @@ irc:
           # admin.admins list below (which grants admin on every network).
           # admins:
           #     - ~othernick@user/host-ip
+          # Optional: channel access, applied when a matching nick!user@host joins (the bot needs ops).
+          # level: op (+o), voice (+v) or kick (+b mask, then KICK; admins are never auto-kicked).
+          # Also managed from the dashboard (IRC tab) and IRC "!akick / !aop / !avoice add|del|list".
+          # access:
+          #     - channel: '#mychannel'
+          #       mask: '*!*@spammer.example'
+          #       level: kick
+          #       reason: spam
         # Second network example (delete or uncomment/edit as needed):
         # - name: OtherNet
         #   enabled: false

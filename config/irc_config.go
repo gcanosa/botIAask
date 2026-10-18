@@ -38,6 +38,8 @@ type IRCNetworkConfig struct {
 	// Admins are extra hostmask fragments granted admin only on this network, on top of
 	// the global admin.admins list (which applies to every network).
 	Admins []string `yaml:"admins,omitempty"`
+	// Access is the auto-op / auto-voice / auto-kick list, applied when a matching user joins.
+	Access []ChannelAccess `yaml:"access,omitempty"`
 }
 
 // IsEnabled reports whether this network should be connected (default: true if unset).

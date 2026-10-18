@@ -735,3 +735,103 @@ func (s *Server) handleIRCNetworkEdit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
+
+// handleIRCAccess manages a network's channel access list (auto-op / auto-voice / auto-kick,
+// config.IRCNetworkConfig.Access). GET ?network=; POST {network, channel, mask, level, reason}
+// adds or replaces the level of channel+mask; DELETE ?network=&channel=&mask=. Auto-kick masks
+// are also banned / unbanned right away on the live network.
+func (s *Server) handleIRCAccess(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	switch r.Method {
+	case http.MethodGet:
+		netCfg, ok := config.FindIRCNetworkByName(s.getConfig().IRC.Networks, network)
+		if !ok {
+			http.Error(w, "Unknown network", http.StatusNotFound)
+			return
+		}
+		entries := netCfg.Access
+		if entries == nil {
+			entries = []config.ChannelAccess{}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]any{"network": netCfg.Name, "entries": entries})
+		return
+
+	case http.MethodPost:
+		var req struct {
+			Network string `json:"network"`
+			config.ChannelAccess
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		e := req.ChannelAccess
+		if err := config.ValidateAccess(&e); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		network = strings.TrimSpace(req.Network)
+		var prev string
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			i := config.IRCNetworkIndex(cfg.IRC.Networks, network)
+			if i < 0 {
+				return http.StatusNotFound, errors.New("Unknown network")
+			}
+			list := &cfg.IRC.Networks[i].Access
+			if j := config.AccessIndex(*list, e.Channel, e.Mask); j >= 0 {
+				prev = (*list)[j].Level
+				(*list)[j] = e
+			} else {
+				*list = append(*list, e)
+			}
+			return 0, nil
+		}) {
+			return
+		}
+		if err := s.runFullRehashFromWeb("web (irc access)"); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if s.bot != nil && (e.Level == config.AccessKick) != (prev == config.AccessKick) {
+			s.bot.EnforceAccessBan(network, e.Channel, e.Mask, e.Level == config.AccessKick)
+		}
+
+	case http.MethodDelete:
+		channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+		mask := strings.TrimSpace(r.URL.Query().Get("mask"))
+		var removed config.ChannelAccess
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			i := config.IRCNetworkIndex(cfg.IRC.Networks, network)
+			if i < 0 {
+				return http.StatusNotFound, errors.New("Unknown network")
+			}
+			list := &cfg.IRC.Networks[i].Access
+			j := config.AccessIndex(*list, channel, mask)
+			if j < 0 {
+				return http.StatusNotFound, errors.New("not found")
+			}
+			removed = (*list)[j]
+			*list = slices.Delete(*list, j, j+1)
+			return 0, nil
+		}) {
+			return
+		}
+		if err := s.runFullRehashFromWeb("web (irc access)"); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if s.bot != nil && removed.Level == config.AccessKick {
+			s.bot.EnforceAccessBan(network, removed.Channel, removed.Mask, false)
+		}
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}

@@ -51,6 +51,8 @@ All configuration lives in `config/config.yaml` (active) and `config/config.yaml
 
 **IRC network auth** (per network, dashboard-only — no IRC commands, by design): SASL PLAIN or EXTERNAL (`services.mechanism`, needs `use_ssl` + client cert); NickServ `IDENTIFY` on connect when SASL is off and a NickServ password is stored; dashboard "Network authentication" panel does NickServ register/identify (`web/irc_auth.go`, `irc/nickserv.go`) and generates/uploads/removes the client cert (only its SHA-256 fingerprint is ever returned). With `bot.debug: true`, irc-go logs raw sent lines, including IDENTIFY/REGISTER passwords — keep debug off in production.
 
+**Channel access** (`irc.networks[].access`, `config/irc_access.go`): `{channel, mask, level: op|voice|kick, reason}`, masks are `nick!user@host` globs (`config.MaskMatch`, `NormalizeMask`, `ValidateAccess`). Applied on JOIN (`irc/access_cmd.go` `applyAccess`, in `guard.Go`): kick (+b mask, KICK; never an admin) beats op beats voice. Edited by `!akick`/`!aop`/`!avoice add|del|list` (admin session, one `handleAccessCommand` keyed by `accessCmds`; `add <nick>` WHOISes: kick bans `*!*@host`, op/voice store `*!user@host`), `!kick`, and the dashboard "Channel access" card (`/api/irc/access`, `handleIRCAccess`); MODE/KICK lines go through the pacer (`chanop`).
+
 **Config reload** at runtime: send `SIGHUP` to the process, call `!rehash` in IRC, or use the `/api/rehash` web endpoint.
 
 ---
