@@ -32,6 +32,7 @@ var userLines = []line{
 	{cmd: "!apple", desc: "Newest stable macOS, iOS, iPadOS, watchOS, tvOS and visionOS (version + build) from Apple's official developer releases feed"},
 	{cmd: "!kernel", desc: "kernel.org trees only: mainline, stable, linux-next, every longterm branch with release and projected EOL dates (kernel.org / endoflife.date)"},
 	{cmd: "!linux", desc: "Newest Ubuntu, Mint, Debian, Raspberry Pi OS, RHEL, CentOS Stream, Fedora (endoflife.date / raspberrypi.com), kernel.org mainline/stable/longterm/linux-next, FreeBSD/NetBSD/OpenBSD"},
+	{cmd: "!wiki [lang:]<query>", desc: "Wikipedia search: best article, description and URL, plus other matches; ambiguous terms list the candidates (e.g. !wiki es:argentina)"},
 	{cmd: "!weather <place>", desc: "Current + 5-day forecast (e.g. Barcelona, Spain)"},
 	{cmd: "!movie <title>", desc: "Year, IMDb rating, short plot (OMDb; omdb.api_key or OMDB_API_KEY)"},
 	{cmd: "!flight <IATA> [date]", desc: "Flight status (AirLabs: sched, delay, O/D, progress; key in config; paid = high quota)"},
