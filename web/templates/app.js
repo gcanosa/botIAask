@@ -680,6 +680,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-networks-wrap')?.classList.remove('hidden');
         document.getElementById('irc-autojoin-wrap')?.classList.remove('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.remove('hidden');
+        document.getElementById('irc-access-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
@@ -705,6 +706,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-networks-wrap')?.classList.add('hidden');
         document.getElementById('irc-autojoin-wrap')?.classList.add('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.add('hidden');
+        document.getElementById('irc-access-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -2762,6 +2764,12 @@ function ircNetworksRender() {
             .concat(lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === selectedIRCConfigAdminNetwork ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`));
         adminsSel.innerHTML = opts.join('');
     }
+    const accessSel = document.getElementById('irc-access-network');
+    if (accessSel) {
+        const cur = accessSel.value || selectedIRCNetwork;
+        accessSel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === cur ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
+        fetchIRCAccess();
+    }
     ircAuthPopulate();
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
@@ -3387,6 +3395,81 @@ async function removeIRCConfigAdmin(index) {
         await fetchIRCConfigAdmins();
     } catch (e) {
         ircConfigAdminsSetStatus(String(e), true);
+    }
+}
+
+function ircAccessSetStatus(msg, isErr) {
+    const el = document.getElementById('irc-access-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? 'var(--error)' : 'var(--text-muted)';
+}
+
+const ircAccessLevelLabel = { op: 'Auto-op', voice: 'Auto-voice', kick: 'Auto-kick' };
+
+async function fetchIRCAccess() {
+    const tbody = document.getElementById('irc-access-list');
+    const network = document.getElementById('irc-access-network')?.value || '';
+    if (!tbody || !network) return;
+    try {
+        const res = await fetch('/api/irc/access?network=' + encodeURIComponent(network));
+        if (!res.ok) throw new Error(await res.text());
+        const entries = (await res.json()).entries || [];
+        window._ircAccessEntries = entries;
+        const esc = financeEscapeHtml;
+        tbody.innerHTML = entries.length ? entries.map((e, i) =>
+            `<tr style="border-bottom: 1px solid var(--glass-border);">
+                <td style="padding: 0.65rem 0.75rem;">${esc(e.channel)}</td>
+                <td style="padding: 0.65rem 0.75rem;">${esc(e.mask)}</td>
+                <td style="padding: 0.65rem 0.75rem;">${esc(ircAccessLevelLabel[e.level] || e.level)}</td>
+                <td style="padding: 0.65rem 0.75rem; color: var(--text-muted);">${esc(e.reason || '')}</td>
+                <td style="padding: 0.65rem 0.75rem; text-align: right;">
+                    <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.65rem;" onclick="removeIRCAccess(${i})">Remove</button>
+                </td>
+            </tr>`).join('') : `<tr><td colspan="5" style="padding: 0.75rem; color: var(--text-muted);">No access entries on this network.</td></tr>`;
+        ircAccessSetStatus('');
+    } catch (e) {
+        ircAccessSetStatus(String(e), true);
+    }
+}
+
+async function addIRCAccess() {
+    const val = (id) => String(document.getElementById(id)?.value || '').trim();
+    const body = { network: val('irc-access-network'), channel: val('irc-access-channel'), mask: val('irc-access-mask'), level: val('irc-access-level'), reason: val('irc-access-reason') };
+    if (!body.channel || !body.mask) {
+        ircAccessSetStatus('Enter a channel and a mask.', true);
+        return;
+    }
+    try {
+        const res = await fetch('/api/irc/access', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!res.ok) {
+            ircAccessSetStatus((await res.text()) || 'Add failed', true);
+            return;
+        }
+        document.getElementById('irc-access-mask').value = '';
+        document.getElementById('irc-access-reason').value = '';
+        ircAccessSetStatus('Saved to config and applied.');
+        await fetchIRCAccess();
+    } catch (e) {
+        ircAccessSetStatus(String(e), true);
+    }
+}
+
+async function removeIRCAccess(index) {
+    const e = (window._ircAccessEntries || [])[index];
+    const network = document.getElementById('irc-access-network')?.value || '';
+    if (!e) return fetchIRCAccess();
+    try {
+        const qs = '?network=' + encodeURIComponent(network) + '&channel=' + encodeURIComponent(e.channel) + '&mask=' + encodeURIComponent(e.mask);
+        const res = await fetch('/api/irc/access' + qs, { method: 'DELETE' });
+        if (!res.ok) {
+            ircAccessSetStatus((await res.text()) || 'Remove failed', true);
+        } else {
+            ircAccessSetStatus('Removed and applied.');
+        }
+        await fetchIRCAccess();
+    } catch (err) {
+        ircAccessSetStatus(String(err), true);
     }
 }
 

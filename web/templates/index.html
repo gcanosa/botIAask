@@ -1101,6 +1101,52 @@
                     </div>
                     <p id="irc-config-admins-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
                 </div>
+                <div id="irc-access-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">Channel access (auto-op / auto-voice / auto-kick)</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Applied when a matching user joins the channel; the bot needs channel operator status. Masks are <span class="mono">nick!user@host</span> globs (<span class="mono">*</span>, <span class="mono">?</span>): a bare nick becomes <span class="mono">nick!*@*</span>, <span class="mono">user@host</span> becomes <span class="mono">*!user@host</span>. <strong>Kick</strong> bans the mask (<span class="mono">+b</span>) and kicks; admins are never auto-kicked. Stored per network under <span class="mono">access</span> in <span class="mono">config/config.yaml</span>; IRC admins can also use <span class="mono">!akick</span> / <span class="mono">!aop</span> / <span class="mono">!avoice add|del|list</span> and <span class="mono">!kick</span>.</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
+                            <select id="irc-access-network" class="btn btn-ghost" style="min-width: 9rem; margin: 0;" onchange="fetchIRCAccess()" aria-label="Network"></select>
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Channel</label>
+                            <input type="text" id="irc-access-channel" class="btn btn-ghost" style="width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="#channel" autocomplete="off" aria-label="Channel">
+                        </div>
+                        <div style="flex: 1; min-width: 11rem;">
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Mask</label>
+                            <input type="text" id="irc-access-mask" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="*!*@host or nick" autocomplete="off" aria-label="Mask">
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Level</label>
+                            <select id="irc-access-level" class="btn btn-ghost" style="margin: 0;" aria-label="Level">
+                                <option value="op">Auto-op</option>
+                                <option value="voice">Auto-voice</option>
+                                <option value="kick">Auto-kick</option>
+                            </select>
+                        </div>
+                        <div style="flex: 1; min-width: 9rem;">
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Reason (kick)</label>
+                            <input type="text" id="irc-access-reason" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin: 0;" placeholder="optional" autocomplete="off" aria-label="Kick reason">
+                        </div>
+                        <button type="button" onclick="addIRCAccess()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Add</button>
+                    </div>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="mono data-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--glass-border); color: var(--text-muted);">
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Channel</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Mask</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Level</th>
+                                    <th style="text-align: left; padding: 0.5rem 0.75rem;">Reason</th>
+                                    <th style="text-align: right; padding: 0.5rem 0.75rem;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-access-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-access-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
                 <div class="card" data-admin-group="users">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">Authorized Users</h3>
