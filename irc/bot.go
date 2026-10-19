@@ -981,6 +981,32 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !map <place> (Nominatim geocode, Google Maps link)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"map" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %smap <place> — e.g. %smap buenos aires, argentina", b.pfx(), b.pfx()))
+			return
+		}
+		b.handleMapCommand(target, sender, strings.Join(f[1:], " "))
+		return
+	}
+
+	// Handle !dict [lang:]<word> (Wiktionary definitions)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"dict" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) < 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %sdict [lang:]<word> — e.g. %sdict serendipity, %sdict es:casa, %sdict it:gatto", b.pfx(), b.pfx(), b.pfx(), b.pfx()))
+			return
+		}
+		b.handleDictCommand(target, sender, strings.Join(f[1:], " "))
+		return
+	}
+
 	// Handle !movie <title> (OMDb)
 	if strings.HasPrefix(message, b.pfx()+"movie") {
 		if b.rateLimited(target, sender) {

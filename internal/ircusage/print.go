@@ -32,6 +32,8 @@ var userLines = []line{
 	{cmd: "!apple", desc: "Newest stable macOS, iOS, iPadOS, watchOS, tvOS and visionOS (version + build) from Apple's official developer releases feed"},
 	{cmd: "!kernel", desc: "kernel.org trees only: mainline, stable, linux-next, every longterm branch with release and projected EOL dates (kernel.org / endoflife.date)"},
 	{cmd: "!linux", desc: "Newest Ubuntu, Mint, Debian, Raspberry Pi OS, RHEL, CentOS Stream, Fedora (endoflife.date / raspberrypi.com), kernel.org mainline/stable/longterm/linux-next, FreeBSD/NetBSD/OpenBSD"},
+	{cmd: "!map <place>", desc: "Find a city, country or address (OpenStreetMap) and link it on Google Maps with its coordinates (e.g. !map buenos aires, argentina)"},
+	{cmd: "!dict [lang:]<word>", desc: "Wiktionary dictionary: part of speech and definitions (in English) of a word in the given language, default en (e.g. !dict es:casa, !dict it:gatto)"},
 	{cmd: "!wiki [lang:]<query>", desc: "Wikipedia search: best article, description and URL, plus other matches; ambiguous terms list the candidates (e.g. !wiki es:argentina)"},
 	{cmd: "!weather <place>", desc: "Current + 5-day forecast (e.g. Barcelona, Spain)"},
 	{cmd: "!movie <title>", desc: "Year, IMDb rating, short plot (OMDb; omdb.api_key or OMDB_API_KEY)"},
