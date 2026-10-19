@@ -110,6 +110,10 @@ func TestMatchAdmin_NoSubstringLookalikes(t *testing.T) {
 		{"nick!u@h", "nick!u@h", true},
 		{"other!u@h", "nick!u@h", false},
 		{"x!u@h", "", false},
+		{"EtherNet!EtherNet-@netadmin.SekurNet.org", "*!*@netadmin.sekurnet.org", true},
+		{"EtherNet!EtherNet-@netadmin.SekurNet.org", "*@netadmin.SekurNet.org", true},
+		{"EtherNet!EtherNet-@netadmin.SekurNet.org", "EtherNet!*@*", true},
+		{"EtherNet!EtherNet-@netadmin.SekurNet.org.evil", "*!*@netadmin.SekurNet.org", false},
 	}
 	for _, c := range cases {
 		if got := matchAdmin(c.src, c.entry); got != c.want {
