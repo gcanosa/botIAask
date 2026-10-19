@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	flightHTTP    = &http.Client{Timeout: 25 * time.Second}
-	flightYMD     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	flightHTTP = &http.Client{Timeout: 25 * time.Second}
+	flightYMD  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
 
 func (b *ircNetwork) handleFlightCommand(target, sender, rest string) {
