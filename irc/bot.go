@@ -981,6 +981,19 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !callsign / !qrz <call> (HamQTH, callook.info for US)
+	if f := strings.Fields(message); len(f) > 0 && (f[0] == b.pfx()+"callsign" || f[0] == b.pfx()+"qrz") {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		if len(f) != 2 {
+			b.sendPrivmsg(target, fmt.Sprintf("Usage: %scallsign <call> — e.g. %scallsign W1AW, %sqrz LU1AA", b.pfx(), b.pfx(), b.pfx()))
+			return
+		}
+		b.handleCallsignCommand(target, sender, f[1])
+		return
+	}
+
 	// Handle !map <place> (Nominatim geocode, Google Maps link)
 	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"map" {
 		if b.rateLimited(target, sender) {

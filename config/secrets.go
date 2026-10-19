@@ -155,7 +155,7 @@ func decryptSecret(s string) (out string, plain bool, err error) {
 
 // mapSecrets applies fn to every secret field of cfg in place. Add new secret fields here.
 func mapSecrets(cfg *Config, fn func(*string) error) error {
-	ptrs := []*string{&cfg.Web.Auth.Password, &cfg.Flight.APIKey, &cfg.OMDB.APIKey, &cfg.GitHub.Token}
+	ptrs := []*string{&cfg.Web.Auth.Password, &cfg.Flight.APIKey, &cfg.OMDB.APIKey, &cfg.HamQTH.Password, &cfg.GitHub.Token}
 	for i := range cfg.IRC.Networks {
 		n := &cfg.IRC.Networks[i]
 		ptrs = append(ptrs, &n.Services.Password, &n.Services.NickServPassword, &n.Services.ClientCert)

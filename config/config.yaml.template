@@ -146,6 +146,11 @@ uploads:
 # omdb:
 #     api_key: your_omdb_key
 #     # base_url: https://www.omdbapi.com/
+# HamQTH account for !callsign / !qrz worldwide lookups (free: https://www.hamqth.com).
+# Without it only US callsigns resolve (callook.info). The password is encrypted on next load.
+# hamqth:
+#     username: your_callsign
+#     password: your_password
 
 # GitHub for changelog (fetches commits from remote repository instead of local git).
 # Useful for Docker/pod deployments where git history is not available locally.
