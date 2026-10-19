@@ -30,6 +30,7 @@ type Config struct {
 	Uploads       UploadsConfig       `yaml:"uploads,omitempty"`
 	Flight        FlightConfig        `yaml:"flight,omitempty"`
 	OMDB          OMDBConfig          `yaml:"omdb,omitempty"`
+	HamQTH        HamQTHConfig        `yaml:"hamqth,omitempty"`
 	GitHub        GitHubConfig        `yaml:"github,omitempty"`
 	GitHubTracker GitHubTrackerConfig `yaml:"github_tracker,omitempty"`
 	Backup        BackupConfig        `yaml:"backup,omitempty"`
@@ -95,6 +96,13 @@ func (f FlightConfig) AirLabsAPIKeyOrEnv() string {
 type OMDBConfig struct {
 	APIKey  string `yaml:"api_key,omitempty"`
 	BaseURL string `yaml:"base_url,omitempty"`
+}
+
+// HamQTHConfig holds the HamQTH.com account !callsign logs in with (free account; password is
+// encrypted at rest). Without it !callsign only covers US callsigns (callook.info).
+type HamQTHConfig struct {
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
 }
 
 // GitHubConfig holds GitHub API settings for the changelog (fetches commits from remote repository).
