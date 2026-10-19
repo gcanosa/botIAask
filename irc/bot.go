@@ -412,10 +412,10 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 	return false
 }
 
-// matchAdmin compares an admin entry against a nick!user@host source exactly
-// (case-insensitive). An entry without "!" (e.g. ~user@user/account) is compared to the
-// user@host part. A substring match would let "~eth@user/eth2" or "1.2.3.45" pass for
-// "~eth@user/eth" / "1.2.3.4".
+// matchAdmin matches an admin entry against a nick!user@host source as an anchored,
+// case-insensitive glob (* and ?, config.MaskMatch), so "*!*@vhost" works while
+// "~eth@user/eth" still can't pass for "~eth@user/eth2". An entry without "!"
+// (e.g. ~user@user/account) is compared to the user@host part.
 func matchAdmin(source, entry string) bool {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {
@@ -426,7 +426,7 @@ func matchAdmin(source, entry string) bool {
 			source = source[i+1:]
 		}
 	}
-	return strings.EqualFold(source, entry)
+	return config.MaskMatch(entry, source)
 }
 
 func (b *ircNetwork) rejoinSessionChannels() {
@@ -593,6 +593,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 				if b.tracker != nil {
 					b.tracker.LogFailedAuth(b.name)
 				}
+				log.Printf("irc[%s]: !admin refused for %s (no admin entry matches)", b.name, source)
 				b.sendPrivmsg(target, fmt.Sprintf("%s not authorized.", sender))
 			}
 		}
