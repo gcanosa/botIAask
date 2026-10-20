@@ -81,9 +81,9 @@ func (b *ircNetwork) handleTimeCommand(target string) {
 	}
 }
 
-// Open-Meteo (same as !weather, no key): geocoding gives cities an IANA zone; countries come back
-// without one, so their centroid is resolved through the forecast endpoint's timezone=auto.
-// ponytail: a multi-zone country (US, Russia, Brazil) shows its centroid's zone; name a city for others.
+// Places are geocoded by Nominatim (fallback: Open-Meteo geocoding, which gives cities an IANA zone);
+// any place without a zone is resolved through Open-Meteo's forecast endpoint's timezone=auto.
+// ponytail: a multi-zone country/state (US, Russia, Brazil) shows its centroid's zone; name a city for others.
 var (
 	timeGeoAPI = "https://geocoding-api.open-meteo.com"
 	timeTZAPI  = "https://api.open-meteo.com"
@@ -117,36 +117,48 @@ func resolveTimePlace(ctx context.Context, query string) (label, zone string, er
 	if v, ok := timePlaceCache.Get(key); ok {
 		return v[0], v[1], nil
 	}
-	var g struct {
-		Results []struct {
-			Name      string  `json:"name"`
-			Admin1    string  `json:"admin1"`
-			Country   string  `json:"country"`
-			Timezone  string  `json:"timezone"`
-			Latitude  float64 `json:"latitude"`
-			Longitude float64 `json:"longitude"`
-		} `json:"results"`
-	}
-	u := timeGeoAPI + "/v1/search?" + url.Values{"name": {query}, "count": {"1"}, "language": {"en"}}.Encode()
-	if err := timeGetJSON(ctx, u, &g); err != nil {
-		return "", "", err
-	}
-	if len(g.Results) == 0 {
-		return "", "", errTimeNoPlace
-	}
-	r := g.Results[0]
-	label = r.Name
-	for _, part := range []string{r.Admin1, r.Country} {
-		if part != "" && part != r.Name && !strings.HasSuffix(label, ", "+part) {
-			label += ", " + part
+	// Nominatim (as !map) first: it ranks by importance and knows states/regions, while Open-Meteo has
+	// no states and its top hit can be a hamlet ("Texas" → Colfax, WV; "California" → a Missouri town).
+	// Open-Meteo is the fallback when Nominatim's 1 req/s budget is spent or it fails.
+	var lat, lon string
+	if name, nlat, nlon, _, ok, err := geocode(ctx, query); ok && err == nil {
+		// "Barcelona, Barcelonès, Barcelona, Catalonia, Spain" → place, region, country
+		if parts := strings.Split(name, ", "); len(parts) > 3 {
+			name = strings.Join([]string{parts[0], parts[len(parts)-2], parts[len(parts)-1]}, ", ")
 		}
+		label, lat, lon = cutRunes(name, 120), nlat, nlon
+	} else {
+		var g struct {
+			Results []struct {
+				Name      string  `json:"name"`
+				Admin1    string  `json:"admin1"`
+				Country   string  `json:"country"`
+				Timezone  string  `json:"timezone"`
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+			} `json:"results"`
+		}
+		u := timeGeoAPI + "/v1/search?" + url.Values{"name": {query}, "count": {"1"}, "language": {"en"}}.Encode()
+		if err := timeGetJSON(ctx, u, &g); err != nil {
+			return "", "", err
+		}
+		if len(g.Results) == 0 {
+			return "", "", errTimeNoPlace
+		}
+		r := g.Results[0]
+		label = r.Name
+		for _, part := range []string{r.Admin1, r.Country} {
+			if part != "" && part != r.Name && !strings.HasSuffix(label, ", "+part) {
+				label += ", " + part
+			}
+		}
+		zone, lat, lon = r.Timezone, fmt.Sprint(r.Latitude), fmt.Sprint(r.Longitude)
 	}
-	zone = r.Timezone
 	if zone == "" {
 		var f struct {
 			Timezone string `json:"timezone"`
 		}
-		u := fmt.Sprintf("%s/v1/forecast?latitude=%g&longitude=%g&timezone=auto", timeTZAPI, r.Latitude, r.Longitude)
+		u := timeTZAPI + "/v1/forecast?" + url.Values{"latitude": {lat}, "longitude": {lon}, "timezone": {"auto"}}.Encode()
 		if err := timeGetJSON(ctx, u, &f); err != nil {
 			return "", "", err
 		}
