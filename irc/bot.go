@@ -811,9 +811,16 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
-	// Handle !time command (world clock, one city per IANA time zone)
-	if strings.TrimSpace(message) == b.pfx()+"time" {
-		b.handleTimeCommand(target)
+	// Handle !time [city|country] (world clock, one city per IANA time zone; or one place's time)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"time" {
+		if len(f) == 1 {
+			b.handleTimeCommand(target)
+			return
+		}
+		if b.rateLimited(target, sender) {
+			return
+		}
+		b.handleTimePlaceCommand(target, sender, strings.Join(f[1:], " "))
 		return
 	}
 
