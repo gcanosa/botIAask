@@ -193,12 +193,6 @@ func SetArchiveDays(days int) {
 	rotationMu.Unlock()
 }
 
-func rotationDaysSnapshot() int {
-	rotationMu.RLock()
-	defer rotationMu.RUnlock()
-	return rotationDays
-}
-
 // StartLogRotator starts a single background loop (once per process) that reads
 // the current retention with SetRotationDays / config reloads.
 func StartLogRotator(initial int) {

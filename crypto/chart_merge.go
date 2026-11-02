@@ -30,27 +30,6 @@ type MarketRawSeries struct {
 	Points  [][2]float64
 }
 
-// RangeToCoinGeckoDays maps UI range to the CoinGecko `days` query parameter.
-func RangeToCoinGeckoDays(rangeKey string) (days string, err error) {
-	switch rangeKey {
-	case "6h":
-		return "1", nil
-	case "1d", "24h":
-		return "1", nil
-	case "3d":
-		// CoinGecko is more reliable with >=7d; we still clip to 3d in BuildChartResponse.
-		return "7", nil
-	case "1w", "7d":
-		return "7", nil
-	case "3m", "90d":
-		return "90", nil
-	case "1y", "365d":
-		return "365", nil
-	default:
-		return "", fmt.Errorf("unknown range %q", rangeKey)
-	}
-}
-
 // RangeToWindow returns how far back to clip data (must be <= what CoinGecko returns for days).
 func RangeToWindow(rangeKey string) (time.Duration, error) {
 	switch rangeKey {

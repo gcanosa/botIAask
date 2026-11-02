@@ -16,6 +16,8 @@ import (
 // pidLock keeps the daemon's PID file flock'ed for the life of the process: the lock, not the pid
 // number, is what proves a daemon is alive (a pid recorded before a crash or reboot may belong to an
 // unrelated process by now).
+//
+//lint:ignore U1000 written once, held only so the *os.File (and its flock) is never garbage-collected
 var pidLock *os.File
 
 // WritePIDFile locks the PID file and writes the current process ID into it. It fails when another
@@ -97,41 +99,6 @@ func DeletePIDFile(pidFile string) error {
 		return fmt.Errorf("failed to delete pid file: %w", err)
 	}
 
-	return nil
-}
-
-// IsProcessRunning checks if a process with the given PID is running.
-func IsProcessRunning(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	// On Unix systems, Signal(0) checks if process exists without sending a signal.
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
-}
-
-// Daemonize forks the current process into daemon mode.
-func Daemonize(cfg *config.Config) error {
-	// Create a new command that will run the same binary with same arguments
-	cmd := exec.Command(os.Args[0], os.Args[1:]...)
-
-	// Redirect std streams to prevent issues
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-
-	// Start the process in background
-	err := cmd.Start()
-	if err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
-	}
-
-	// The parent exits immediately after starting the child
-	// This is how proper daemons work - we don't wait for the child
-
-	fmt.Println("Bot started in daemon mode with PID:", cmd.Process.Pid)
 	return nil
 }
 

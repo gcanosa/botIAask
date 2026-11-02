@@ -24,7 +24,7 @@ func (s *Server) forexSnapshot() (map[string]float64, time.Time) {
 
 	// If cache is empty, retry — but only once per minute, so a persistently failing/
 	// rate-limited upstream doesn't turn every dashboard page load into a fresh API hit.
-	cacheEmpty := s.forexCache == nil || len(s.forexCache) == 0
+	cacheEmpty := len(s.forexCache) == 0
 	if (cacheEmpty && time.Since(s.forexLastAttempt) > 1*time.Minute) || time.Since(s.forexUpdate) > 1*time.Hour {
 		s.forexLastAttempt = time.Now()
 		forex := map[string]float64{}

@@ -418,7 +418,8 @@ func (b *Bot) IsAdmin(fullHostmask string) bool {
 // (e.g. ~user@user/account) is compared to the user@host part.
 func matchAdmin(source, entry string) bool {
 	entry = strings.TrimSpace(entry)
-	if entry == "" {
+	// No password behind !admin: entries without a real host ("nick!*@*", "*@*") never match.
+	if !config.AdminMaskOK(entry) {
 		return false
 	}
 	if !strings.Contains(entry, "!") {
@@ -1822,9 +1823,7 @@ func splitUTF8ByByteBudget(s string, max int) []string {
 		if cur == "" {
 			if len([]byte(w)) > max {
 				flush()
-				for _, p := range splitStringByRunesToByteBudget(w, max) {
-					res = append(res, p)
-				}
+				res = append(res, splitStringByRunesToByteBudget(w, max)...)
 				continue
 			}
 			cur = w
@@ -1836,9 +1835,7 @@ func splitUTF8ByByteBudget(s string, max int) []string {
 		} else {
 			flush()
 			if len([]byte(w)) > max {
-				for _, p := range splitStringByRunesToByteBudget(w, max) {
-					res = append(res, p)
-				}
+				res = append(res, splitStringByRunesToByteBudget(w, max)...)
 			} else {
 				cur = w
 			}

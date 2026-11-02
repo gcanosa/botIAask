@@ -168,11 +168,7 @@ func isAllowedFileType(filename, contentType string) bool {
 	}
 
 	ct := strings.ToLower(strings.SplitN(contentType, ";", 2)[0])
-	if blockedMimes[ct] {
-		return false
-	}
-
-	return true
+	return !blockedMimes[ct]
 }
 
 func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request, token string, sess *uploads.Upload) {

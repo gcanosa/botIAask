@@ -91,6 +91,10 @@ func (s *Server) handleConfigIRCAdmins(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "hostmask required", http.StatusBadRequest)
 			return
 		}
+		if !config.AdminMaskOK(h) {
+			http.Error(w, "hostmask must include a host (e.g. *!*@your.host or ~user@user/account); nick-only entries are refused", http.StatusBadRequest)
+			return
+		}
 		network := strings.TrimSpace(req.Network)
 		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
 			list, ok := adminList(cfg, network)

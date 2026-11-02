@@ -15,6 +15,7 @@ func TestMaskMatch(t *testing.T) {
 		{"*!*@user/bob", "n!u@user/bob", true}, // cloaks contain '/', which path.Match would mishandle
 		{"*", "anything!u@h", true},
 		{"a*b*c", "axxbyyc", true},
+		{"a*b", "a*xb", true}, // literal * in source must not stop backtracking
 		{"a*b*c", "axxbyy", false},
 	} {
 		if got := MaskMatch(c.mask, c.src); got != c.want {

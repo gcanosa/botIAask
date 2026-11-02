@@ -57,9 +57,7 @@ func TestDecrypt_WrongKeyFails(t *testing.T) {
 }
 
 func TestNewCryptor_PersistsAndReloadsSameKey(t *testing.T) {
-	keyPath := filepath.Join(t.TempDir(), "subdir_does_not_exist_key")
-	// Use a path in an existing dir so WriteFile succeeds.
-	keyPath = filepath.Join(t.TempDir(), "key")
+	keyPath := filepath.Join(t.TempDir(), "key")
 
 	c1, err := NewCryptor(keyPath)
 	if err != nil {

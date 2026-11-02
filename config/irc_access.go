@@ -46,12 +46,12 @@ func MaskMatch(mask, source string) bool {
 	star, back := -1, 0
 	for i, j := 0, 0; j < len(s); {
 		switch {
+		case i < len(m) && m[i] == '*': // before the literal case, or a literal '*' in source skips backtracking
+			star, back = i, j
+			i++
 		case i < len(m) && (m[i] == '?' || m[i] == s[j]):
 			i++
 			j++
-		case i < len(m) && m[i] == '*':
-			star, back = i, j
-			i++
 		case star >= 0:
 			back++
 			i, j = star+1, back
@@ -65,17 +65,27 @@ func MaskMatch(mask, source string) bool {
 	return strings.Trim(m, "*") == ""
 }
 
+// AdminMaskOK reports whether an IRC admin entry pins a host: "nick!*@*", "*@*" or a bare nick
+// would grant passwordless admin to whoever takes the nick (or to everyone), so they are refused.
+func AdminMaskOK(entry string) bool {
+	i := strings.LastIndexByte(entry, '@')
+	return i >= 0 && strings.Trim(entry[i+1:], "*?.") != ""
+}
+
 // ValidateAccess normalizes e in place and rejects bad input (shared by IRC and the dashboard).
 func ValidateAccess(e *ChannelAccess) error {
 	e.Channel = strings.TrimSpace(e.Channel)
 	e.Mask = NormalizeMask(e.Mask)
 	e.Level = strings.ToLower(strings.TrimSpace(e.Level))
 	e.Reason = strings.TrimSpace(e.Reason)
-	if e.Channel == "" || (e.Channel[0] != '#' && e.Channel[0] != '&') || strings.ContainsAny(e.Channel, " ,") {
+	if e.Channel == "" || (e.Channel[0] != '#' && e.Channel[0] != '&') || strings.ContainsAny(e.Channel, " ,\r\n\x00") {
 		return fmt.Errorf("invalid channel %q", e.Channel)
 	}
-	if e.Mask == "" || strings.ContainsAny(e.Mask, " ,") {
+	if e.Mask == "" || strings.ContainsAny(e.Mask, " ,\r\n\x00") {
 		return fmt.Errorf("invalid mask %q", e.Mask)
+	}
+	if strings.ContainsAny(e.Reason, "\r\n\x00") {
+		return fmt.Errorf("invalid reason")
 	}
 	if e.Level == AccessKick && strings.Trim(e.Mask, "*!@?.") == "" {
 		return fmt.Errorf("mask %q would kick everyone", e.Mask)

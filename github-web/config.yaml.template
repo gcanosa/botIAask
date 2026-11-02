@@ -78,7 +78,8 @@ bot:
         window: 60 # seconds
 admin:
     admins:
-        # Use hostmask format: ~nickname@user/host-ip (editable from web Identity panel or here)
+        # nick!user@host or user@host, * and ? wildcards (e.g. *!*@your.vhost). Must name a host:
+        # nick-only entries (nick!*@*) are ignored, since !admin has no password.
         - ~nickname@user/host-ip
 web:
     enabled: true

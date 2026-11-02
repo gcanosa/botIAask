@@ -161,7 +161,13 @@ func (b *ircNetwork) accessAdd(target, sender, cmd, level, label, channel, who, 
 			return
 		}
 		mask = nick + "!*@*"
-		if user, host, ok := b.whoisHost(nick); ok {
+		user, host, ok := b.whoisHost(nick)
+		if !ok && level != config.AccessKick {
+			// A nick-only op/voice mask trusts whoever takes the nick; require the real user@host.
+			b.sendPrivmsg(target, fmt.Sprintf("%s: %s is not online (or WHOIS timed out); give a nick!user@host mask instead.", cmd, nick))
+			return
+		}
+		if ok {
 			if level == config.AccessKick && b.IsAdmin(nick+"!"+user+"@"+host) {
 				b.sendPrivmsg(target, fmt.Sprintf("%s is an admin; not adding.", nick))
 				return

@@ -16,15 +16,6 @@ type IRChannel struct {
 	AutoJoin *bool  `yaml:"auto_join,omitempty" json:"auto_join,omitempty"`
 }
 
-// IRChannelNames returns channel names in order (for list diff, logging, etc.).
-func IRChannelNames(chs []IRChannel) []string {
-	out := make([]string, len(chs))
-	for i, c := range chs {
-		out[i] = c.Name
-	}
-	return out
-}
-
 // AutoJoinEnabled reports whether this entry should be auto-joined on connect (default: true if unset).
 func (c IRChannel) AutoJoinEnabled() bool {
 	if c.AutoJoin == nil {

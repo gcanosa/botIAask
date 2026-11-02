@@ -413,12 +413,6 @@ func (a *AuthDatabase) ValidateCSRFToken(token, sessionToken string) bool {
 	return true
 }
 
-// DeleteCSRFToken removes a CSRF token (call after use to prevent replay).
-func (a *AuthDatabase) DeleteCSRFToken(token string) error {
-	_, err := a.db.Exec("DELETE FROM csrf_tokens WHERE token = ?", token)
-	return err
-}
-
 func (a *AuthDatabase) Close() error {
 	return a.db.Close()
 }
