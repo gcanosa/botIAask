@@ -189,7 +189,17 @@ func splitAdminSessionKey(key string) (network, foldedNick string, ok bool) {
 func (b *Bot) network(name string) *ircNetwork {
 	b.networksMu.RLock()
 	defer b.networksMu.RUnlock()
-	return b.networks[name]
+	if n, ok := b.networks[name]; ok {
+		return n
+	}
+	// Hand-typed "sekurnet:#chan" must still reach network "SekurNet".
+	// ponytail: linear scan, a handful of networks at most.
+	for k, n := range b.networks {
+		if strings.EqualFold(k, name) {
+			return n
+		}
+	}
+	return nil
 }
 
 // networkOrDefault falls back to the first configured network when name is empty

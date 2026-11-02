@@ -176,3 +176,20 @@ func TestRunNetwork_RestartsAfterLoopPanic(t *testing.T) {
 		t.Fatal("runNetwork kept running after disconnectNetwork")
 	}
 }
+
+// "sekurnet:#chan" (hand-typed) must resolve to network "SekurNet".
+func TestNetworkLookupIgnoresCase(t *testing.T) {
+	b := newTestBot(&config.Config{
+		IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "SekurNet"}}},
+	})
+	n := b.buildNetwork(config.IRCNetworkConfig{Name: "SekurNet"})
+	b.networksMu.Lock()
+	b.networks["SekurNet"] = n
+	b.networksMu.Unlock()
+	if b.network("sekurnet") != n || b.network("SekurNet") != n {
+		t.Fatal("network lookup should ignore case")
+	}
+	if b.network("other") != nil {
+		t.Fatal("unknown network should be nil")
+	}
+}

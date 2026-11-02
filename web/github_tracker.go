@@ -5,12 +5,16 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 
 	"botIAask/config"
 	"botIAask/github"
 )
+
+// githubNameRe matches a bare GitHub owner or repo name.
+var githubNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // joinAnnounceChannels best-effort live-joins each "network:#chan" target for the current
 // process only (not persisted to config), so a freshly tracked repo's channel starts
@@ -167,6 +171,11 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 		repo := strings.TrimSpace(req.Repo)
 		if owner == "" || repo == "" {
 			http.Error(w, "owner and repo are required", http.StatusBadRequest)
+			return
+		}
+		// A pasted URL ("https://github.com/o/r") in the repo field 404s on every poll forever.
+		if !githubNameRe.MatchString(owner) || !githubNameRe.MatchString(repo) {
+			http.Error(w, "owner and repo must be bare names (e.g. gcanosa / iSekur), not URLs", http.StatusBadRequest)
 			return
 		}
 
