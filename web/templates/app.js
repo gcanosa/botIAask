@@ -87,22 +87,16 @@ const rowIcons = {
     linkChain: _icon24('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>'),
 };
 
-/** Open-Meteo icon kinds → inline SVG (stroke currentColor; theme via CSS variables). */
-function weatherIconHTML(kind) {
-    const w = (inner) => `<svg class="weather-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
-    const k = kind != null ? String(kind) : 'cloud';
-    const icons = {
-        clear: w('<circle cx="12" cy="10" r="3.2"/><path d="M12 1.5V4.5M12 15.5V18.5M4.2 9.2l2.1 1.2M17.7 9.2l2.1-1.2M6.1 3.2l1.4 1.4M16.5 3.2l-1.4 1.4M6.1 16.8l1.4-1.4M16.5 16.8l-1.4-1.4M1.5 10h3M19.5 10h3"/>'),
-        night_clear: w('<path d="M12 3a6.5 6.5 0 0 0 0 12 7 7 0 0 1-6.5-8.5A6.5 6.5 0 0 0 12 3zM19 4l.5.5.5.5.5.5" opacity=".75"/><path d="M4 6l-1-1" opacity=".5"/>'),
-        partly: w('<circle cx="7" cy="6" r="2.2"/><path d="M2 16a3.5 3.5 0 0 1 0-7h.2A4.2 4.2 0 0 1 12 6.5a3.3 3.3 0 0 1 .1 6.4H3.5"/>'),
-        cloud: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.3 3.3 0 0 0-2.1 5.5A2.3 2.3 0 0 0 6.5 18z"/>'),
-        fog: w('<path d="M2 10h4M7 10h3M12 10h7M2 14h8M12 14h7M2 18h3M6 18h3M10 18h3M14 18h2"/>'),
-        rain: w('<path d="M6.5 19H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 7a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 19zM8 22l1-3M12 22l1-3M16 22l1-3"/>'),
-        snow: w('<path d="M6.5 19H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 7a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 19z"/><path d="M9 21l.5-1M12 21v-1.5M15 21l-.5-1M8 16.5l.5.5M12 15.5v1.2M16 16.5l-.5.5"/>'),
-        shower: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 18zM8 20l.5-2.5M12 20l.5-2.5M16 20l.5-2.5"/>'),
-        thunder: w('<path d="M6.5 18H18a3.5 3.5 0 0 0 0-7h-.1A5 5 0 0 0 6 6a3.2 3.2 0 0 0-2.1 5.5A2.2 2.2 0 0 0 6.5 18z"/><path d="M12 20V12l-2.5 3H12l-1.5 5"/>'),
+/** Open-Meteo icon kinds → Meteocons (Bas Milius, MIT; embedded under /static/weather/). night=true picks the moon variant. */
+function weatherIconHTML(kind, night) {
+    const day = {
+        clear: 'clear-day', night_clear: 'clear-night', partly: 'partly-cloudy-day', cloud: 'cloudy', fog: 'fog',
+        rain: 'rain', snow: 'snow', shower: 'partly-cloudy-day-rain', thunder: 'thunderstorms-rain',
     };
-    return icons[k] || icons.cloud;
+    const moon = { clear: 'clear-night', partly: 'partly-cloudy-night', shower: 'partly-cloudy-night-rain' };
+    const k = kind != null ? String(kind) : 'cloud';
+    const name = (night && moon[k]) || day[k] || 'cloudy';
+    return `<img class="weather-icon-svg" src="/static/weather/${name}.svg" alt="" decoding="async">`;
 }
 
 /** Max/min °C as themed pills (matches IRC red/blue pattern on the web). */
@@ -177,7 +171,7 @@ async function fetchServerWeather() {
                 labelEl.textContent = short;
             }
             const heroI = document.getElementById('server-weather-hero-icon');
-            if (heroI) heroI.innerHTML = weatherIconHTML(c.icon);
+            if (heroI) heroI.innerHTML = weatherIconHTML(c.icon, c.is_day === 0);
             const heroExtras = document.getElementById('server-weather-hero-extras');
             if (heroExtras) {
                 heroExtras.innerHTML = '';

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -491,6 +492,12 @@ var staticAssets = sync.OnceValue(func() map[string]staticAsset {
 	files := map[string]string{
 		"/static/app.js":    "application/javascript; charset=utf-8",
 		"/static/style.css": "text/css; charset=utf-8",
+	}
+	// Meteocons weather icons (templates/weather/*.svg).
+	if icons, err := fs.Glob(templatesFS, "templates/weather/*.svg"); err == nil {
+		for _, f := range icons {
+			files["/static/"+strings.TrimPrefix(f, "templates/")] = "image/svg+xml"
+		}
 	}
 	out := make(map[string]staticAsset, len(files))
 	for path, ctype := range files {

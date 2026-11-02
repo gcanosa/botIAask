@@ -1864,8 +1864,8 @@ a.mobile-top-bar__title:focus-visible {
     text-align: right;
 }
 .weather-card__hero-icon {
-    width: 3.75rem;
-    height: 3.75rem;
+    width: 4.5rem;
+    height: 4.5rem;
     color: var(--weather-hero, var(--primary));
 }
 .weather-card__hero-readout {
@@ -1969,8 +1969,8 @@ a.mobile-top-bar__title:focus-visible {
     border: 1px solid var(--glass-border);
 }
 .weather-daily__icon {
-    width: 2rem;
-    height: 2rem;
+    width: 2.75rem;
+    height: 2.75rem;
     margin: 0 auto 0.2rem;
     color: var(--weather-daily, var(--accent));
 }
