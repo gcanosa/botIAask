@@ -650,6 +650,9 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 				cmdTarget = sender
 			}
 			n.dispatchCommand(cmdTarget, message, sender, e.Source)
+			if cmdTarget == target && !strings.HasPrefix(message, n.pfx()) && n.netCfg().YouTubePreviewOn(target) {
+				n.announceYouTube(target, sender, message)
+			}
 			n.deliverTellsAsync(sender, reply)
 		}
 	})

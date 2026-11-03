@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,6 +41,35 @@ type IRCNetworkConfig struct {
 	Admins []string `yaml:"admins,omitempty"`
 	// Access is the auto-op / auto-voice / auto-kick list, applied when a matching user joins.
 	Access []ChannelAccess `yaml:"access,omitempty"`
+	// YouTubePreview lists the channels where pasted YouTube links get a title/views/likes line
+	// ("*" = every channel on this network). Empty = off.
+	YouTubePreview []string `yaml:"youtube_preview,omitempty"`
+}
+
+// NormalizeYouTubePreview validates a youtube_preview list: "*" or #/& channel names (no spaces,
+// commas or control chars), de-duplicated case-insensitively.
+func NormalizeYouTubePreview(in []string) ([]string, error) {
+	out := []string{}
+	for _, c := range in {
+		c = strings.TrimSpace(c)
+		if c != "*" && (len(c) < 2 || len(c) > 64 || (c[0] != '#' && c[0] != '&') || strings.ContainsAny(c, " ,\x07\r\n\x00")) {
+			return nil, fmt.Errorf("invalid channel %q", c)
+		}
+		if !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, c) }) {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// YouTubePreviewOn reports whether link previews are enabled for channel on this network.
+func (n IRCNetworkConfig) YouTubePreviewOn(channel string) bool {
+	for _, c := range n.YouTubePreview {
+		if c == "*" || strings.EqualFold(c, channel) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEnabled reports whether this network should be connected (default: true if unset).

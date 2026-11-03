@@ -47,6 +47,9 @@ irc:
           #       mask: '*!*@spammer.example'
           #       level: kick
           #       reason: spam
+          # Optional: post title/length/views/likes for YouTube links pasted in these channels
+          # ("*" = all channels on this network). Off when empty. IRC: "!youtube on|off [#chan|*]".
+          # youtube_preview: ['#mychannel']
         # Second network example (delete or uncomment/edit as needed):
         # - name: OtherNet
         #   enabled: false

@@ -74,6 +74,7 @@ var adminLines = []line{
 	{cmd: "!news start|stop", desc: "Turn global RSS-to-IRC announcements on/off (saves config)"},
 	{cmd: "!stats", desc: "Colorful bot stats: uptime, 24h activity, channels, data counts, services, host CPU/RAM/heap"},
 	{cmd: "!topic [#chan] <text>", desc: "Set the channel topic (bot needs @ if the channel is +t)"},
+	{cmd: "!youtube [on|off] [#chan|*]", desc: "YouTube link previews (title, length, views, likes) per channel; * = whole network; no args lists where it is on"},
 	{cmd: "!guard [#chan] on [joins]|off", desc: "Flood guard (bot needs @): on = +m (only +v and up talk), voices you, and keeps +l at members+joins (default 5) re-set every 30s; off = -ml"},
 	{cmd: "!kick [#chan] <nick> [reason]", desc: "Kick a nick (channel defaults to where you say it)"},
 	{cmd: "!akick add|del|list ...", desc: "Auto-kick list: add [#chan] <nick|mask> [reason] (nick = ban *!*@host via WHOIS, kicks now) | del [#chan] <mask|number> | list [#chan]"},

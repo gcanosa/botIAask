@@ -283,6 +283,11 @@ func capFirst(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
 // editAccess applies fn to this network's access list on a config clone, saves it and rehashes
 // (same flow as !gh add/del).
 func (b *ircNetwork) editAccess(source string, fn func(list *[]config.ChannelAccess) error) error {
+	return b.editNetwork(source, func(n *config.IRCNetworkConfig) error { return fn(&n.Access) })
+}
+
+// editNetwork applies fn to a copy of this network's config, saves it and rehashes.
+func (b *ircNetwork) editNetwork(source string, fn func(n *config.IRCNetworkConfig) error) error {
 	clone, err := config.CloneConfig(b.getCfg())
 	if err != nil {
 		return err
@@ -291,7 +296,7 @@ func (b *ircNetwork) editAccess(source string, fn func(list *[]config.ChannelAcc
 	if i < 0 {
 		return fmt.Errorf("network %s not in config", b.name)
 	}
-	if err := fn(&clone.IRC.Networks[i].Access); err != nil {
+	if err := fn(&clone.IRC.Networks[i]); err != nil {
 		return err
 	}
 	if err := config.SaveConfig(configPathOrDefault(b.Bot), clone); err != nil {

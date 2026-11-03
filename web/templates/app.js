@@ -675,6 +675,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-autojoin-wrap')?.classList.remove('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.remove('hidden');
         document.getElementById('irc-access-wrap')?.classList.remove('hidden');
+        document.getElementById('irc-youtube-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
@@ -701,6 +702,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-autojoin-wrap')?.classList.add('hidden');
         document.getElementById('irc-config-admins-wrap')?.classList.add('hidden');
         document.getElementById('irc-access-wrap')?.classList.add('hidden');
+        document.getElementById('irc-youtube-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -2764,6 +2766,12 @@ function ircNetworksRender() {
         accessSel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === cur ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
         fetchIRCAccess();
     }
+    const ytSel = document.getElementById('irc-youtube-network');
+    if (ytSel) {
+        const cur = ytSel.value || selectedIRCNetwork;
+        ytSel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === cur ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
+        fetchIRCYouTube();
+    }
     ircAuthPopulate();
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
@@ -3465,6 +3473,77 @@ async function removeIRCAccess(index) {
     } catch (err) {
         ircAccessSetStatus(String(err), true);
     }
+}
+
+function ircYouTubeSetStatus(msg, isErr) {
+    const el = document.getElementById('irc-youtube-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? 'var(--error)' : 'var(--text-muted)';
+}
+
+// Rows: "All channels" (*), then every configured channel plus any extra enabled one, as checkboxes.
+function renderIRCYouTube(data) {
+    const box = document.getElementById('irc-youtube-list');
+    if (!box) return;
+    const enabled = data.channels || [];
+    window._ircYouTubeEnabled = enabled;
+    const on = (c) => enabled.some((e) => e.toLowerCase() === c.toLowerCase());
+    const rows = ['*'].concat(data.known || []);
+    enabled.forEach((c) => { if (!rows.some((r) => r.toLowerCase() === c.toLowerCase())) rows.push(c); });
+    window._ircYouTubeRows = rows;
+    const esc = financeEscapeHtml;
+    box.innerHTML = rows.map((c, i) =>
+        `<label style="display: flex; gap: 0.5rem; align-items: center; cursor: pointer;">
+            <input type="checkbox" ${on(c) ? 'checked' : ''} onchange="toggleIRCYouTube(${i}, this.checked)">
+            ${c === '*' ? '<strong>All channels on this network</strong>' : esc(c)}
+        </label>`).join('');
+}
+
+async function fetchIRCYouTube() {
+    const network = document.getElementById('irc-youtube-network')?.value || '';
+    if (!network) return;
+    try {
+        const res = await fetch('/api/irc/youtube?network=' + encodeURIComponent(network));
+        if (!res.ok) throw new Error(await res.text());
+        renderIRCYouTube(await res.json());
+        ircYouTubeSetStatus('');
+    } catch (e) {
+        ircYouTubeSetStatus(String(e), true);
+    }
+}
+
+async function saveIRCYouTube(channels) {
+    const network = document.getElementById('irc-youtube-network')?.value || '';
+    try {
+        const res = await fetch('/api/irc/youtube', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ network, channels }) });
+        if (!res.ok) {
+            ircYouTubeSetStatus((await res.text()) || 'Save failed', true);
+            return fetchIRCYouTube();
+        }
+        renderIRCYouTube(await res.json());
+        ircYouTubeSetStatus('Saved to config and applied.');
+    } catch (e) {
+        ircYouTubeSetStatus(String(e), true);
+    }
+}
+
+function toggleIRCYouTube(index, checked) {
+    const c = (window._ircYouTubeRows || [])[index];
+    if (!c) return;
+    const rest = (window._ircYouTubeEnabled || []).filter((e) => e.toLowerCase() !== c.toLowerCase());
+    saveIRCYouTube(checked ? rest.concat([c]) : rest);
+}
+
+function addIRCYouTube() {
+    const input = document.getElementById('irc-youtube-channel');
+    const c = String(input?.value || '').trim();
+    if (!c) {
+        ircYouTubeSetStatus('Enter a channel.', true);
+        return;
+    }
+    input.value = '';
+    saveIRCYouTube((window._ircYouTubeEnabled || []).concat([c]));
 }
 
 function updateAdminsUI(ircNicks, webNames) {

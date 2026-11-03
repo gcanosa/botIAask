@@ -53,6 +53,8 @@ All configuration lives in `config/config.yaml` (active) and `config/config.yaml
 
 **Channel access** (`irc.networks[].access`, `config/irc_access.go`): `{channel, mask, level: op|voice|kick, reason}`, masks are `nick!user@host` globs (`config.MaskMatch`, `NormalizeMask`, `ValidateAccess`). Applied on JOIN (`irc/access_cmd.go` `applyAccess`, in `guard.Go`): kick (+b mask, KICK; never an admin) beats op beats voice. Edited by `!akick`/`!aop`/`!avoice add|del|list` (admin session, one `handleAccessCommand` keyed by `accessCmds`; `add <nick>` WHOISes: kick bans `*!*@host`, op/voice store `*!user@host`), `!kick`, and the dashboard "Channel access" card (`/api/irc/access`, `handleIRCAccess`); MODE/KICK lines go through the pacer (`chanop`).
 
+**YouTube link previews** (`irc/youtube.go`): per network `irc.networks[].youtube_preview: ['#chan' | '*']` (off when empty), toggled by admin `!youtube on|off [#chan|*]` or the dashboard "YouTube link previews" card (`/api/irc/youtube` GET/PUT whole list, `handleIRCYouTube`, `config.NormalizeYouTubePreview`). Scrapes `ytInitialPlayerResponse` from the watch page (no API key; `SOCS=CAI` cookie skips the EU consent page); silent on failure, per-sender limiter key `youtube`, shares `cmdSem`, 2-min per-channel dedupe.
+
 **Config reload** at runtime: send `SIGHUP` to the process, call `!rehash` in IRC, or use the `/api/rehash` web endpoint.
 
 ---

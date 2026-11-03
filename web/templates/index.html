@@ -1150,6 +1150,23 @@
                     </div>
                     <p id="irc-access-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
                 </div>
+                <div id="irc-youtube-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">YouTube link previews</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">When someone pastes a YouTube link in an enabled channel, the bot replies with the title, length, channel, views, likes and age. Off everywhere by default. Stored per network under <span class="mono">youtube_preview</span> in <span class="mono">config/config.yaml</span>; IRC admins can also use <span class="mono">!youtube on|off [#chan|*]</span>.</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
+                            <select id="irc-youtube-network" class="btn btn-ghost" style="min-width: 9rem; margin: 0;" onchange="fetchIRCYouTube()" aria-label="Network"></select>
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Other channel</label>
+                            <input type="text" id="irc-youtube-channel" class="btn btn-ghost" style="width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="#channel" autocomplete="off" aria-label="Channel">
+                        </div>
+                        <button type="button" onclick="addIRCYouTube()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Enable</button>
+                    </div>
+                    <div id="irc-youtube-list" class="mono" style="display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem;"></div>
+                    <p id="irc-youtube-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
                 <div class="card" data-admin-group="users">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                         <h3 class="card-title" style="margin: 0;">Authorized Users</h3>
