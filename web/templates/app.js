@@ -4080,6 +4080,14 @@ async function saveLoggerSettings() {
     }
 }
 
+// LLM card state. The admin panel re-runs fetchAISettings on every status poll, so the form keeps
+// what the admin is editing: the URL is only refilled while untouched, the model pick (aiPicked)
+// wins over the active one until Save, and the model list is fetched once (or on Refresh).
+let aiActiveModel = '';
+let aiLoadedURL = null;
+let aiPicked = null;
+let aiModels = null;
+
 async function fetchAISettings() {
     if (!lastIsAdmin) return;
     try {
@@ -4087,58 +4095,70 @@ async function fetchAISettings() {
         if (!res.ok) return;
         const data = await res.json();
         const urlEl = document.getElementById('ai-lm-studio-url');
-        const modelEl = document.getElementById('ai-model');
-        if (urlEl && data.lm_studio_url != null) urlEl.value = data.lm_studio_url;
-        if (modelEl && data.model != null) modelEl.value = data.model;
-        fetchAIModels(false);
+        if (urlEl && data.lm_studio_url != null && (aiLoadedURL === null || urlEl.value === aiLoadedURL)) {
+            urlEl.value = data.lm_studio_url;
+            aiLoadedURL = data.lm_studio_url;
+        }
+        aiActiveModel = data.model || '';
+        if (aiModels === null) await fetchAIModels(false);
+        else aiRenderModels();
     } catch (e) {
         console.error('ai settings', e);
     }
 }
 
-// fetchAIModels fills the model <select> from /api/ai/models (for the URL in the form, saved or not).
-// Picking one copies it into the free-text model field, which is what Save sends.
+// fetchAIModels loads /api/ai/models for the URL in the form (saved or not).
 async function fetchAIModels(announce) {
-    const sel = document.getElementById('ai-model-select');
     const status = document.getElementById('ai-settings-status');
     const urlEl = document.getElementById('ai-lm-studio-url');
-    if (!sel) return;
     const u = urlEl ? String(urlEl.value).trim() : '';
-    const placeholder = (text) => { const o = document.createElement('option'); o.value = ''; o.textContent = text; return o; };
     try {
         const res = await fetch('/api/ai/models' + (u ? '?url=' + encodeURIComponent(u) : ''));
         if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
-        const models = (await res.json()).models || [];
-        sel.replaceChildren(placeholder(models.length ? 'Pick a model (' + models.length + ' available)' : 'No models on the server'),
-            ...models.map(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; return o; }));
-        aiModelSyncSelect();
+        aiModels = (await res.json()).models || [];
         if (announce && status) {
-            status.textContent = models.length + ' model(s) available.';
+            status.textContent = aiModels.length + ' model(s) available.';
             status.style.color = 'var(--success)';
         }
     } catch (e) {
-        sel.replaceChildren(placeholder('Could not load models (type the id below)'));
-        if (announce && status) {
+        aiModels = [];
+        if (status) {
             status.textContent = 'Model list: ' + e.message;
             status.style.color = 'var(--error)';
         }
     }
+    aiRenderModels();
 }
 
-// aiModelSyncSelect selects the list entry matching the typed model (case-insensitive, as LM Studio is).
-function aiModelSyncSelect() {
+// aiRenderModels rebuilds the <select>: ✓ marks the active model (matched case-insensitively, as
+// LM Studio does); an active model the server doesn't list is still shown so it isn't lost.
+function aiRenderModels() {
     const sel = document.getElementById('ai-model-select');
-    const modelEl = document.getElementById('ai-model');
-    if (!sel || !modelEl) return;
-    const cur = String(modelEl.value).trim().toLowerCase();
-    const hit = Array.from(sel.options).find(o => o.value && o.value.toLowerCase() === cur);
-    sel.value = hit ? hit.value : '';
+    if (!sel || aiModels === null) return;
+    const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+    const ids = aiModels.slice();
+    if (aiActiveModel && !ids.some(m => same(m, aiActiveModel))) ids.unshift(aiActiveModel);
+    if (!ids.length) {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = 'No models on the server';
+        sel.replaceChildren(o);
+        return;
+    }
+    sel.replaceChildren(...ids.map(m => {
+        const o = document.createElement('option');
+        o.value = m;
+        const active = same(m, aiActiveModel);
+        o.textContent = (active ? '✓ ' : '\u2003') + m + (active ? '  (active)' : '') + (aiModels.includes(m) ? '' : '  (not on server)');
+        return o;
+    }));
+    const want = aiPicked ?? aiActiveModel;
+    sel.value = ids.find(m => same(m, want)) || ids[0];
 }
 
 function aiModelPicked() {
     const sel = document.getElementById('ai-model-select');
-    const modelEl = document.getElementById('ai-model');
-    if (sel && modelEl && sel.value) modelEl.value = sel.value;
+    if (sel) aiPicked = sel.value;
 }
 
 async function saveAISettings() {
@@ -4148,12 +4168,12 @@ async function saveAISettings() {
         status.style.color = 'var(--text-muted)';
     }
     const urlEl = document.getElementById('ai-lm-studio-url');
-    const modelEl = document.getElementById('ai-model');
+    const sel = document.getElementById('ai-model-select');
     const lmStudioURL = urlEl ? String(urlEl.value).trim() : '';
-    const model = modelEl ? String(modelEl.value).trim() : '';
+    const model = sel ? String(sel.value).trim() : '';
     if (!lmStudioURL || !model) {
         if (status) {
-            status.textContent = 'API URL and model are required.';
+            status.textContent = 'API URL and a model are required.';
             status.style.color = 'var(--error)';
         }
         return;
@@ -4165,8 +4185,12 @@ async function saveAISettings() {
             body: JSON.stringify({ lm_studio_url: lmStudioURL, model })
         });
         if (res.ok) {
+            aiActiveModel = model;
+            aiLoadedURL = lmStudioURL;
+            aiPicked = null;
+            aiRenderModels();
             if (status) {
-                status.textContent = 'Saved.';
+                status.textContent = 'Saved. Active model: ' + model;
                 status.style.color = 'var(--success)';
                 setTimeout(() => { status.textContent = ''; }, 3000);
             }

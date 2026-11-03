@@ -866,7 +866,7 @@
                 </div>
                 <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">LLM (OpenAI-compatible API)</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Base URL and model name used by the IRC bot for <span class="mono">!ask</span>. Stored under <span class="mono">ai.lm_studio_url</span> and <span class="mono">ai.model</span> in <span class="mono">config/config.yaml</span>. Changes apply immediately to the running process. Pick a model from the list (it comes from the server's <span class="mono">/models</span>) or type its id, then Save. A <span class="mono">&lt;think&gt;</span> block from reasoning models is removed from answers automatically.</p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Base URL and model name used by the IRC bot for <span class="mono">!ask</span>. Stored under <span class="mono">ai.lm_studio_url</span> and <span class="mono">ai.model</span> in <span class="mono">config/config.yaml</span>. Changes apply immediately to the running process. Pick a model from the list (it comes from the server's <span class="mono">/models</span>; ✓ marks the active one), then Save. A <span class="mono">&lt;think&gt;</span> block from reasoning models is removed from answers automatically.</p>
                     <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 0.75rem;">
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">API base URL</label>
@@ -874,10 +874,9 @@
                         </div>
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Model name</label>
-                            <select id="ai-model-select" class="btn btn-ghost" style="width: 100%; max-width: 36rem; text-align: left; cursor: pointer; margin: 0 0 0.5rem;" onchange="aiModelPicked()" aria-label="Models available on the LLM server">
+                            <select id="ai-model-select" class="btn btn-ghost" style="width: 100%; max-width: 36rem; text-align: left; cursor: pointer; margin: 0;" onchange="aiModelPicked()" aria-label="LLM model (✓ = active)">
                                 <option value="">Loading models from the server...</option>
                             </select>
-                            <input type="text" id="ai-model" class="btn btn-ghost" style="width: 100%; max-width: 36rem; text-align: left; cursor: text; margin: 0;" placeholder="or type a model id" autocomplete="off" spellcheck="false" aria-label="Active LLM model id">
                         </div>
                     </div>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
