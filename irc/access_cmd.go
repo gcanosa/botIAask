@@ -97,6 +97,20 @@ func (b *ircNetwork) handleKickCommand(target, sender string, args []string) {
 	}
 }
 
+// handleTopicCommand: !topic [#chan] <text> (admin session required, see bot.go). The bot
+// needs ops when the channel is +t; otherwise the server refuses with 482 (logged in network.go).
+func (b *ircNetwork) handleTopicCommand(target string, args []string) {
+	channel, rest, ok := channelArg(target, args)
+	if !ok || len(rest) == 0 {
+		b.sendPrivmsg(target, fmt.Sprintf("Usage: %stopic [#chan] <text>", b.pfx()))
+		return
+	}
+	b.chanop("TOPIC", channel, strings.Join(rest, " "))
+	if !ircChannelTarget(target) {
+		b.sendPrivmsg(target, fmt.Sprintf("Topic change sent to %s.", channel))
+	}
+}
+
 // accessCmds maps each list command to its level and the label used in replies.
 var accessCmds = map[string]struct{ level, label string }{
 	"akick":  {config.AccessKick, "auto-kick"},

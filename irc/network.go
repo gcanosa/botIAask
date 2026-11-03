@@ -49,6 +49,10 @@ type ircNetwork struct {
 
 	// sessionJoins: runtime-only JOINs on this network (not in config; lost on new
 	// process, rejoined on IRC reconnect in-process).
+	// !guard: casefolded channel -> stop channel of its join-limit loop (guard_cmd.go).
+	guards  map[string]chan struct{}
+	guardMu sync.Mutex
+
 	sessionJoins   []config.IRChannel
 	sessionJoinsMu sync.Mutex
 
@@ -768,6 +772,18 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 			return
 		}
 		logger.LogChannelEvent(n.name, e.Params[0], logger.EventTopic, e.Nick(), e.Params[1], "")
+	})
+
+	// 353 RPL_NAMREPLY: who was already in a channel when we joined (JOIN only shows later arrivals).
+	n.conn.AddCallback("353", func(e ircmsg.Message) {
+		if len(e.Params) >= 4 {
+			n.addNames(e.Params[2], e.Params[3])
+		}
+	})
+
+	// 482 ERR_CHANOPRIVSNEEDED: a !topic/!kick/MODE the server refused because the bot isn't opped.
+	n.conn.AddCallback("482", func(e ircmsg.Message) {
+		log.Printf("irc[%s]: refused, not channel operator: %s", n.name, strings.Join(e.Params[1:], " "))
 	})
 
 	// QUIT and NICK are not channel-specific, we'll log them globally or skip.

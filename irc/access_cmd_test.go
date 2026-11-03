@@ -81,6 +81,18 @@ func TestKickCommand(t *testing.T) {
 	}
 }
 
+func TestTopicCommand(t *testing.T) {
+	n, out := accessNetwork(t, nil)
+	n.handleTopicCommand("#c", strings.Fields("hello world"))
+	n.handleTopicCommand("alice", strings.Fields("#d new topic"))
+	n.handleTopicCommand("alice", []string{"no-chan"})
+	got := strings.Join(out.all(), "\n")
+	want := "TOPIC #c hello world\nTOPIC #d new topic\nPRIVMSG alice Topic change sent to #d.\nPRIVMSG alice Usage: !topic [#chan] <text>"
+	if got != want {
+		t.Fatalf("got:\n%s", got)
+	}
+}
+
 // !aop / !avoice share !akick's code; re-levelling a kick mask to op lifts its ban, and
 // each list only shows its own level.
 func TestAopAvoiceCommands(t *testing.T) {
