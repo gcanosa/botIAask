@@ -4090,8 +4090,35 @@ async function fetchAISettings() {
         const modelEl = document.getElementById('ai-model');
         if (urlEl && data.lm_studio_url != null) urlEl.value = data.lm_studio_url;
         if (modelEl && data.model != null) modelEl.value = data.model;
+        fetchAIModels(false);
     } catch (e) {
         console.error('ai settings', e);
+    }
+}
+
+// fetchAIModels fills the model <datalist> from /api/ai/models (for the URL in the form, saved or not).
+// The input stays free text, so a model id can still be typed by hand.
+async function fetchAIModels(announce) {
+    const list = document.getElementById('ai-model-list');
+    const status = document.getElementById('ai-settings-status');
+    const urlEl = document.getElementById('ai-lm-studio-url');
+    if (!list) return;
+    const u = urlEl ? String(urlEl.value).trim() : '';
+    try {
+        const res = await fetch('/api/ai/models' + (u ? '?url=' + encodeURIComponent(u) : ''));
+        if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+        const data = await res.json();
+        const models = data.models || [];
+        list.replaceChildren(...models.map(m => { const o = document.createElement('option'); o.value = m; return o; }));
+        if (announce && status) {
+            status.textContent = models.length + ' model(s) available.';
+            status.style.color = 'var(--success)';
+        }
+    } catch (e) {
+        if (announce && status) {
+            status.textContent = 'Model list: ' + e.message;
+            status.style.color = 'var(--error)';
+        }
     }
 }
 

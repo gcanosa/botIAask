@@ -1,12 +1,15 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"botIAask/ai"
 	"botIAask/config"
 	"botIAask/logger"
 	"botIAask/rss"
@@ -243,6 +246,36 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleAIModels lists the models the LLM server offers, for the dashboard model picker. ?url=
+// lists a not-yet-saved base URL (validated like the setting); otherwise the configured one.
+func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	raw := r.URL.Query().Get("url")
+	if raw == "" {
+		raw = s.getConfig().AI.LMStudioURL
+	}
+	baseURL, err := validateLMStudioURL(raw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	models, err := ai.NewModelLister(baseURL).ListModels(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string][]string{"models": models})
 }
 
 func (s *Server) handleUITheme(w http.ResponseWriter, r *http.Request) {

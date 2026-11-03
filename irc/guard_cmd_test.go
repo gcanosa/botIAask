@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"botIAask/config"
 )
 
 func TestGuardCommand(t *testing.T) {
@@ -57,4 +59,26 @@ func TestGuardLimitFollowsMembers(t *testing.T) {
 	n.membersMu.Unlock()
 	waitFor("MODE #c +l 6")
 	n.handleGuardCommand("#c", "alice", []string{"off"})
+}
+
+// Logged-in admins get adminBurstFactor times the burst; everyone else keeps the configured one.
+func TestRateLimitAdminBurst(t *testing.T) {
+	n, _ := accessNetwork(t, nil)
+	n.getCfg().Bot.RateLimiting = &config.RateLimitConfig{Enabled: true, Burst: 2, Window: 60}
+	n.rateLimiter = NewRateLimiter(time.Minute)
+	n.loggedInAdmins[adminSessionKey(n.name, "admin")] = true
+	count := func(nick string) (ok int) {
+		for range 20 {
+			if !n.rateLimited("#c", nick) {
+				ok++
+			}
+		}
+		return ok
+	}
+	if got := count("user"); got != 2 {
+		t.Fatalf("user allowed %d, want 2", got)
+	}
+	if got := count("admin"); got != 2*adminBurstFactor {
+		t.Fatalf("admin allowed %d, want %d", got, 2*adminBurstFactor)
+	}
 }

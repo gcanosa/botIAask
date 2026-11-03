@@ -507,6 +507,9 @@ func (b *ircNetwork) listSessionChannels() []config.IRChannel {
 	return append([]config.IRChannel(nil), b.sessionJoins...)
 }
 
+// adminBurstFactor: senders with an active !admin session get this many times the burst.
+const adminBurstFactor = 5
+
 // rateLimited applies the per-sender limiter (when enabled) and tells the sender on refusal.
 // The budget is per network+sender (target "" ), so hopping channels/PMs doesn't reset it.
 func (b *ircNetwork) rateLimited(target, sender string) bool {
@@ -514,7 +517,13 @@ func (b *ircNetwork) rateLimited(target, sender string) bool {
 	if rl == nil || cfg == nil { // disabled (a rehash may have just turned it off)
 		return false
 	}
-	if rl.Allow(b.name, sender, "", cfg.Burst) {
+	burst := cfg.Burst
+	b.loginsMu.RLock()
+	if b.loggedInAdmins[adminSessionKey(b.name, sender)] {
+		burst *= adminBurstFactor
+	}
+	b.loginsMu.RUnlock()
+	if rl.Allow(b.name, sender, "", burst) {
 		return false
 	}
 	b.sendPrivmsg(target, b.sanitize(fmt.Sprintf("@%s: Rate limit exceeded. Please wait before sending more commands.", sender)))

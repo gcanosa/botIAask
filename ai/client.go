@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,5 +77,46 @@ func (c *Client) Ask(ctx context.Context, question string) (string, error) {
 		return "", fmt.Errorf("no choices returned from LM Studio")
 	}
 
-	return resp.Choices[0].Message.Content, nil
+	answer, ok := stripThink(resp.Choices[0].Message.Content)
+	if !ok {
+		return "", fmt.Errorf("model %s returned only reasoning (<think> never closed); try a non-thinking model", model)
+	}
+	return answer, nil
+}
+
+// stripThink drops the reasoning block that thinking models (Qwen3, DeepSeek-R1, ...) put before
+// the answer, so any model can be picked without a per-model setting. Some chat templates open
+// <think> in the prompt, so everything up to the last </think> goes. ok is false when the reply
+// is an unterminated <think> (the model ran out of tokens while still reasoning).
+func stripThink(s string) (answer string, ok bool) {
+	if i := strings.LastIndex(s, "</think>"); i >= 0 {
+		return strings.TrimSpace(s[i+len("</think>"):]), true
+	}
+	if strings.HasPrefix(strings.TrimSpace(s), "<think>") {
+		return "", false
+	}
+	return s, true
+}
+
+// NewModelLister returns a client for baseURL used only to list its models (dashboard picker).
+func NewModelLister(baseURL string) *Client { return NewClient(baseURL, "") }
+
+// ListModels returns the chat model ids the server offers (GET /models), sorted, without
+// embedding models (they can't answer !ask).
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	c.mu.RLock()
+	client := c.apiClient
+	c.mu.RUnlock()
+	list, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list models: %w", err)
+	}
+	ids := make([]string, 0, len(list.Models))
+	for _, m := range list.Models {
+		if !strings.Contains(strings.ToLower(m.ID), "embed") {
+			ids = append(ids, m.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
 }

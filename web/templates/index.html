@@ -866,7 +866,7 @@
                 </div>
                 <div class="card" data-admin-group="general" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">LLM (OpenAI-compatible API)</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Base URL and model name used by the IRC bot for <span class="mono">!ask</span>. Stored under <span class="mono">ai.lm_studio_url</span> and <span class="mono">ai.model</span> in <span class="mono">config/config.yaml</span>. Changes apply immediately to the running process.</p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">Base URL and model name used by the IRC bot for <span class="mono">!ask</span>. Stored under <span class="mono">ai.lm_studio_url</span> and <span class="mono">ai.model</span> in <span class="mono">config/config.yaml</span>. Changes apply immediately to the running process. The model list comes from the server's <span class="mono">/models</span>; a <span class="mono">&lt;think&gt;</span> block from reasoning models is removed from answers automatically.</p>
                     <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 0.75rem;">
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">API base URL</label>
@@ -874,11 +874,13 @@
                         </div>
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Model name</label>
-                            <input type="text" id="ai-model" class="btn btn-ghost" style="width: 100%; max-width: 36rem; text-align: left; cursor: text; margin: 0;" placeholder="e.g. meta-llama-3.1-8b-instruct" autocomplete="off" spellcheck="false" aria-label="Active LLM model id">
+                            <input type="text" id="ai-model" class="btn btn-ghost" style="width: 100%; max-width: 36rem; text-align: left; cursor: text; margin: 0;" placeholder="pick from the list or type a model id" list="ai-model-list" autocomplete="off" spellcheck="false" aria-label="Active LLM model id">
+                            <datalist id="ai-model-list"></datalist>
                         </div>
                     </div>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
                         <button type="button" onclick="saveAISettings()" class="btn btn-primary" style="padding: 0.5rem 1.25rem;">Save</button>
+                        <button type="button" onclick="fetchAIModels(true)" class="btn btn-ghost" style="padding: 0.5rem 1.25rem;">Refresh model list</button>
                     </div>
                     <p id="ai-settings-status" class="mono" style="font-size: 0.7rem; margin: 0.5rem 0 0; color: var(--text-muted);"></p>
                 </div>

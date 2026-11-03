@@ -131,7 +131,7 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
 
 ## AI Client
 
-`ai/client.go` wraps the OpenAI SDK with a 90-second HTTP timeout (`lmStudioTimeout`). The bot passes an IRC-specific system prompt that enforces terse, plain-text responses.
+`ai/client.go` wraps the OpenAI SDK with a 90-second HTTP timeout (`lmStudioTimeout`). The bot passes an IRC-specific system prompt that enforces terse, plain-text responses. Replies go through `stripThink` (everything up to the last `</think>` is dropped; an unclosed `<think>` is an error), so reasoning models work with no per-model setting. The dashboard LLM card fills a `<datalist>` from `GET /api/ai/models[?url=]` (admin; `ai.ListModels`, embedding models filtered); the model field stays free text.
 
 ---
 

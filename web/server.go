@@ -264,6 +264,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/weather/settings", s.handleWeatherSettings)
 	mux.HandleFunc("/api/logger/settings", s.handleLoggerSettings)
 	mux.HandleFunc("/api/ai/settings", s.handleAISettings)
+	mux.HandleFunc("/api/ai/models", s.handleAIModels)
 	mux.HandleFunc("/api/changelog", s.handleChangelog)
 	mux.HandleFunc("/favicon.ico", s.handleFavicon)
 
