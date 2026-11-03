@@ -4096,30 +4096,49 @@ async function fetchAISettings() {
     }
 }
 
-// fetchAIModels fills the model <datalist> from /api/ai/models (for the URL in the form, saved or not).
-// The input stays free text, so a model id can still be typed by hand.
+// fetchAIModels fills the model <select> from /api/ai/models (for the URL in the form, saved or not).
+// Picking one copies it into the free-text model field, which is what Save sends.
 async function fetchAIModels(announce) {
-    const list = document.getElementById('ai-model-list');
+    const sel = document.getElementById('ai-model-select');
     const status = document.getElementById('ai-settings-status');
     const urlEl = document.getElementById('ai-lm-studio-url');
-    if (!list) return;
+    if (!sel) return;
     const u = urlEl ? String(urlEl.value).trim() : '';
+    const placeholder = (text) => { const o = document.createElement('option'); o.value = ''; o.textContent = text; return o; };
     try {
         const res = await fetch('/api/ai/models' + (u ? '?url=' + encodeURIComponent(u) : ''));
         if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
-        const data = await res.json();
-        const models = data.models || [];
-        list.replaceChildren(...models.map(m => { const o = document.createElement('option'); o.value = m; return o; }));
+        const models = (await res.json()).models || [];
+        sel.replaceChildren(placeholder(models.length ? 'Pick a model (' + models.length + ' available)' : 'No models on the server'),
+            ...models.map(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; return o; }));
+        aiModelSyncSelect();
         if (announce && status) {
             status.textContent = models.length + ' model(s) available.';
             status.style.color = 'var(--success)';
         }
     } catch (e) {
+        sel.replaceChildren(placeholder('Could not load models (type the id below)'));
         if (announce && status) {
             status.textContent = 'Model list: ' + e.message;
             status.style.color = 'var(--error)';
         }
     }
+}
+
+// aiModelSyncSelect selects the list entry matching the typed model (case-insensitive, as LM Studio is).
+function aiModelSyncSelect() {
+    const sel = document.getElementById('ai-model-select');
+    const modelEl = document.getElementById('ai-model');
+    if (!sel || !modelEl) return;
+    const cur = String(modelEl.value).trim().toLowerCase();
+    const hit = Array.from(sel.options).find(o => o.value && o.value.toLowerCase() === cur);
+    sel.value = hit ? hit.value : '';
+}
+
+function aiModelPicked() {
+    const sel = document.getElementById('ai-model-select');
+    const modelEl = document.getElementById('ai-model');
+    if (sel && modelEl && sel.value) modelEl.value = sel.value;
 }
 
 async function saveAISettings() {
