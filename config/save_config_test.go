@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestSaveConfig_RejectsInvalid guards the config-bricking bug: a runtime write (e.g. an
-// admin's !join creating a channel name already used by another network) must be refused
-// before it reaches disk, not silently written and only caught on the next LoadConfig/start.
+// TestSaveConfig_RejectsInvalid guards the config-bricking bug: an invalid runtime write must be
+// refused before it reaches disk, not silently written and only caught on the next LoadConfig/start.
+// The same channel on two networks is valid (all state is keyed by network+channel).
 func TestSaveConfig_RejectsInvalid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -18,10 +18,14 @@ func TestSaveConfig_RejectsInvalid(t *testing.T) {
 		{Name: "alpha", Server: "a.example", Channels: []IRChannel{{Name: "#dup"}}},
 		{Name: "beta", Server: "b.example", Channels: []IRChannel{{Name: "#dup"}}},
 	}}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("same channel on two networks must be allowed: %v", err)
+	}
 
+	cfg.IRC.Networks[1].Name = "Alpha"
 	err := SaveConfig(path, cfg)
 	if err == nil {
-		t.Fatal("expected SaveConfig to reject a config with the same channel on two networks")
+		t.Fatal("expected SaveConfig to reject a duplicate network name")
 	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		t.Fatal("SaveConfig must not write the file when validation fails")

@@ -31,9 +31,6 @@ func ValidateConfig(cfg *Config) error {
 			return fmt.Errorf("irc: network %q: SASL EXTERNAL needs use_ssl and a client certificate", name)
 		}
 	}
-	if err := validateNoCrossNetworkChannelOverlap(cfg.IRC.Networks); err != nil {
-		return err
-	}
 	if err := validateGitHubTracker(cfg.GitHubTracker); err != nil {
 		return err
 	}
@@ -66,29 +63,6 @@ func validateGitHubTracker(cfg GitHubTrackerConfig) error {
 			if !validEvents[et] {
 				return fmt.Errorf("github_tracker: repo %q has invalid event_type %q (must be push, pull_request, release, issues, create, or delete)", owner+"/"+repo, et)
 			}
-		}
-	}
-	return nil
-}
-
-// validateNoCrossNetworkChannelOverlap rejects the same channel name (case-insensitive)
-// appearing in more than one network's Channels list. Per-network state (logs, RSS
-// announce toggles, admin presence) is keyed by network+channel, but a shared channel
-// name across networks is a common config typo (copy-pasting one network's block) worth
-// catching up front rather than producing two networks silently mixing traffic for what
-// was meant to be one channel.
-func validateNoCrossNetworkChannelOverlap(networks []IRCNetworkConfig) error {
-	owner := make(map[string]string) // folded channel name -> owning network name
-	for _, n := range networks {
-		for _, ch := range n.Channels {
-			fold := strings.ToLower(strings.TrimSpace(ch.Name))
-			if fold == "" {
-				continue
-			}
-			if prev, ok := owner[fold]; ok && prev != n.Name {
-				return fmt.Errorf("irc: channel %q is configured on both network %q and %q", ch.Name, prev, n.Name)
-			}
-			owner[fold] = n.Name
 		}
 	}
 	return nil

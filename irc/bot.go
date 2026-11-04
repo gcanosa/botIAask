@@ -2195,9 +2195,8 @@ func NewRateLimiter(window time.Duration) *RateLimiter {
 // Allow checks if a command is allowed under rate limiting rules: at most burst commands per
 // window (config rate_limiting.burst; the older rate_limiting.limit setting is not used). network scopes the key so
 // the same sender+target on two IRC networks don't share one budget — most commonly PMs,
-// where target is the bot's own nickname and can be identical across networks, but a channel
-// name collision is possible too (only forbidden by config.validateNoCrossNetworkChannelOverlap
-// for configured channels, not runtime !join or arbitrary PM targets).
+// where target is the bot's own nickname and can be identical across networks, and the same
+// channel name joined on two networks.
 func (rl *RateLimiter) Allow(network, sender, target string, burst int) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
