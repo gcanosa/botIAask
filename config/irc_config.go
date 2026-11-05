@@ -44,6 +44,46 @@ type IRCNetworkConfig struct {
 	// YouTubePreview lists the channels where pasted YouTube links get a title/views/likes line
 	// ("*" = every channel on this network). Empty = off.
 	YouTubePreview []string `yaml:"youtube_preview,omitempty"`
+	// Guard lists the channels under the flood guard: +l kept at members+joins (re-set every
+	// 30s), plus +m when Moderate. Edited by !guard and the dashboard "Channel flood guard" card.
+	Guard []ChannelGuard `yaml:"guard,omitempty"`
+}
+
+// Flood guard join allowance per 30s: default and maximum.
+const (
+	GuardDefaultJoins = 5
+	GuardMaxJoins     = 50
+)
+
+// ChannelGuard is one guarded channel of a network (IRCNetworkConfig.Guard).
+type ChannelGuard struct {
+	Channel  string `yaml:"channel" json:"channel"`
+	Joins    int    `yaml:"joins" json:"joins"`
+	Moderate bool   `yaml:"moderate,omitempty" json:"moderate"`
+}
+
+// NormalizeGuard validates a guard list: #/& channel names, joins 1-GuardMaxJoins (0 = default),
+// one entry per channel (case-insensitive, the last one wins).
+func NormalizeGuard(in []ChannelGuard) ([]ChannelGuard, error) {
+	out := []ChannelGuard{}
+	for _, g := range in {
+		g.Channel = strings.TrimSpace(g.Channel)
+		if g.Channel == "*" {
+			return nil, fmt.Errorf("invalid channel %q", g.Channel)
+		}
+		if _, err := NormalizeYouTubePreview([]string{g.Channel}); err != nil {
+			return nil, err
+		}
+		if g.Joins == 0 {
+			g.Joins = GuardDefaultJoins
+		}
+		if g.Joins < 1 || g.Joins > GuardMaxJoins {
+			return nil, fmt.Errorf("joins for %s must be 1-%d", g.Channel, GuardMaxJoins)
+		}
+		out = slices.DeleteFunc(out, func(o ChannelGuard) bool { return strings.EqualFold(o.Channel, g.Channel) })
+		out = append(out, g)
+	}
+	return out, nil
 }
 
 // NormalizeYouTubePreview validates a youtube_preview list: "*" or #/& channel names (no spaces,

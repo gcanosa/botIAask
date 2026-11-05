@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"botIAask/config"
 	"botIAask/github"
@@ -320,4 +321,56 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// ircFormatRe matches mIRC color/format control codes in stored announcement text.
+var ircFormatRe = regexp.MustCompile("\x03(\\d{1,2}(,\\d{1,2})?)?|[\x02\x0f\x16\x1d\x1e\x1f]")
+
+// announcePrefixRe matches the "[TAG ref] (owner/repo) " lead of an announcement, which the
+// dashboard already shows as separate fields.
+var announcePrefixRe = regexp.MustCompile(`^\[[^\]]*\]\s*\([^)]*\)\s*`)
+
+// handleGitHubPublic is the no-auth view of the tracker for regular visitors: only repos
+// with no token (public ones) and their recent announcements. Channels, tokens and poll
+// errors are left out on purpose; a private repo never appears here.
+func (s *Server) handleGitHubPublic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	type repoRow struct {
+		Owner       string   `json:"owner"`
+		Repo        string   `json:"repo"`
+		Description string   `json:"description,omitempty"`
+		EventTypes  []string `json:"event_types,omitempty"`
+	}
+	type eventRow struct {
+		Repo       string    `json:"repo"`
+		Kind       string    `json:"kind"`
+		RefID      string    `json:"ref_id"`
+		Message    string    `json:"message"`
+		OccurredAt time.Time `json:"occurred_at"`
+	}
+	repos := []repoRow{}
+	var names []string
+	for _, rc := range s.getConfig().GitHubTracker.Repos {
+		if rc.TokenEncrypted != "" {
+			continue
+		}
+		repos = append(repos, repoRow{rc.Owner, rc.Repo, rc.CachedDescription, rc.EventTypes})
+		names = append(names, rc.FullName())
+	}
+	events := []eventRow{}
+	if s.githubFetcher != nil && s.githubFetcher.DB() != nil {
+		seen, err := s.githubFetcher.DB().RecentEvents(names, 40)
+		if err != nil {
+			log.Printf("github public feed: %v", err)
+		}
+		for _, e := range seen {
+			events = append(events, eventRow{e.Repo, e.Kind, e.RefID, announcePrefixRe.ReplaceAllString(ircFormatRe.ReplaceAllString(e.Message, ""), ""), e.OccurredAt})
+		}
+	}
+	enabled := s.githubFetcher != nil && s.githubFetcher.IsEnabled()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": enabled, "repos": repos, "events": events})
 }

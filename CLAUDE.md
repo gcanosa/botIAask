@@ -55,6 +55,8 @@ All configuration lives in `config/config.yaml` (active) and `config/config.yaml
 
 **YouTube link previews** (`irc/youtube.go`): per network `irc.networks[].youtube_preview: ['#chan' | '*']` (off when empty), toggled by admin `!youtube on|off [#chan|*]` or the dashboard "YouTube link previews" card (`/api/irc/youtube` GET/PUT whole list, `handleIRCYouTube`, `config.NormalizeYouTubePreview`). Scrapes `ytInitialPlayerResponse` from the watch page (no API key; `SOCS=CAI` cookie skips the EU consent page); silent on failure, per-sender limiter key `youtube`, shares `cmdSem`, 2-min per-channel dedupe.
 
+**Flood guard** (`irc/guard_cmd.go`): per network `irc.networks[].guard: [{channel, joins 1-50, moderate}]` (`config.NormalizeGuard`), edited by admin `!guard [#chan] on [joins]|off` (always `moderate: true`, also voices the caller) or the dashboard "Channel flood guard" card (`/api/irc/guard` GET/PUT whole list, `handleIRCGuard`). `syncGuards` reconciles the running loops with config on rehash (`ApplyLiveConfig`) and on 366 for a (re)joined channel: `+m` if moderate, `+l members+joins` re-set every 30s; removing an entry sends `-l`/`-ml`.
+
 **Config reload** at runtime: send `SIGHUP` to the process, call `!rehash` in IRC, or use the `/api/rehash` web endpoint.
 
 ---
@@ -93,6 +95,8 @@ The polling loop calls only `GET /repos/{owner}/{repo}/events` (`github/client.g
   - **Pull requests** — covers PR events
   - **Issues** — covers `IssuesEvent` and the `!gh search` issue-number lookup fallback
   - **Metadata** is mandatory and auto-included; nothing else is required.
+
+`GET /api/github/public` (no auth, `handleGitHubPublic`) is the regular-visitor view of the GitHub panel: only token-less repos (no channels/errors) and their last 40 announced events from `seen_events`, IRC codes and the `[TAG] (repo)` lead stripped. A repo with a token never appears there.
 
 `event_types` per repo now accepts `push`, `pull_request`, `release`, `issues`, `create`, `delete` (empty means all of them).
 

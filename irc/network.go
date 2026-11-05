@@ -50,7 +50,7 @@ type ircNetwork struct {
 	// sessionJoins: runtime-only JOINs on this network (not in config; lost on new
 	// process, rejoined on IRC reconnect in-process).
 	// !guard: casefolded channel -> stop channel of its join-limit loop (guard_cmd.go).
-	guards  map[string]chan struct{}
+	guards  map[string]*guardRun
 	guardMu sync.Mutex
 
 	sessionJoins   []config.IRChannel
@@ -784,6 +784,13 @@ func (b *Bot) buildNetwork(netCfg config.IRCNetworkConfig) *ircNetwork {
 		}
 	})
 
+	// 366 RPL_ENDOFNAMES: joined with a full member list; (re)apply a configured flood guard.
+	n.conn.AddCallback("366", func(e ircmsg.Message) {
+		if len(e.Params) >= 2 {
+			n.syncGuards(e.Params[1])
+		}
+	})
+
 	// 482 ERR_CHANOPRIVSNEEDED: a !topic/!kick/MODE the server refused because the bot isn't opped.
 	n.conn.AddCallback("482", func(e ircmsg.Message) {
 		log.Printf("irc[%s]: refused, not channel operator: %s", n.name, strings.Join(e.Params[1:], " "))
@@ -936,6 +943,7 @@ func (b *Bot) ApplyLiveConfig(newCfg *config.Config) {
 		if oldN.BotMode != newN.BotMode {
 			net.setBotMode(newN.BotMode)
 		}
+		net.syncGuards("")
 		oldAuto := config.IRChannelNamesAutoJoin(oldN.Channels)
 		newAuto := config.IRChannelNamesAutoJoin(newN.Channels)
 		for _, ch := range channelListDifference(oldAuto, newAuto) {

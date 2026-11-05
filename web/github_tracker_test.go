@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"botIAask/config"
 	"botIAask/github"
@@ -221,5 +222,31 @@ func TestGitHubRepoEdit_ExplicitEmptyTokenClears(t *testing.T) {
 	}
 	if cfg.GitHubTracker.Repos[0].TokenEncrypted != "" {
 		t.Fatalf("expected explicit empty token to clear the stored ciphertext, got %q", cfg.GitHubTracker.Repos[0].TokenEncrypted)
+	}
+}
+
+// The public feed lists only token-less repos and their events, with IRC codes stripped.
+func TestGitHubPublicFeedHidesPrivateRepos(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.GitHubTracker.Repos = []config.GitHubTrackerRepoConfig{
+		{Owner: "pub", Repo: "open", Channels: []string{"libera:#secret"}},
+		{Owner: "priv", Repo: "closed", TokenEncrypted: "enc:x"},
+	}
+	s, _, _ := setupGitHubTrackerTest(t, cfg)
+	db := s.githubFetcher.DB()
+	now := time.Now()
+	_ = db.MarkEventSeen("a", "pub/open", "push", "abc1234", "\x0309,01[PUSH]\x03 \x0314(pub/open)\x03 \x0304alice\x03 pushed \x02fix\x02", now)
+	_ = db.MarkEventSeen("b", "priv/closed", "push", "def5678", "hidden commit", now)
+
+	rec := httptest.NewRecorder()
+	s.handleGitHubPublic(rec, httptest.NewRequest(http.MethodGet, "/api/github/public", nil))
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, `"message":"alice pushed fix"`) {
+		t.Fatalf("feed: %d %s", rec.Code, body)
+	}
+	for _, leak := range []string{"priv", "hidden", "#secret"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("leaked %q: %s", leak, body)
+		}
 	}
 }

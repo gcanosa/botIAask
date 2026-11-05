@@ -2347,3 +2347,85 @@ a.mobile-top-bar__title:focus-visible {
 @media (max-width: 640px) {
     .net-actions .btn { flex: 1 1 auto; justify-content: center; }
 }
+
+/* Command Center stat tiles */
+.stat-tile { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; position: relative; overflow: hidden; }
+.stat-tile::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: linear-gradient(90deg, var(--brand-gradient-start), var(--brand-gradient-end)); opacity: 0.7;
+}
+.stat-tile__head { display: flex; align-items: center; gap: 0.6rem; }
+.stat-tile__head .card-title { margin: 0; flex: 1; }
+.stat-tile__icon {
+    width: 32px; height: 32px; flex: none; border-radius: 10px; display: grid; place-items: center;
+    color: var(--primary); background: var(--primary-glow);
+}
+.stat-tile__icon--accent { color: var(--accent); background: var(--accent-glow); }
+.stat-tile__icon svg { width: 18px; height: 18px; }
+.stat-tile__value { font-size: 1.75rem; font-weight: 700; color: var(--text-main); line-height: 1.15; overflow-wrap: anywhere; }
+.stat-tile__value--text { font-size: 1rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.stat-tile__sub { margin: 0; margin-top: auto; font-size: 0.78rem; color: var(--text-muted); }
+.stat-tile__badge {
+    font-size: 0.7rem; padding: 0.15rem 0.55rem; border-radius: 999px; white-space: nowrap;
+    color: var(--text-muted); background: var(--surface-ghost); border: 1px solid var(--glass-border);
+}
+.stat-tile__badge[data-state="up"] { color: var(--success); border-color: currentColor; }
+.stat-tile__badge[data-state="partial"] { color: #f59e0b; border-color: currentColor; }
+.stat-tile__badge[data-state="down"] { color: var(--error); border-color: currentColor; }
+
+.net-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.net-list__row {
+    display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "dot name chans" "dot nick chans";
+    column-gap: 0.6rem; align-items: center; padding: 0.4rem 0.6rem; border-radius: 10px; background: var(--surface-ghost);
+}
+.net-list__dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+.net-list__dot[data-on="1"] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
+.net-list__name { grid-area: name; font-weight: 600; font-size: 0.85rem; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.net-list__nick { grid-area: nick; font-size: 0.72rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.net-list__chans { grid-area: chans; font-size: 0.72rem; color: var(--text-muted); }
+.net-list__empty { display: block; color: var(--text-muted); font-size: 0.8rem; }
+
+/* Feature Control */
+.feature-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.feature-head__note { font-size: 0.72rem; color: var(--text-muted); }
+.feature-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.feature-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid var(--glass-border); }
+.feature-row:first-child { border-top: none; padding-top: 0.2rem; }
+.feature-row__text { display: flex; flex-direction: column; min-width: 0; }
+.feature-row__name { font-weight: 600; font-size: 0.9rem; color: var(--text-main); }
+.feature-row__desc { font-size: 0.75rem; color: var(--text-muted); }
+.switch {
+    flex: none; position: relative; width: 64px; height: 28px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--glass-border); background: var(--surface-ghost); transition: background 0.2s, border-color 0.2s;
+}
+.switch::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--text-muted); transition: transform 0.2s, background 0.2s;
+}
+.switch[aria-checked="true"] { background: var(--primary-glow); border-color: var(--primary); }
+.switch[aria-checked="true"]::after { transform: translateX(36px); background: var(--primary); }
+.switch__state { position: absolute; top: 50%; transform: translateY(-50%); right: 9px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); }
+.switch[aria-checked="true"] .switch__state { right: auto; left: 9px; color: var(--primary); }
+.switch:disabled { cursor: default; opacity: 0.75; }
+.switch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }
+
+/* GitHub public activity feed */
+.gh-feed { list-style: none; margin: 0; padding: 0; max-height: 480px; overflow-y: auto; }
+.gh-feed__row { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.7rem 0; border-top: 1px solid var(--glass-border); }
+.gh-feed__row:first-child { border-top: none; }
+.gh-feed__kind {
+    flex: none; min-width: 4.2rem; text-align: center; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    padding: 0.2rem 0.4rem; border-radius: 6px; color: var(--primary); background: var(--primary-glow);
+}
+.gh-feed__kind[data-kind="release"], .gh-feed__kind[data-kind="pull_request"] { color: var(--accent); background: var(--accent-glow); }
+.gh-feed__kind[data-kind="delete"] { color: var(--error); background: color-mix(in srgb, var(--error) 15%, transparent); }
+.gh-feed__body { min-width: 0; }
+.gh-feed__meta { font-size: 0.75rem; color: var(--text-muted); }
+.gh-feed__meta a { color: var(--text-main); font-weight: 600; text-decoration: none; }
+.gh-feed__meta a:hover { text-decoration: underline; }
+.gh-feed__msg { font-size: 0.85rem; color: var(--text-main); overflow-wrap: anywhere; }
+.gh-feed__empty { color: var(--text-muted); font-size: 0.85rem; }
+@media (max-width: 640px) { .gh-feed__kind { min-width: 3.4rem; } }
+.gh-feed__msg a { color: var(--primary); text-decoration: none; }
+.gh-feed__msg a:hover { text-decoration: underline; }

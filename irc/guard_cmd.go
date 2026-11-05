@@ -2,86 +2,140 @@ package irc
 
 import (
 	"fmt"
+	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"botIAask/config"
 	"botIAask/internal/guard"
 	"botIAask/internal/ircfold"
-)
-
-const (
-	guardDefaultStep = 5  // joins allowed per guardInterval while guarded
-	guardMaxStep     = 50 // larger than this isn't a guard any more
 )
 
 // guardInterval is how often a guarded channel's +l is re-based on its member count.
 // ponytail: fixed 30s, make it an argument if admins ever need a different pace.
 var guardInterval = 30 * time.Second
 
+// guardRun is one running guard loop; its settings are compared with config on every sync.
+type guardRun struct {
+	channel  string
+	step     int
+	moderate bool
+	stop     chan struct{}
+}
+
 // handleGuardCommand: !guard [#chan] on [joins] | off (admin session required, see bot.go).
-// on: +m (only +v and up can talk), voices the caller in the same line (harmless when they're
-// already +v/+h/+o/+q), and keeps +l at members+joins, re-based every guardInterval, so at most
-// that many people get in per interval: the limit follows the channel up and down instead of
-// closing it. off: -ml. Needs ops; the server answers 482 otherwise (logged in network.go).
+// on: saves a moderated guard entry for the channel (irc.networks[].guard, also edited by the
+// dashboard) and voices the caller (harmless when they're already +v/+h/+o/+q); the rehash that
+// follows starts it via syncGuards. off: removes the entry, which sends -ml. Needs ops; the server
+// answers 482 otherwise (logged in network.go).
 func (b *ircNetwork) handleGuardCommand(target, sender string, args []string) {
 	channel, rest, ok := channelArg(target, args)
-	step := guardDefaultStep
+	step := config.GuardDefaultJoins
 	valid := ok && len(rest) >= 1 && len(rest) <= 2
 	if valid && len(rest) == 2 {
 		n, err := strconv.Atoi(rest[1])
-		step, valid = n, err == nil && n >= 1 && n <= guardMaxStep && strings.EqualFold(rest[0], "on")
+		step, valid = n, err == nil && n >= 1 && n <= config.GuardMaxJoins && strings.EqualFold(rest[0], "on")
 	}
 	on := valid && strings.EqualFold(rest[0], "on")
 	if !valid || (!on && !strings.EqualFold(rest[0], "off")) {
-		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sguard [#chan] on [joins 1-%d, default %d] | off", b.pfx(), guardMaxStep, guardDefaultStep))
+		b.sendPrivmsg(target, fmt.Sprintf("Usage: %sguard [#chan] on [joins 1-%d, default %d] | off", b.pfx(), config.GuardMaxJoins, config.GuardDefaultJoins))
 		return
 	}
-	key := ircfold.Nick(channel)
-	b.guardMu.Lock()
-	if stop, running := b.guards[key]; running {
-		close(stop)
-		delete(b.guards, key)
-	}
-	var reply string
-	if on {
-		stop := make(chan struct{})
-		if b.guards == nil {
-			b.guards = map[string]chan struct{}{}
+	err := b.editNetwork("!guard", func(n *config.IRCNetworkConfig) error {
+		n.Guard = slices.DeleteFunc(n.Guard, func(g config.ChannelGuard) bool { return strings.EqualFold(g.Channel, channel) })
+		if on {
+			n.Guard = append(n.Guard, config.ChannelGuard{Channel: channel, Joins: step, Moderate: true})
 		}
-		b.guards[key] = stop
-		b.chanop("MODE", channel, "+mv", sender)
-		last := b.setGuardLimit(channel, step, 0)
-		every := guardInterval
-		guard.Go("guard limit", func() { b.runGuardLimit(channel, key, step, last, every, stop) })
-		reply = fmt.Sprintf("Guard on for %s: moderated, at most %d joins every %s.", channel, step, every)
-	} else {
-		b.chanop("MODE", channel, "-ml")
-		reply = fmt.Sprintf("Guard off for %s.", channel)
+		return nil
+	})
+	if err != nil {
+		b.sendPrivmsg(target, "guard: "+err.Error())
+		return
 	}
-	b.guardMu.Unlock()
-	b.sendPrivmsg(target, reply)
+	if !on {
+		b.sendPrivmsg(target, fmt.Sprintf("Guard off for %s.", channel))
+		return
+	}
+	b.chanop("MODE", channel, "+v", sender)
+	b.sendPrivmsg(target, fmt.Sprintf("Guard on for %s: moderated, at most %d joins every %s.", channel, step, guardInterval))
 }
 
-// runGuardLimit re-bases +l every guardInterval until stopped (by !guard off/on) or the network quits.
-// The check and the MODE line happen under guardMu, so no +l can follow !guard off's -ml.
-func (b *ircNetwork) runGuardLimit(channel, key string, step, last int, every time.Duration, stop chan struct{}) {
+// syncGuards makes the running guard loops match this network's config: removed entries stop
+// and lift their modes (-l, plus -m if they set it), new or changed ones start (+m when Moderate,
+// then +l members+joins). force (a channel, or "") restarts that channel's guard even when
+// unchanged, re-sending its modes: used after the bot (re)joins it (366 RPL_ENDOFNAMES).
+func (b *ircNetwork) syncGuards(force string) {
+	want, err := config.NormalizeGuard(b.netCfg().Guard)
+	if err != nil {
+		log.Printf("irc[%s]: guard config ignored: %v", b.name, err)
+	}
+	find := func(key string) (config.ChannelGuard, bool) {
+		for _, g := range want {
+			if ircfold.Nick(g.Channel) == key {
+				return g, true
+			}
+		}
+		return config.ChannelGuard{}, false
+	}
+	forceKey := ircfold.Nick(force)
+	b.guardMu.Lock()
+	defer b.guardMu.Unlock()
+	for key, run := range b.guards {
+		g, ok := find(key)
+		if ok && g.Joins == run.step && g.Moderate == run.moderate && (force == "" || key != forceKey) {
+			continue
+		}
+		close(run.stop)
+		delete(b.guards, key)
+		switch {
+		case !ok && run.moderate:
+			b.chanop("MODE", run.channel, "-ml")
+		case !ok:
+			b.chanop("MODE", run.channel, "-l")
+		case run.moderate && !g.Moderate:
+			b.chanop("MODE", run.channel, "-m")
+		}
+	}
+	for _, g := range want {
+		key := ircfold.Nick(g.Channel)
+		if b.guards[key] != nil {
+			continue
+		}
+		if g.Moderate {
+			b.chanop("MODE", g.Channel, "+m")
+		}
+		last := b.setGuardLimit(g.Channel, g.Joins, 0)
+		run := &guardRun{channel: g.Channel, step: g.Joins, moderate: g.Moderate, stop: make(chan struct{})}
+		if b.guards == nil {
+			b.guards = map[string]*guardRun{}
+		}
+		b.guards[key] = run
+		every := guardInterval
+		guard.Go("guard limit", func() { b.runGuardLimit(key, run, last, every) })
+	}
+}
+
+// runGuardLimit re-bases +l every interval until its guard is stopped or the network quits.
+// The check and the MODE line happen under guardMu, so no +l can follow a stop's -l.
+func (b *ircNetwork) runGuardLimit(key string, run *guardRun, last int, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
-		case <-stop:
+		case <-run.stop:
 			return
 		case <-b.quit:
 			return
 		case <-t.C:
 		}
 		b.guardMu.Lock()
-		if b.guards[key] != stop {
+		if b.guards[key] != run {
 			b.guardMu.Unlock()
 			return
 		}
-		last = b.setGuardLimit(channel, step, last)
+		last = b.setGuardLimit(run.channel, run.step, last)
 		b.guardMu.Unlock()
 	}
 }

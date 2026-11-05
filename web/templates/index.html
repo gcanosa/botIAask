@@ -160,22 +160,38 @@
                     </div>
                 </div>
 
-                <div class="grid grid-4">
-                    <div class="card">
-                        <h3 class="card-title">Uptime</h3>
-                        <div id="uptime" class="card-value mono">--</div>
+                <div class="grid grid-4 stat-grid">
+                    <div class="card stat-tile">
+                        <div class="stat-tile__head">
+                            <span class="stat-tile__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></span>
+                            <h3 class="card-title">Uptime</h3>
+                        </div>
+                        <div id="uptime" class="stat-tile__value mono">--</div>
+                        <p id="uptime-since" class="stat-tile__sub">&nbsp;</p>
                     </div>
-                    <div class="card">
-                        <h3 class="card-title">IRC Server</h3>
-                        <div id="server" class="card-value mono" style="font-size: 1rem;">--</div>
+                    <div class="card stat-tile">
+                        <div class="stat-tile__head">
+                            <span class="stat-tile__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"></path><circle cx="12" cy="19.5" r="1"></circle><path d="M1.5 9a15 15 0 0 1 21 0"></path></svg></span>
+                            <h3 class="card-title">Networks</h3>
+                            <span id="net-summary" class="stat-tile__badge mono">--</span>
+                        </div>
+                        <ul id="server" class="net-list" aria-label="IRC networks"></ul>
                     </div>
-                    <div class="card">
-                        <h3 class="card-title">AI Requests</h3>
-                        <div id="ai_requests" class="card-value mono">--</div>
+                    <div class="card stat-tile">
+                        <div class="stat-tile__head">
+                            <span class="stat-tile__icon stat-tile__icon--accent" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg></span>
+                            <h3 class="card-title">AI Requests</h3>
+                        </div>
+                        <div id="ai_requests" class="stat-tile__value mono">--</div>
+                        <p id="ai_requests-rate" class="stat-tile__sub">&nbsp;</p>
                     </div>
-                    <div class="card">
-                        <h3 class="card-title">Active Model</h3>
-                        <div id="ai_model" class="card-value mono" style="font-size: 1rem;">--</div>
+                    <div class="card stat-tile">
+                        <div class="stat-tile__head">
+                            <span class="stat-tile__icon stat-tile__icon--accent" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></svg></span>
+                            <h3 class="card-title">Active Model</h3>
+                        </div>
+                        <div id="ai_model" class="stat-tile__value stat-tile__value--text mono">--</div>
+                        <p class="stat-tile__sub">Answers <span class="mono">!ask</span> in IRC</p>
                     </div>
                 </div>
 
@@ -227,20 +243,39 @@
 
                 <div class="grid grid-2">
                     <div class="card">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div class="feature-head">
                             <h3 class="card-title" style="margin: 0;">Feature Control</h3>
+                            <span id="feature-readonly" class="feature-head__note">Read-only · log in to change</span>
                         </div>
-                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-                            <button id="news-toggle" onclick="toggleNews()" class="btn btn-ghost">
-                                <span class="dot" id="news-indicator"></span> News Fetcher
-                            </button>
-                            <button id="stats-toggle" onclick="toggleStats()" class="btn btn-ghost">
-                                <span class="dot" id="stats-indicator"></span> Statistics
-                            </button>
-                            <button id="github-toggle" onclick="toggleGitHub()" class="btn btn-ghost">
-                                <span class="dot" id="github-indicator"></span> GitHub Monitor
-                            </button>
-                        </div>
+                        <ul class="feature-list">
+                            <li class="feature-row">
+                                <div class="feature-row__text">
+                                    <span class="feature-row__name">News Fetcher</span>
+                                    <span class="feature-row__desc">Polls RSS feeds and announces new items</span>
+                                </div>
+                                <button type="button" id="news-toggle" onclick="toggleNews()" class="switch" role="switch" aria-checked="false" aria-label="News Fetcher">
+                                    <span class="switch__state" id="news-indicator">--</span>
+                                </button>
+                            </li>
+                            <li class="feature-row">
+                                <div class="feature-row__text">
+                                    <span class="feature-row__name">Statistics</span>
+                                    <span class="feature-row__desc">Records activity for the chart above</span>
+                                </div>
+                                <button type="button" id="stats-toggle" onclick="toggleStats()" class="switch" role="switch" aria-checked="false" aria-label="Statistics">
+                                    <span class="switch__state" id="stats-indicator">--</span>
+                                </button>
+                            </li>
+                            <li class="feature-row">
+                                <div class="feature-row__text">
+                                    <span class="feature-row__name">GitHub Monitor</span>
+                                    <span class="feature-row__desc">Announces pushes, PRs and releases</span>
+                                </div>
+                                <button type="button" id="github-toggle" onclick="toggleGitHub()" class="switch" role="switch" aria-checked="false" aria-label="GitHub Monitor">
+                                    <span class="switch__state" id="github-indicator">--</span>
+                                </button>
+                            </li>
+                        </ul>
                     </div>
                     <div class="card">
                          <h3 class="card-title">Active Administrators</h3>
@@ -715,6 +750,14 @@
                     <p class="section-subtitle">Tracked repos announce pushes, pull requests, and releases to IRC.</p>
                 </div>
 
+                <div class="card" style="margin-bottom: 2rem;">
+                    <div class="feature-head">
+                        <h3 class="card-title" style="margin: 0;">Recent Activity</h3>
+                        <span id="github-feed-state" class="stat-tile__badge mono">--</span>
+                    </div>
+                    <ul id="github-feed" class="gh-feed" aria-live="polite"></ul>
+                </div>
+
                 <!-- Admin Settings Card -->
                 <div id="github-admin-settings" class="card hidden animate-fade" style="margin-bottom: 2rem; border: 1px solid var(--primary);">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
@@ -784,10 +827,10 @@
                             <thead>
                                 <tr>
                                     <th style="text-align: left; padding: 1rem;">REPO</th>
-                                    <th style="text-align: left; padding: 1rem;">CHANNELS</th>
+                                    <th class="gh-admin-col" style="text-align: left; padding: 1rem;">CHANNELS</th>
                                     <th style="text-align: left; padding: 1rem;">EVENTS</th>
-                                    <th style="text-align: left; padding: 1rem;">STATUS</th>
-                                    <th style="text-align: left; padding: 1rem;">TOKEN</th>
+                                    <th class="gh-admin-col" style="text-align: left; padding: 1rem;">STATUS</th>
+                                    <th class="gh-admin-col" style="text-align: left; padding: 1rem;">TOKEN</th>
                                     <th id="github-admin-header" style="text-align: right; padding: 1rem;" class="hidden">ACTIONS</th>
                                 </tr>
                             </thead>
@@ -1166,6 +1209,35 @@
                     </div>
                     <div id="irc-youtube-list" class="mono" style="display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem;"></div>
                     <p id="irc-youtube-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
+                </div>
+                <div id="irc-guard-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
+                    <h3 class="card-title" style="margin-top: 0;">Channel flood guard</h3>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Keeps <span class="mono">+l</span> at the member count plus the join allowance, re-set every 30s, so at most that many people get in per 30 seconds; the limit follows the channel up and down. Optional <span class="mono">+m</span> lets only voiced users and above talk. The bot needs ops. Applied on save and every time the bot joins. Stored per network under <span class="mono">guard</span> in <span class="mono">config/config.yaml</span>; IRC admins can also use <span class="mono">!guard [#chan] on [joins]|off</span> (always moderated).</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
+                            <select id="irc-guard-network" class="btn btn-ghost" style="min-width: 9rem; margin: 0;" onchange="fetchIRCGuard()" aria-label="Network"></select>
+                        </div>
+                        <div>
+                            <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Other channel</label>
+                            <input type="text" id="irc-guard-channel" class="btn btn-ghost" style="width: 9rem; text-align: left; cursor: text; margin: 0;" placeholder="#channel" autocomplete="off" aria-label="Channel">
+                        </div>
+                        <button type="button" onclick="addIRCGuard()" class="btn btn-primary" style="padding: 0.5rem 1rem;">Guard</button>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table class="mono" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="text-align: left; color: var(--text-muted);">
+                                    <th style="padding: 0.5rem 0.75rem;">Channel</th>
+                                    <th style="padding: 0.5rem 0.75rem;">Guard</th>
+                                    <th style="padding: 0.5rem 0.75rem;" title="Joins allowed per 30 seconds">Joins/30s</th>
+                                    <th style="padding: 0.5rem 0.75rem;" title="Moderate: only voiced users and above can talk">+m</th>
+                                </tr>
+                            </thead>
+                            <tbody id="irc-guard-list"></tbody>
+                        </table>
+                    </div>
+                    <p id="irc-guard-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>
                 </div>
                 <div class="card" data-admin-group="users">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">

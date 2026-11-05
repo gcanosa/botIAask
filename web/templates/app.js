@@ -547,7 +547,9 @@ async function fetchStatus() {
         const res = await fetch('/api/status');
         if (!res.ok) throw new Error('Status fetch failed');
         const data = await res.json();
-        lastIsAdmin = data.is_admin;
+        const adminChanged = lastIsAdmin !== !!data.is_admin;
+        lastIsAdmin = !!data.is_admin;
+        if (adminChanged && document.getElementById('panel-github')?.classList.contains('active')) fetchGitHubRepos();
         lastStaffAdmin = data.staff_admin != null ? !!data.staff_admin : !!data.is_admin;
         updateProgtodoAddButtonVisibility();
         if (data.stats_interval_seconds != null && Number.isFinite(data.stats_interval_seconds) && data.stats_interval_seconds > 0) {
@@ -562,16 +564,7 @@ async function fetchStatus() {
         if (appVersionEl && data.version) {
             appVersionEl.textContent = 'v' + String(data.version);
         }
-        document.getElementById('uptime').textContent = data.uptime;
-        const nets = data.networks || [];
-        const serverEl = document.getElementById('server');
-        if (serverEl) {
-            serverEl.textContent = nets.length
-                ? nets.map((n) => (n.nickname || 'Bot') + ' @ ' + n.name + (n.connected ? '' : ' (offline)')).join(', ')
-                : 'Bot';
-        }
-        document.getElementById('ai_requests').textContent = data.ai_requests || 0;
-        document.getElementById('ai_model').textContent = data.ai_model || 'Unknown';
+        renderStatTiles(data);
         
         // Features
         updateNewsStatus(data.rss_enabled, data.is_admin);
@@ -676,6 +669,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-config-admins-wrap')?.classList.remove('hidden');
         document.getElementById('irc-access-wrap')?.classList.remove('hidden');
         document.getElementById('irc-youtube-wrap')?.classList.remove('hidden');
+        document.getElementById('irc-guard-wrap')?.classList.remove('hidden');
         document.getElementById('admin-fetch-btn')?.classList.remove('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.remove('hidden');
         document.getElementById('news-admin-header')?.classList.remove('hidden');
@@ -703,6 +697,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('irc-config-admins-wrap')?.classList.add('hidden');
         document.getElementById('irc-access-wrap')?.classList.add('hidden');
         document.getElementById('irc-youtube-wrap')?.classList.add('hidden');
+        document.getElementById('irc-guard-wrap')?.classList.add('hidden');
         document.getElementById('admin-fetch-btn')?.classList.add('hidden');
         document.getElementById('admin-rss-settings-btn')?.classList.add('hidden');
         document.getElementById('news-admin-header')?.classList.add('hidden');
@@ -1174,15 +1169,53 @@ function renderLogCalendar() {
     }
 }
 
-function updateNewsStatus(enabled, isAdmin) {
-    const indicator = document.getElementById('news-indicator');
-    if (enabled) {
-        indicator.classList.add('pulse');
-        indicator.style.background = 'var(--primary)';
-    } else {
-        indicator.classList.remove('pulse');
-        indicator.style.background = 'var(--text-muted)';
-    }
+// renderStatTiles fills the Command Center tiles from /api/status.
+function renderStatTiles(data) {
+    document.getElementById('uptime').textContent = data.uptime || '--';
+    const start = data.start_time ? new Date(data.start_time) : null;
+    const startOK = start && !isNaN(start);
+    document.getElementById('uptime-since').textContent = startOK
+        ? 'since ' + start.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+        : '\u00a0';
+
+    const nets = data.networks || [];
+    const up = nets.filter((n) => n.connected).length;
+    const badge = document.getElementById('net-summary');
+    badge.textContent = nets.length ? `${up}/${nets.length} online` : 'none';
+    badge.dataset.state = !nets.length || up === 0 ? 'down' : (up < nets.length ? 'partial' : 'up');
+    document.getElementById('server').innerHTML = nets.length
+        ? nets.map((n) => `<li class="net-list__row">
+                <span class="net-list__dot" data-on="${n.connected ? '1' : '0'}" title="${n.connected ? 'connected' : 'offline'}"></span>
+                <span class="net-list__name">${financeEscapeHtml(n.name)}</span>
+                <span class="net-list__nick mono">${financeEscapeHtml(n.nickname || 'Bot')}</span>
+                <span class="net-list__chans mono" title="channels">${n.connected ? (n.channel_count || 0) + ' ch' : 'offline'}</span>
+            </li>`).join('')
+        : '<li class="net-list__row net-list__empty">No networks configured</li>';
+
+    const reqs = Number(data.ai_requests) || 0;
+    document.getElementById('ai_requests').textContent = reqs.toLocaleString();
+    const hours = startOK ? (Date.now() - start.getTime()) / 3600000 : 0;
+    document.getElementById('ai_requests-rate').textContent = hours >= 1
+        ? `≈ ${(reqs / hours).toFixed(reqs / hours < 10 ? 1 : 0)} per hour since start`
+        : 'since start';
+    document.getElementById('ai_model').textContent = data.ai_model || 'Unknown';
+    const model = document.getElementById('ai_model');
+    model.title = data.ai_model || '';
+}
+
+// setFeatureSwitch reflects a feature's state on its switch; only admins can flip it.
+function setFeatureSwitch(key, enabled) {
+    const btn = document.getElementById(key + '-toggle');
+    const state = document.getElementById(key + '-indicator');
+    if (!btn || !state) return;
+    btn.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    btn.disabled = !lastIsAdmin;
+    state.textContent = enabled ? 'On' : 'Off';
+    document.getElementById('feature-readonly')?.classList.toggle('hidden', !!lastIsAdmin);
+}
+
+function updateNewsStatus(enabled) {
+    setFeatureSwitch('news', enabled);
 }
 
 async function toggleNews() {
@@ -1196,14 +1229,7 @@ async function toggleNews() {
 }
 
 function updateGitHubStatus(enabled) {
-    const indicator = document.getElementById('github-indicator');
-    if (enabled) {
-        indicator.classList.add('pulse');
-        indicator.style.background = 'var(--primary)';
-    } else {
-        indicator.classList.remove('pulse');
-        indicator.style.background = 'var(--text-muted)';
-    }
+    setFeatureSwitch('github', enabled);
 }
 
 async function toggleGitHub() {
@@ -1786,15 +1812,10 @@ function refreshStatsStreamState() {
 
 function updateStatsStatus(enabled, isAdmin) {
     statsEnabledState = enabled;
-    const btn = document.getElementById('stats-toggle');
-    const indicator = document.getElementById('stats-indicator');
+    setFeatureSwitch('stats', enabled);
     if (enabled) {
-        indicator.classList.add('pulse');
-        indicator.style.background = 'var(--primary)';
         refreshStatsStreamState();
     } else {
-        indicator.classList.remove('pulse');
-        indicator.style.background = 'var(--text-muted)';
         stopStatsStream();
     }
     const emptyEl = document.getElementById('activity-chart-empty');
@@ -2772,6 +2793,12 @@ function ircNetworksRender() {
         ytSel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === cur ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
         fetchIRCYouTube();
     }
+    const guardSel = document.getElementById('irc-guard-network');
+    if (guardSel) {
+        const cur = guardSel.value || selectedIRCNetwork;
+        guardSel.innerHTML = lastIRCNetworks.map((n) => `<option value="${ircAutojoinEsc(n.name)}" ${n.name === cur ? 'selected' : ''}>${ircAutojoinEsc(n.name)}</option>`).join('');
+        fetchIRCGuard();
+    }
     ircAuthPopulate();
     const tbody = document.getElementById('irc-networks-list');
     if (!tbody) return;
@@ -3544,6 +3571,93 @@ function addIRCYouTube() {
     }
     input.value = '';
     saveIRCYouTube((window._ircYouTubeEnabled || []).concat([c]));
+}
+
+function ircGuardSetStatus(msg, isErr) {
+    const el = document.getElementById('irc-guard-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? 'var(--error)' : 'var(--text-muted)';
+}
+
+// One row per configured channel plus any extra guarded one; unguarded rows keep their inputs
+// (default joins, +m off) so ticking "Guard" saves what is shown.
+function renderIRCGuard(data) {
+    const tbody = document.getElementById('irc-guard-list');
+    if (!tbody) return;
+    const guards = data.guards || [];
+    const max = data.max_joins || 50;
+    const def = data.default_joins || 5;
+    const find = (c) => guards.find((g) => g.channel.toLowerCase() === c.toLowerCase());
+    const rows = (data.known || []).slice();
+    guards.forEach((g) => { if (!rows.some((r) => r.toLowerCase() === g.channel.toLowerCase())) rows.push(g.channel); });
+    window._ircGuardRows = rows;
+    window._ircGuardDefault = def;
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>';
+        return;
+    }
+    const esc = financeEscapeHtml;
+    tbody.innerHTML = rows.map((c, i) => {
+        const g = find(c);
+        return `<tr style="border-top: 1px solid var(--glass-border);">
+            <td style="padding: 0.5rem 0.75rem;">${esc(c)}</td>
+            <td style="padding: 0.5rem 0.75rem;"><input type="checkbox" id="irc-guard-on-${i}" ${g ? 'checked' : ''} onchange="saveIRCGuard()" aria-label="Guard ${esc(c)}"></td>
+            <td style="padding: 0.5rem 0.75rem;"><input type="number" id="irc-guard-joins-${i}" min="1" max="${max}" value="${g ? g.joins : def}" class="btn btn-ghost" style="width: 4rem; text-align: left; cursor: text; margin: 0;" onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Joins per 30 seconds for ${esc(c)}"></td>
+            <td style="padding: 0.5rem 0.75rem;"><input type="checkbox" id="irc-guard-mod-${i}" ${g && g.moderate ? 'checked' : ''} onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Moderate ${esc(c)}"></td>
+        </tr>`;
+    }).join('');
+}
+
+async function fetchIRCGuard() {
+    const network = document.getElementById('irc-guard-network')?.value || '';
+    if (!network) return;
+    try {
+        const res = await fetch('/api/irc/guard?network=' + encodeURIComponent(network));
+        if (!res.ok) throw new Error(await res.text());
+        renderIRCGuard(await res.json());
+        ircGuardSetStatus('');
+    } catch (e) {
+        ircGuardSetStatus(String(e), true);
+    }
+}
+
+// Collects every ticked row (plus an optional extra channel) and replaces the network's list.
+async function saveIRCGuard(extra) {
+    const network = document.getElementById('irc-guard-network')?.value || '';
+    const guards = [];
+    (window._ircGuardRows || []).forEach((c, i) => {
+        if (!document.getElementById('irc-guard-on-' + i)?.checked) return;
+        guards.push({
+            channel: c,
+            joins: parseInt(document.getElementById('irc-guard-joins-' + i)?.value, 10) || 0,
+            moderate: !!document.getElementById('irc-guard-mod-' + i)?.checked,
+        });
+    });
+    if (extra) guards.push(extra);
+    try {
+        const res = await fetch('/api/irc/guard', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ network, guards }) });
+        if (!res.ok) {
+            const msg = (await res.text()) || 'Save failed';
+            await fetchIRCGuard(); // reload the saved state first: it clears the status line
+            return ircGuardSetStatus(msg, true);
+        }
+        renderIRCGuard(await res.json());
+        ircGuardSetStatus('Saved to config and applied.');
+    } catch (e) {
+        ircGuardSetStatus(String(e), true);
+    }
+}
+
+function addIRCGuard() {
+    const input = document.getElementById('irc-guard-channel');
+    const c = String(input?.value || '').trim();
+    if (!c) {
+        ircGuardSetStatus('Enter a channel.', true);
+        return;
+    }
+    input.value = '';
+    saveIRCGuard({ channel: c, joins: window._ircGuardDefault || 5, moderate: false });
 }
 
 function updateAdminsUI(ircNicks, webNames) {
@@ -4637,18 +4751,81 @@ async function saveGitHubSettings() {
 }
 
 async function fetchGitHubRepos() {
+    // Everyone gets the public feed; admins also get the full repo table (channels, tokens, errors).
+    try {
+        const res = await fetch('/api/github/public');
+        if (res.ok) {
+            const pub = await res.json();
+            renderGitHubFeed(pub);
+            if (!lastIsAdmin) renderGitHubRepoList(pub.repos || [], true);
+        }
+    } catch (e) { console.error("Failed to fetch GitHub activity", e); }
+    if (!lastIsAdmin) return;
     try {
         const res = await fetch('/api/github/repos');
+        if (!res.ok) return;
         const data = await res.json();
         renderGitHubRepoList(data.repos || []);
     } catch (e) { console.error("Failed to fetch GitHub repos", e); }
 }
 
-function renderGitHubRepoList(repos) {
+const githubKindLabels = { push: 'Push', pull_request: 'PR', release: 'Release', issues: 'Issue', create: 'Create', delete: 'Delete' };
+
+function githubTimeAgo(iso) {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return '';
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
+}
+
+function renderGitHubFeed(pub) {
+    const list = document.getElementById('github-feed');
+    const state = document.getElementById('github-feed-state');
+    if (!list) return;
+    if (state) {
+        state.textContent = pub.enabled ? 'monitoring' : 'paused';
+        state.dataset.state = pub.enabled ? 'up' : 'down';
+    }
+    const events = pub.events || [];
+    if (!events.length) {
+        list.innerHTML = '<li class="gh-feed__empty">No announced activity yet for public repos.</li>';
+        return;
+    }
+    list.innerHTML = events.map((e) => {
+        const kind = githubKindLabels[e.kind] || e.kind;
+        const repoUrl = 'https://github.com/' + encodeURI(e.repo);
+        return `<li class="gh-feed__row">
+            <span class="gh-feed__kind" data-kind="${githubEsc(e.kind)}">${githubEsc(kind)}</span>
+            <div class="gh-feed__body">
+                <div class="gh-feed__meta"><a href="${safeHref(repoUrl)}" target="_blank" rel="noopener noreferrer">${githubEsc(e.repo)}</a>${e.ref_id ? ` <span class="mono">${githubEsc(e.ref_id)}</span>` : ''} · <span title="${githubEsc(new Date(e.occurred_at).toLocaleString())}">${githubTimeAgo(e.occurred_at)}</span></div>
+                <div class="gh-feed__msg">${githubEsc(e.message).replace(/https?:\/\/[^\s<"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)}</div>
+            </div>
+        </li>`;
+    }).join('');
+}
+
+function renderGitHubRepoList(repos, publicView) {
     const tbody = document.getElementById('github-repo-list');
     if (!tbody) return;
+    document.querySelectorAll('.gh-admin-col').forEach((el) => el.classList.toggle('hidden', !!publicView));
     if (!repos.length) {
         tbody.innerHTML = '<tr><td colspan="6" style="padding: 1rem; color: var(--text-muted);">No repos tracked yet.</td></tr>';
+        return;
+    }
+    if (publicView) {
+        tbody.innerHTML = repos.map((r) => {
+            const fullName = `${r.owner}/${r.repo}`;
+            const events = (r.event_types && r.event_types.length) ? r.event_types.join(', ') : 'all';
+            return `<tr>
+                <td style="padding: 1rem;">
+                    <a href="${safeHref('https://github.com/' + encodeURI(fullName))}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: inherit;">${githubEsc(fullName)}</a>
+                    ${r.description ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${githubEsc(r.description)}</div>` : ''}
+                </td>
+                <td style="padding: 1rem; font-size: 0.8rem;">${githubEsc(events)}</td>
+            </tr>`;
+        }).join('');
         return;
     }
     const isAdmin = !document.getElementById('admin-github-settings-btn')?.classList.contains('hidden');

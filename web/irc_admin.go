@@ -898,3 +898,64 @@ func (s *Server) handleIRCYouTube(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{"network": netCfg.Name, "channels": enabled, "known": known})
 }
+
+// handleIRCGuard reads (GET ?network=) or replaces (PUT {network, guards}) a network's flood
+// guard list; the rehash starts/stops/changes the live guards. "known" is the configured
+// channel list, offered as rows.
+func (s *Server) handleIRCGuard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	switch r.Method {
+	case http.MethodGet:
+	case http.MethodPut:
+		var req struct {
+			Network string                `json:"network"`
+			Guards  []config.ChannelGuard `json:"guards"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		list, err := config.NormalizeGuard(req.Guards)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		network = strings.TrimSpace(req.Network)
+		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
+			i := config.IRCNetworkIndex(cfg.IRC.Networks, network)
+			if i < 0 {
+				return http.StatusNotFound, errors.New("Unknown network")
+			}
+			cfg.IRC.Networks[i].Guard = list
+			return 0, nil
+		}) {
+			return
+		}
+		if err := s.runFullRehashFromWeb("web (flood guard)"); err != nil {
+			http.Error(w, "Saved but failed to apply: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	netCfg, ok := config.FindIRCNetworkByName(s.getConfig().IRC.Networks, network)
+	if !ok {
+		http.Error(w, "Unknown network", http.StatusNotFound)
+		return
+	}
+	known := []string{}
+	for _, c := range netCfg.Channels {
+		known = append(known, c.Name)
+	}
+	guards := netCfg.Guard
+	if guards == nil {
+		guards = []config.ChannelGuard{}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"network": netCfg.Name, "guards": guards, "known": known,
+		"default_joins": config.GuardDefaultJoins, "max_joins": config.GuardMaxJoins})
+}

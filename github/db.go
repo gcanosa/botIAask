@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"botIAask/db"
@@ -161,4 +162,33 @@ func (d *Database) CleanupOlderThan(days int) error {
 // Close closes the underlying database connection.
 func (d *Database) Close() error {
 	return d.db.Close()
+}
+
+// RecentEvents returns up to limit announced events (newest first) for the given repos
+// (owner/repo, matched case-insensitively). An empty repo list returns nothing.
+func (d *Database) RecentEvents(repos []string, limit int) ([]SeenEvent, error) {
+	if len(repos) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(repos)+1)
+	for _, r := range repos {
+		args = append(args, strings.ToLower(r))
+	}
+	args = append(args, limit)
+	q := `SELECT event_key, repo, kind, ref_id, message, occurred_at FROM seen_events WHERE lower(repo) IN (?` +
+		strings.Repeat(",?", len(repos)-1) + `) ORDER BY occurred_at DESC LIMIT ?`
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SeenEvent
+	for rows.Next() {
+		var e SeenEvent
+		if err := rows.Scan(&e.EventKey, &e.Repo, &e.Kind, &e.RefID, &e.Message, &e.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

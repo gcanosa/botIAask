@@ -50,6 +50,12 @@ irc:
           # Optional: post title/length/views/likes for YouTube links pasted in these channels
           # ("*" = all channels on this network). Off when empty. IRC: "!youtube on|off [#chan|*]".
           # youtube_preview: ['#mychannel']
+          # Optional flood guard (bot needs @): +l kept at members+joins, re-set every 30s;
+          # moderate: true also sets +m. IRC: "!guard [#chan] on [joins]|off"; dashboard IRC tab.
+          # guard:
+          #   - channel: '#mychannel'
+          #     joins: 5
+          #     moderate: false
         # Second network example (delete or uncomment/edit as needed):
         # - name: OtherNet
         #   enabled: false
