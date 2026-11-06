@@ -53,6 +53,10 @@ type IRCNetworkConfig struct {
 const (
 	GuardDefaultJoins = 5
 	GuardMaxJoins     = 50
+	// Re-check interval in seconds (ChannelGuard.Interval, 0 = GuardDefaultInterval).
+	GuardDefaultInterval = 30
+	GuardMinInterval     = 5
+	GuardMaxInterval     = 600
 )
 
 // ChannelGuard is one guarded channel of a network (IRCNetworkConfig.Guard).
@@ -60,6 +64,7 @@ type ChannelGuard struct {
 	Channel  string `yaml:"channel" json:"channel"`
 	Joins    int    `yaml:"joins" json:"joins"`
 	Moderate bool   `yaml:"moderate,omitempty" json:"moderate"`
+	Interval int    `yaml:"interval,omitempty" json:"interval"` // seconds between +l re-checks, 0 = default
 }
 
 // NormalizeGuard validates a guard list: #/& channel names, joins 1-GuardMaxJoins (0 = default),
@@ -79,6 +84,12 @@ func NormalizeGuard(in []ChannelGuard) ([]ChannelGuard, error) {
 		}
 		if g.Joins < 1 || g.Joins > GuardMaxJoins {
 			return nil, fmt.Errorf("joins for %s must be 1-%d", g.Channel, GuardMaxJoins)
+		}
+		if g.Interval != 0 && (g.Interval < GuardMinInterval || g.Interval > GuardMaxInterval) {
+			return nil, fmt.Errorf("interval for %s must be %d-%d seconds", g.Channel, GuardMinInterval, GuardMaxInterval)
+		}
+		if g.Interval == GuardDefaultInterval {
+			g.Interval = 0
 		}
 		out = slices.DeleteFunc(out, func(o ChannelGuard) bool { return strings.EqualFold(o.Channel, g.Channel) })
 		out = append(out, g)

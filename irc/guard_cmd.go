@@ -22,6 +22,7 @@ type guardRun struct {
 	channel  string
 	step     int
 	moderate bool
+	interval int // seconds, 0 = guardInterval
 	stop     chan struct{}
 }
 
@@ -44,9 +45,16 @@ func (b *ircNetwork) handleGuardCommand(target, sender string, args []string) {
 		return
 	}
 	err := b.editNetwork("!guard", func(n *config.IRCNetworkConfig) error {
-		n.Guard = slices.DeleteFunc(n.Guard, func(g config.ChannelGuard) bool { return strings.EqualFold(g.Channel, channel) })
+		interval := 0 // keep a dashboard-set interval
+		n.Guard = slices.DeleteFunc(n.Guard, func(g config.ChannelGuard) bool {
+			if strings.EqualFold(g.Channel, channel) {
+				interval = g.Interval
+				return true
+			}
+			return false
+		})
 		if on {
-			n.Guard = append(n.Guard, config.ChannelGuard{Channel: channel, Joins: step, Moderate: true})
+			n.Guard = append(n.Guard, config.ChannelGuard{Channel: channel, Joins: step, Moderate: true, Interval: interval})
 		}
 		return nil
 	})
@@ -59,7 +67,13 @@ func (b *ircNetwork) handleGuardCommand(target, sender string, args []string) {
 		return
 	}
 	b.chanop("MODE", channel, "+v", sender)
-	b.sendPrivmsg(target, fmt.Sprintf("Guard on for %s: moderated, at most %d joins every %s.", channel, step, guardInterval))
+	every := guardInterval
+	for _, g := range b.netCfg().Guard {
+		if strings.EqualFold(g.Channel, channel) && g.Interval > 0 {
+			every = time.Duration(g.Interval) * time.Second
+		}
+	}
+	b.sendPrivmsg(target, fmt.Sprintf("Guard on for %s: moderated, at most %d joins every %s.", channel, step, every))
 }
 
 // syncGuards makes the running guard loops match this network's config: removed entries stop
@@ -84,7 +98,7 @@ func (b *ircNetwork) syncGuards(force string) {
 	defer b.guardMu.Unlock()
 	for key, run := range b.guards {
 		g, ok := find(key)
-		if ok && g.Joins == run.step && g.Moderate == run.moderate && (force == "" || key != forceKey) {
+		if ok && g.Joins == run.step && g.Moderate == run.moderate && g.Interval == run.interval && (force == "" || key != forceKey) {
 			continue
 		}
 		close(run.stop)
@@ -107,12 +121,15 @@ func (b *ircNetwork) syncGuards(force string) {
 			b.chanop("MODE", g.Channel, "+m")
 		}
 		last := b.setGuardLimit(g.Channel, g.Joins, 0)
-		run := &guardRun{channel: g.Channel, step: g.Joins, moderate: g.Moderate, stop: make(chan struct{})}
+		run := &guardRun{channel: g.Channel, step: g.Joins, moderate: g.Moderate, interval: g.Interval, stop: make(chan struct{})}
 		if b.guards == nil {
 			b.guards = map[string]*guardRun{}
 		}
 		b.guards[key] = run
 		every := guardInterval
+		if g.Interval > 0 {
+			every = time.Duration(g.Interval) * time.Second
+		}
 		guard.Go("guard limit", func() { b.runGuardLimit(key, run, last, every) })
 	}
 }

@@ -1212,7 +1212,7 @@
                 </div>
                 <div id="irc-guard-wrap" class="card hidden" data-admin-group="irc" style="margin-bottom: 1.5rem;">
                     <h3 class="card-title" style="margin-top: 0;">Channel flood guard</h3>
-                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Keeps <span class="mono">+l</span> at the member count plus the join allowance, re-set every 30s, so at most that many people get in per 30 seconds; the limit follows the channel up and down. Optional <span class="mono">+m</span> lets only voiced users and above talk. The bot needs ops. Applied on save and every time the bot joins. Stored per network under <span class="mono">guard</span> in <span class="mono">config/config.yaml</span>; IRC admins can also use <span class="mono">!guard [#chan] on [joins]|off</span> (always moderated).</p>
+                    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Keeps <span class="mono">+l</span> at the member count plus the join allowance, re-set every interval (seconds, default 30), so at most that many people get in per interval; the limit follows the channel up and down. Optional <span class="mono">+m</span> lets only voiced users and above talk. The bot needs ops. Applied on save and every time the bot joins. Stored per network under <span class="mono">guard</span> in <span class="mono">config/config.yaml</span>; IRC admins can also use <span class="mono">!guard [#chan] on [joins]|off</span> (always moderated).</p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
@@ -1230,7 +1230,8 @@
                                 <tr style="text-align: left; color: var(--text-muted);">
                                     <th style="padding: 0.5rem 0.75rem;">Channel</th>
                                     <th style="padding: 0.5rem 0.75rem;">Guard</th>
-                                    <th style="padding: 0.5rem 0.75rem;" title="Joins allowed per 30 seconds">Joins/30s</th>
+                                    <th style="padding: 0.5rem 0.75rem;" title="Joins allowed per interval">Joins</th>
+                                    <th style="padding: 0.5rem 0.75rem;" title="Seconds between +l re-checks (5-600, default 30)">Every (s)</th>
                                     <th style="padding: 0.5rem 0.75rem;" title="Moderate: only voiced users and above can talk">+m</th>
                                 </tr>
                             </thead>
