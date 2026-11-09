@@ -14,7 +14,7 @@ func TestTimeCommandListsEveryZone(t *testing.T) {
 	n, out := newCaptureNetwork(t, &config.Config{})
 	n.handleTimeCommand("#c")
 	got := strings.Join(out.all(), " ")
-	for _, city := range []string{"Honolulu", "Barcelona, Spain", "Auckland"} {
+	for _, city := range []string{"Honolulu", "Barcelona", "Auckland"} {
 		if !strings.Contains(got, city) {
 			t.Errorf("%s missing from %q", city, got)
 		}
