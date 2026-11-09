@@ -27,9 +27,9 @@ var worldTimeCities = []struct {
 	{"New York", "America/New_York"},
 	{"Mexico City", "America/Mexico_City"},
 	{"São Paulo", "America/Sao_Paulo"},
-	{"Buenos Aires, Argentina", "America/Argentina/Buenos_Aires"},
+	{"Buenos Aires", "America/Argentina/Buenos_Aires"},
 	{"London", "Europe/London"},
-	{"Barcelona, Spain", "Europe/Madrid"},
+	{"Barcelona", "Europe/Madrid"},
 	{"Dubai", "Asia/Dubai"},
 	{"Mumbai", "Asia/Kolkata"},
 	{"Singapore", "Asia/Singapore"},
@@ -68,16 +68,25 @@ var worldTimeZones = sync.OnceValue(func() []struct {
 // handleTimeCommand shows current local times for major world cities, one per IANA zone.
 func (b *ircNetwork) handleTimeCommand(target string) {
 	now := time.Now()
-	var parts []string
+	// Wrap only between cities, so a city is never split across two lines.
+	const tag = "\x0303,01[TIME]\x03"
+	var lines []string
+	cur := tag
 	for _, c := range worldTimeZones() {
-		parts = append(parts, fmt.Sprintf("%s %s%s%s", ircBoldLabel(c.label), ircYellow, now.In(c.loc).Format("Mon 2 15:04:05 MST 2006"), ircEnd))
-	}
-	msg := "\x0303,01[TIME]\x03 " + strings.Join(parts, " · ")
-	for _, chunk := range splitUTF8ByByteBudget(msg, ircTextBudget) {
-		if chunk == "" {
-			continue
+		entry := fmt.Sprintf("%s %s%s%s", ircBoldLabel(c.label), ircYellow, now.In(c.loc).Format("Mon 2 15:04 MST"), ircEnd)
+		switch {
+		case cur == tag: // first city sits right after the tag
+			cur += " " + entry
+		case len(cur)+len(" · ")+len(entry) > ircTextBudget:
+			lines = append(lines, cur)
+			cur = entry
+		default:
+			cur += " · " + entry
 		}
-		b.sendPrivmsg(target, b.sanitize(chunk))
+	}
+	lines = append(lines, cur)
+	for _, line := range lines {
+		b.sendPrivmsg(target, b.sanitize(line))
 	}
 }
 
