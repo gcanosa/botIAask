@@ -220,6 +220,7 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/rss/settings", s.handleRSSSettings)
 	mux.HandleFunc("/api/github/toggle", s.handleGitHubToggle)
 	mux.HandleFunc("/api/github/public", s.handleGitHubPublic)
+	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
 	mux.HandleFunc("/api/github/settings", s.handleGitHubTrackerSettings)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubTrackerRepos)
 	mux.HandleFunc("/api/github/repos/edit", s.handleGitHubTrackerRepoEdit)

@@ -137,11 +137,14 @@ rss:
 github_tracker:
     enabled: false
     interval_minutes: 10
+    # webhook_secret: set from the dashboard (Tracker Configuration); encrypted on next load.
+    # Needed for any repo with webhook: true (GitHub POSTs to <dashboard>/api/github/webhook).
     repos:
         # - owner: anthropics
         #   repo: claude-code
         #   channels: ['libera:#dev']       # same "network:#channel" convention as rss.channels
         #   event_types: []                 # subset of push/pull_request/release; empty = all
+        #   webhook: false                  # true = GitHub pushes events (instant, in order) instead of polling
         #   # token_encrypted is set by the web dashboard (AES-256-GCM, key auto-generated
         #   # at data/github_secret.key on first run) — never hand-edit a plaintext token here.
 stats:

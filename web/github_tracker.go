@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -13,6 +14,25 @@ import (
 	"botIAask/config"
 	"botIAask/github"
 )
+
+var errNoWebhookSecret = errors.New("set a webhook secret in Tracker Configuration first")
+
+// handleGitHubWebhook receives GitHub webhook deliveries. No session or CSRF: the HMAC
+// signature over the body is the authentication (checked in github.Fetcher.HandleWebhook).
+// Bodies are capped at 1 MiB by secure(); a larger delivery is refused with 413.
+func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || s.githubFetcher == nil {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.WriteHeader(s.githubFetcher.HandleWebhook(
+		r.Header.Get("X-GitHub-Event"), r.Header.Get("X-GitHub-Delivery"), r.Header.Get("X-Hub-Signature-256"), body))
+}
 
 // githubNameRe matches a bare GitHub owner or repo name.
 var githubNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -52,6 +72,7 @@ func (s *Server) handleGitHubTrackerSettings(w http.ResponseWriter, r *http.Requ
 		response := map[string]interface{}{
 			"enabled":          s.getConfig().GitHubTracker.Enabled,
 			"interval_minutes": s.getConfig().GitHubTracker.IntervalMinutes,
+			"webhook_secret":   s.getConfig().GitHubTracker.WebhookSecret, // admin-only; needed to paste into GitHub
 		}
 		if s.githubFetcher != nil {
 			response["repo_status"] = s.githubFetcher.RepoStatuses()
@@ -65,8 +86,9 @@ func (s *Server) handleGitHubTrackerSettings(w http.ResponseWriter, r *http.Requ
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			Enabled         bool `json:"enabled"`
-			IntervalMinutes int  `json:"interval_minutes"`
+			Enabled         bool    `json:"enabled"`
+			IntervalMinutes int     `json:"interval_minutes"`
+			WebhookSecret   *string `json:"webhook_secret"` // nil = keep
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
@@ -83,6 +105,9 @@ func (s *Server) handleGitHubTrackerSettings(w http.ResponseWriter, r *http.Requ
 			oldEnabled, oldInterval = cfg.GitHubTracker.Enabled, cfg.GitHubTracker.IntervalMinutes
 			cfg.GitHubTracker.Enabled = req.Enabled
 			cfg.GitHubTracker.IntervalMinutes = req.IntervalMinutes
+			if req.WebhookSecret != nil {
+				cfg.GitHubTracker.WebhookSecret = strings.TrimSpace(*req.WebhookSecret)
+			}
 			return 0, nil
 		}) {
 			return
@@ -111,6 +136,7 @@ type githubRepoRow struct {
 	Channels          []string `json:"channels"`
 	EventTypes        []string `json:"event_types,omitempty"`
 	HasToken          bool     `json:"has_token"`
+	Webhook           bool     `json:"webhook"`
 	CachedDescription string   `json:"cached_description,omitempty"`
 	OK                bool     `json:"ok"`
 	Error             string   `json:"error,omitempty"`
@@ -123,6 +149,7 @@ func githubRepoRowFrom(r config.GitHubTrackerRepoConfig, status map[string]githu
 		Channels:          r.Channels,
 		EventTypes:        r.EventTypes,
 		HasToken:          r.TokenEncrypted != "",
+		Webhook:           r.Webhook,
 		CachedDescription: r.CachedDescription,
 	}
 	if st, ok := status[strings.ToLower(r.FullName())]; ok {
@@ -163,6 +190,7 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 			Channels   []string `json:"channels"`
 			EventTypes []string `json:"event_types"`
 			Token      string   `json:"token"`
+			Webhook    bool     `json:"webhook"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
@@ -192,12 +220,15 @@ func (s *Server) handleGitHubTrackerRepos(w http.ResponseWriter, r *http.Request
 
 		entry := config.GitHubTrackerRepoConfig{
 			Owner: owner, Repo: repo, Channels: req.Channels, EventTypes: req.EventTypes,
-			TokenEncrypted: tokenEncrypted,
+			TokenEncrypted: tokenEncrypted, Webhook: req.Webhook,
 		}
 
 		if !s.mutateConfig(w, func(cfg *config.Config) (int, error) {
 			if _, _, exists := config.FindGitHubTrackerRepo(cfg.GitHubTracker.Repos, owner, repo); exists {
 				return http.StatusConflict, errors.New("Repo already tracked")
+			}
+			if req.Webhook && cfg.GitHubTracker.WebhookSecret == "" {
+				return http.StatusBadRequest, errNoWebhookSecret
 			}
 			newRepos := append(slices.Clone(cfg.GitHubTracker.Repos), entry)
 			if err := config.ValidateConfig(&config.Config{IRC: cfg.IRC, GitHubTracker: config.GitHubTrackerConfig{
@@ -270,6 +301,7 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 		Channels   *[]string `json:"channels"`
 		EventTypes *[]string `json:"event_types"`
 		Token      *string   `json:"token"`
+		Webhook    *bool     `json:"webhook"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -293,6 +325,12 @@ func (s *Server) handleGitHubTrackerRepoEdit(w http.ResponseWriter, r *http.Requ
 		}
 		if req.EventTypes != nil {
 			repoCfg.EventTypes = *req.EventTypes
+		}
+		if req.Webhook != nil {
+			if *req.Webhook && cfg.GitHubTracker.WebhookSecret == "" {
+				return http.StatusBadRequest, errNoWebhookSecret
+			}
+			repoCfg.Webhook = *req.Webhook
 		}
 		// req.Token nil means "leave the stored token as-is" (the field was omitted); a
 		// non-nil empty string is an explicit clear (repo becomes public/unauthenticated);
@@ -354,7 +392,7 @@ func (s *Server) handleGitHubPublic(w http.ResponseWriter, r *http.Request) {
 	repos := []repoRow{}
 	var names []string
 	for _, rc := range s.getConfig().GitHubTracker.Repos {
-		if rc.TokenEncrypted != "" {
+		if rc.TokenEncrypted != "" || rc.Webhook { // a webhook repo needs no token, so it may be private
 			continue
 		}
 		repos = append(repos, repoRow{rc.Owner, rc.Repo, rc.CachedDescription, rc.EventTypes})

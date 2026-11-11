@@ -3,6 +3,7 @@ package github
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -58,6 +59,7 @@ type pushPayload struct {
 	Ref     string `json:"ref"`
 	Size    int    `json:"size"`
 	Head    string `json:"head"`
+	After   string `json:"after"` // webhook name for Head
 	Before  string `json:"before"`
 	Commits []struct {
 		SHA     string `json:"sha"`
@@ -67,7 +69,13 @@ type pushPayload struct {
 
 func extractPush(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	var p pushPayload
-	if err := json.Unmarshal(ev.Payload, &p); err != nil || p.Head == "" {
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return Announcement{}, false
+	}
+	if p.Head == "" { // webhook delivery: "after" and a real commit list instead of head/size
+		p.Head, p.Size = p.After, len(p.Commits)
+	}
+	if p.Head == "" {
 		return Announcement{}, false
 	}
 	branch := strings.TrimPrefix(p.Ref, "refs/heads/")
@@ -303,27 +311,33 @@ func extractDelete(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 func CollapseForBroadcast(anns []Announcement) []Announcement {
 	type group struct {
 		latest Announcement
+		at     int // index of latest in anns, so lines come out in the order of what they show
 		count  int
 	}
-	var order []string
 	groups := make(map[string]*group, 3)
-	for _, ann := range anns {
+	for i, ann := range anns {
 		g, ok := groups[ann.Kind]
 		if !ok {
 			g = &group{}
 			groups[ann.Kind] = g
-			order = append(order, ann.Kind)
 		}
-		g.latest = ann // oldest-to-newest input means the last write is the latest
+		g.latest, g.at = ann, i // oldest-to-newest input means the last write is the latest
 		g.count++
 	}
 
-	out := make([]Announcement, 0, len(order))
-	for _, kind := range order {
-		g := groups[kind]
+	// Order by the shown (latest) event, not by when the kind first appeared: otherwise an old
+	// release prints after a newer push just because a push was seen earlier in the window.
+	sorted := make([]*group, 0, len(groups))
+	for _, g := range groups {
+		sorted = append(sorted, g)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].at < sorted[j].at })
+
+	out := make([]Announcement, 0, len(sorted))
+	for _, g := range sorted {
 		ann := g.latest
 		if g.count > 1 {
-			ann.Message += fmt.Sprintf(" (+%d more %s)", g.count-1, kindLabel(kind))
+			ann.Message += fmt.Sprintf(" (+%d more %s)", g.count-1, kindLabel(ann.Kind))
 		}
 		out = append(out, ann)
 	}

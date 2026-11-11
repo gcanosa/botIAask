@@ -250,3 +250,40 @@ func TestGitHubPublicFeedHidesPrivateRepos(t *testing.T) {
 		}
 	}
 }
+
+func TestGitHubPublicFeedHidesWebhookRepos(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.GitHubTracker.Repos = []config.GitHubTrackerRepoConfig{
+		{Owner: "pub", Repo: "open"},
+		{Owner: "hook", Repo: "maybeprivate", Webhook: true}, // no token, but may be private
+	}
+	s, _, _ := setupGitHubTrackerTest(t, cfg)
+	now := time.Now()
+	_ = s.githubFetcher.DB().MarkEventSeen("b", "hook/maybeprivate", "push", "def5678", "hidden commit", now)
+
+	rec := httptest.NewRecorder()
+	s.handleGitHubPublic(rec, httptest.NewRequest(http.MethodGet, "/api/github/public", nil))
+	if body := rec.Body.String(); strings.Contains(body, "maybeprivate") || strings.Contains(body, "hidden") {
+		t.Fatalf("webhook repo leaked into public feed: %s", body)
+	}
+}
+
+func TestGitHubRepos_WebhookNeedsSecret(t *testing.T) {
+	cfg := &config.Config{IRC: config.IRCConfig{Networks: []config.IRCNetworkConfig{{Name: "libera", Server: "irc.libera.chat", Port: 6697, Nickname: "bot"}}}}
+	s, cookie, csrfToken := setupGitHubTrackerTest(t, cfg)
+
+	body := `{"owner":"o","repo":"r","channels":["libera:#dev"],"webhook":true}`
+	if rec := doGitHubReposRequest(t, s, cookie, csrfToken, http.MethodPost, body); rec.Code != http.StatusBadRequest {
+		t.Fatalf("add without secret: %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	cfg.GitHubTracker.WebhookSecret = "s3cret"
+	if rec := doGitHubReposRequest(t, s, cookie, csrfToken, http.MethodPost, body); rec.Code != http.StatusOK {
+		t.Fatalf("add with secret: %d %s", rec.Code, rec.Body.String())
+	}
+	if !cfg.GitHubTracker.Repos[0].Webhook {
+		t.Fatal("webhook flag not stored")
+	}
+	if rec := doGitHubRepoEdit(t, s, cookie, csrfToken, `{"owner":"o","repo":"r","webhook":false}`); rec.Code != http.StatusOK || cfg.GitHubTracker.Repos[0].Webhook {
+		t.Fatalf("edit back to polling: %d %s", rec.Code, rec.Body.String())
+	}
+}

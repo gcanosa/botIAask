@@ -776,9 +776,55 @@
                             <input type="number" id="github-interval" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
                         </div>
                     </div>
+                    <div style="margin-bottom: 1.5rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7; margin: 0;">Webhook secret</label>
+                            <button type="button" onclick="toggleGitHubWebhookHelp()" class="btn btn-ghost" title="How to set up GitHub webhooks" aria-label="How to set up GitHub webhooks" style="padding: 0; border-radius: 50%; min-width: 1.4rem; height: 1.4rem; font-size: 0.7rem; line-height: 1;">?</button>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem;">
+                            <input type="text" id="github-webhook-secret" autocomplete="off" placeholder="empty = webhooks off" class="btn btn-ghost mono" style="flex: 1; text-align: left; cursor: text; background: rgba(0,0,0,0.2);">
+                            <button type="button" onclick="generateGitHubWebhookSecret()" class="btn btn-ghost">Generate</button>
+                        </div>
+                        <div style="font-size: 0.65rem; opacity: 0.6; margin-top: 0.25rem;">Shared by every webhook repo (the same value goes into each GitHub webhook). Empty = webhooks off. Click <span class="mono">?</span> for the setup steps.</div>
+                    </div>
                     <div style="display: flex; gap: 1rem; align-items: center;">
                         <button onclick="saveGitHubSettings()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Apply Changes</button>
                         <div id="github-settings-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Webhook setup help (opened by the ? buttons) -->
+                <div id="github-webhook-help" class="card hidden animate-fade" style="margin-bottom: 2rem; border: 1px solid var(--primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h3 class="card-title" style="margin: 0; color: var(--primary);">Set up GitHub webhooks</h3>
+                        <button type="button" onclick="toggleGitHubWebhookHelp()" class="btn btn-ghost" style="padding: 0.25rem;" aria-label="Close help">✕</button>
+                    </div>
+                    <div style="font-size: 0.8rem; line-height: 1.55;">
+                        <p style="margin: 0 0 0.75rem;">By default the bot <b>polls</b> GitHub every few minutes, and GitHub's events feed can lag (sometimes by hours) and deliver events late. With a <b>webhook</b> GitHub sends each push, pull request, release, etc. to the bot the moment it happens, so announcements are near-instant and in order.</p>
+                        <ol style="margin: 0 0 0.75rem; padding-left: 1.25rem; display: grid; gap: 0.5rem;">
+                            <li><b>Create the secret.</b> Open <i>Settings</i> (Tracker Configuration) above, make sure <i>Enabled</i> is ticked, click <i>Generate</i> next to "Webhook secret" and press <i>Apply Changes</i>. One secret serves all repos.</li>
+                            <li><b>Add the webhook on GitHub.</b> Open the repo → <i>Settings</i> → <i>Webhooks</i> → <i>Add webhook</i>. You need admin rights on that repo.</li>
+                            <li><b>Fill in the form:</b>
+                                <ul style="margin: 0.25rem 0 0; padding-left: 1.1rem;">
+                                    <li>Payload URL: <span id="github-webhook-url" class="mono" style="user-select: all;"></span> <span style="opacity: 0.6;">(use your public address if it differs from the one you are browsing)</span></li>
+                                    <li>Content type: <span class="mono">application/json</span></li>
+                                    <li>Secret: paste the secret from step 1</li>
+                                    <li>Events: <i>Let me select individual events</i>, then tick <i>Pushes</i>, <i>Pull requests</i>, <i>Releases</i>, <i>Issues</i>, <i>Branch or tag creation</i> and <i>Branch or tag deletion</i>. Leave <i>Active</i> ticked and click <i>Add webhook</i>.</li>
+                                </ul>
+                            </li>
+                            <li><b>Tell the bot.</b> In "Track a Repo" below, tick <i>Webhook delivery</i> and add the repo, or for a repo already listed click <i>Edit</i> and type <span class="mono">webhook</span> at the delivery prompt (<span class="mono">poll</span> switches it back). Channels and event filters work as before.</li>
+                            <li><b>Test it.</b> GitHub sends a "ping" right away: in the webhook's <i>Recent Deliveries</i> tab it should show a green tick. Then push a commit; the line appears in the channel within seconds.</li>
+                        </ol>
+                        <p style="margin: 0 0 0.25rem;"><b>If a delivery fails</b> (GitHub → webhook → <i>Recent Deliveries</i> → the delivery → <i>Response</i>):</p>
+                        <ul style="margin: 0 0 0.75rem; padding-left: 1.25rem; display: grid; gap: 0.25rem;">
+                            <li><span class="mono">401</span>: the secret on GitHub differs from the one saved here. Paste it again.</li>
+                            <li><span class="mono">404</span>: the repo is not tracked here, or is not in webhook mode (check the owner/repo spelling).</li>
+                            <li><span class="mono">503</span>: tracker disabled, no secret saved, or the bot is not connected to IRC right now. Use <i>Redeliver</i> once it is back; webhooks are not re-polled.</li>
+                            <li><span class="mono">413</span>: the payload is over 1 MiB (a very large push).</li>
+                            <li>Timeout or connection error: the dashboard is not reachable from the internet (port forward or reverse proxy needed).</li>
+                            <li><span class="mono">204</span> is normal: an event type that is not announced (a pushed tag is announced through the "branch or tag creation" event).</li>
+                        </ul>
+                        <p style="margin: 0; opacity: 0.7;">Good to know: a repo uses either polling or a webhook, never both. Webhook repos show <span class="mono">hook</span> instead of the status dot and never appear in the public activity feed (they may be private). Use a TLS reverse proxy (https URL) in front of the dashboard so the payloads are encrypted in transit. For repos you do not own, keep polling.</p>
                     </div>
                 </div>
 
@@ -810,6 +856,10 @@
                         <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;">Personal Access Token (optional, for private repos)</label>
                         <input type="password" id="github-new-token" placeholder="leave blank for a public repo" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
                         <div style="font-size: 0.65rem; opacity: 0.6; margin-top: 0.25rem;">A fine-grained, read-only, single-repo token is recommended. Stored encrypted; never shown again.</div>
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label style="cursor: pointer;"><input type="checkbox" id="github-new-webhook" style="width: auto;"> Webhook delivery (GitHub pushes events instead of the bot polling)</label>
+                        <button type="button" onclick="toggleGitHubWebhookHelp()" class="btn btn-ghost" title="How to set up GitHub webhooks" aria-label="How to set up GitHub webhooks" style="padding: 0; border-radius: 50%; min-width: 1.4rem; height: 1.4rem; font-size: 0.7rem; line-height: 1;">?</button>
                     </div>
                     <div style="display: flex; gap: 1rem; align-items: center;">
                         <button onclick="addGitHubRepo()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Add Repo</button>

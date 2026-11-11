@@ -184,6 +184,20 @@ func TestCollapseForBroadcast_MultiplePushesFoldToOneLine(t *testing.T) {
 	}
 }
 
+// A kind first seen early but updated late must not print before a kind whose latest event is
+// older: lines follow the chronology of the events actually shown.
+func TestCollapseForBroadcast_OrderedByLatestEvent(t *testing.T) {
+	anns := []Announcement{
+		{Kind: "push", Message: "push old"},
+		{Kind: "release", Message: "release mid"},
+		{Kind: "push", Message: "push newest"},
+	}
+	out := CollapseForBroadcast(anns)
+	if len(out) != 2 || out[0].Kind != "release" || out[1].Kind != "push" {
+		t.Fatalf("want release then push, got %v", out)
+	}
+}
+
 func TestCollapseForBroadcast_DifferentKindsEachGetALine(t *testing.T) {
 	anns := []Announcement{
 		{RepoFullName: "owner/repo", Kind: "push", Message: "push 1"},

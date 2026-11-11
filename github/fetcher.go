@@ -51,6 +51,9 @@ type Fetcher struct {
 	repoStatusMu sync.RWMutex
 
 	fetchMu sync.Mutex // one Fetch at a time: a restarted loop must not re-announce an in-flight pass
+
+	hooks    chan webhookJob // webhook deliveries, announced in arrival order by one worker
+	hookOnce sync.Once
 }
 
 func NewFetcher(cfg *config.Config, bot BotInterface, db *Database, cryptor *Cryptor) *Fetcher {
@@ -62,6 +65,7 @@ func NewFetcher(cfg *config.Config, bot BotInterface, db *Database, cryptor *Cry
 		enabled:    cfg.GitHubTracker.Enabled,
 		stopChan:   make(chan struct{}),
 		repoStatus: make(map[string]RepoStatus),
+		hooks:      make(chan webhookJob, 64),
 	}
 }
 
@@ -228,6 +232,9 @@ func (f *Fetcher) Fetch() {
 	f.lfMu.Unlock()
 
 	for _, r := range cfg.GitHubTracker.Repos {
+		if r.Webhook {
+			continue // delivered by POST /api/github/webhook; polling it too would announce twice
+		}
 		if f.pollRepo(r) {
 			break
 		}

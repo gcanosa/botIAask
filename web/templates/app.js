@@ -707,6 +707,7 @@ function updateAdminView(isAdmin) {
         document.getElementById('github-admin-header')?.classList.add('hidden');
         document.getElementById('github-admin-add')?.classList.add('hidden');
         document.getElementById('github-admin-settings')?.classList.add('hidden');
+        document.getElementById('github-webhook-help')?.classList.add('hidden');
     }
 }
 
@@ -4722,6 +4723,8 @@ async function fetchGitHubSettings() {
         if (enabledEl) enabledEl.checked = !!data.enabled;
         const intervalEl = document.getElementById('github-interval');
         if (intervalEl) intervalEl.value = data.interval_minutes;
+        const secretEl = document.getElementById('github-webhook-secret');
+        if (secretEl) secretEl.value = data.webhook_secret || '';
     } catch (e) { console.error("Failed to fetch GitHub tracker settings", e); }
 }
 
@@ -4737,7 +4740,7 @@ async function saveGitHubSettings() {
         const res = await fetch('/api/github/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled, interval_minutes: interval })
+            body: JSON.stringify({ enabled, interval_minutes: interval, webhook_secret: document.getElementById('github-webhook-secret').value.trim() })
         });
         if (res.ok) {
             status.textContent = '✓ Settings saved and applied';
@@ -4834,7 +4837,9 @@ function renderGitHubRepoList(repos, publicView) {
     const isAdmin = !document.getElementById('admin-github-settings-btn')?.classList.contains('hidden');
     tbody.innerHTML = repos.map((r) => {
         const fullName = `${r.owner}/${r.repo}`;
-        const statusLed = r.ok
+        const statusLed = r.webhook
+            ? '<span class="mono" title="events arrive by webhook, not polling" style="font-size: 0.7rem;">hook</span>'
+            : r.ok
             ? '<span title="ok" style="color: var(--success);">●</span>'
             : `<span title="${githubEsc(r.error || 'not yet polled')}" style="color: var(--error);">●</span>`;
         const events = (r.event_types && r.event_types.length) ? r.event_types.join(', ') : 'all';
@@ -4887,7 +4892,7 @@ async function addGitHubRepo() {
         const res = await fetch('/api/github/repos', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ owner, repo, channels, event_types, token })
+            body: JSON.stringify({ owner, repo, channels, event_types, token, webhook: !!document.getElementById('github-new-webhook')?.checked })
         });
         if (res.ok) {
             status.textContent = '✓ Repo added';
@@ -4925,8 +4930,11 @@ async function editGitHubRepoPrompt(owner, repo) {
     if (channels === null) return;
     const token = prompt('New Personal Access Token (blank = keep existing, "-" = clear):');
     if (token === null) return;
+    const mode = prompt('Delivery: "webhook" (GitHub pushes events; needs a webhook set up on the repo) or "poll", blank = no change:');
+    if (mode === null) return;
 
     const body = { owner, repo };
+    if (mode.trim() === 'webhook' || mode.trim() === 'poll') body.webhook = mode.trim() === 'webhook';
     if (channels.trim() !== '') {
         body.channels = channels.split(',').map(c => c.trim()).filter(c => c !== '');
     }
@@ -4945,6 +4953,22 @@ async function editGitHubRepoPrompt(owner, repo) {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
+function toggleGitHubWebhookHelp() {
+    const el = document.getElementById('github-webhook-help');
+    el.classList.toggle('hidden');
+    if (!el.classList.contains('hidden')) {
+        document.getElementById('github-webhook-url').textContent = location.origin + '/api/github/webhook';
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+function generateGitHubWebhookSecret() {
+    const b = crypto.getRandomValues(new Uint8Array(24));
+    document.getElementById('github-webhook-secret').value = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+window.toggleGitHubWebhookHelp = toggleGitHubWebhookHelp;
+window.generateGitHubWebhookSecret = generateGitHubWebhookSecret;
 window.toggleGitHubSettings = toggleGitHubSettings;
 window.saveGitHubSettings = saveGitHubSettings;
 window.addGitHubRepo = addGitHubRepo;

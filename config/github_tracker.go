@@ -9,6 +9,9 @@ type GitHubTrackerConfig struct {
 	Enabled         bool                      `yaml:"enabled"`
 	IntervalMinutes int                       `yaml:"interval_minutes"`
 	Repos           []GitHubTrackerRepoConfig `yaml:"repos,omitempty"`
+	// WebhookSecret signs/verifies POST /api/github/webhook deliveries (HMAC-SHA256, the same
+	// value in every repo's webhook settings). Encrypted at rest (mapSecrets); empty = webhooks off.
+	WebhookSecret string `yaml:"webhook_secret,omitempty"`
 }
 
 // GitHubTrackerRepoConfig is one tracked repo: where to announce, which event types to
@@ -27,6 +30,10 @@ type GitHubTrackerRepoConfig struct {
 	// CachedDescription is the repo's GitHub description, fetched once when the repo is
 	// added via the dashboard. Shown in the web UI only; never sent to IRC.
 	CachedDescription string `yaml:"cached_description,omitempty"`
+	// Webhook: events arrive via GitHub's POST /api/github/webhook instead of being polled
+	// (near-instant, in order). Needs admin rights on the repo and a WebhookSecret. A webhook
+	// repo is never shown in the public feed (it may be private without any stored token).
+	Webhook bool `yaml:"webhook,omitempty"`
 }
 
 // FullName returns the "owner/repo" identifier used as the dedup/ETag storage key.

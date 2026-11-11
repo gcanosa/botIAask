@@ -7,7 +7,7 @@
 ### 🤖 AI & IRC Interaction
 - **AI-Powered Responses**: Ask questions directly to an AI model using `!ask`.
 - **RSS & news**: Configurable feeds; optional IRC announcements and per-channel toggles.
-- **GitHub Activity Tracking**: Announce pushes, pull requests, releases, issues, and branch/tag creation or deletion from tracked repos to any number of networks/channels, including private repos via an encrypted-at-rest access token. Each announcement tag carries the natural GitHub identifier (`[PUSH abcd123]`, `[PR #42]`, `[RELEASE v1.0]`, `[ISSUE #7]`, `[BRANCH name]`), and links are auto-shortened. Manage repos from the web dashboard or via `!gh list/add/del/search` in IRC.
+- **GitHub Activity Tracking**: Announce pushes, pull requests, releases, issues, and branch/tag creation or deletion from tracked repos to any number of networks/channels, including private repos via an encrypted-at-rest access token. Each announcement tag carries the natural GitHub identifier (`[PUSH abcd123]`, `[PR #42]`, `[RELEASE v1.0]`, `[ISSUE #7]`, `[BRANCH name]`), and links are auto-shortened. Polled by default, or near-instant and in order through GitHub webhooks (see [GitHub Webhooks](#github-webhooks-instant-in-order-announcements)). Manage repos from the web dashboard or via `!gh list/add/del/search` in IRC.
 - **Rate Limiting**: Intelligent command throttling to prevent spam.
 - **Log Rotation**: Automatic multi-day log management for all channels.
 
@@ -153,7 +153,38 @@ The dashboard (default: `http://localhost:3366`) provides several administrative
 - **Market View**: Live financial data panel for crypto and currency rates.
 - **System Stats**: Detailed charts for AI requests and system performance.
 - **Bookmarks**: Searchable database of links shared across channels.
-- **GitHub Tracker**: Add/edit/remove tracked repos, set per-repo target channels and event-type filters (push/pull_request/release/issues/create/delete), and enter a Personal Access Token for private repos (stored encrypted, never shown again). For private repos, create the token at https://github.com/settings/tokens: a classic PAT needs the `repo` scope, or a fine-grained PAT scoped to the repo needs read-only **Contents** (push/release/branch-tag events), **Pull requests**, and **Issues**. The same repos can also be managed from IRC with `!gh list/add/del/search`.
+- **GitHub Tracker**: Add/edit/remove tracked repos, set per-repo target channels and event-type filters (push/pull_request/release/issues/create/delete), and enter a Personal Access Token for private repos (stored encrypted, never shown again). For private repos, create the token at https://github.com/settings/tokens: a classic PAT needs the `repo` scope, or a fine-grained PAT scoped to the repo needs read-only **Contents** (push/release/branch-tag events), **Pull requests**, and **Issues**. The same repos can also be managed from IRC with `!gh list/add/del/search`. Each repo is either polled (default) or delivered by webhook; the **?** buttons in the panel walk through the webhook setup.
+
+### GitHub Webhooks (instant, in-order announcements)
+
+Polling GitHub's events feed is slow and can deliver events late or out of order (GitHub documents 30 seconds to 6 hours of latency). A **webhook** makes GitHub call the bot as soon as something happens, so the announcement appears within seconds, in order. Use it for repos you have admin rights on; keep polling for the rest.
+
+Requirements: admin rights on the GitHub repo, and a dashboard that GitHub can reach from the internet (port forward or, better, a TLS reverse proxy so the URL is `https://`). The bot must be connected to IRC and the GitHub tracker enabled.
+
+1. **Create the secret.** In the dashboard open **GitHub** → **Settings**, tick **Enabled**, click **Generate** next to *Webhook secret* and **Apply Changes**. One secret is shared by all repos (stored encrypted; empty means webhooks are off).
+2. **Add the webhook on GitHub.** Repo → **Settings** → **Webhooks** → **Add webhook**, then fill in:
+   - **Payload URL**: `https://<your-dashboard>/api/github/webhook`
+   - **Content type**: `application/json`
+   - **Secret**: the value from step 1
+   - **Events**: *Let me select individual events* → Pushes, Pull requests, Releases, Issues, Branch or tag creation, Branch or tag deletion. Keep *Active* ticked.
+3. **Switch the repo to webhook mode.** When adding the repo in **Track a Repo** tick **Webhook delivery**; for a repo already tracked click **Edit** and answer `webhook` at the delivery prompt (`poll` switches it back). Channels and event filters work exactly as with polling.
+4. **Test.** GitHub sends a *ping* straight away: **Recent Deliveries** on the webhook should show a green tick. Push a commit and the line shows up in the channel.
+
+The same steps are available inside the dashboard: click the **?** next to *Webhook secret* or *Webhook delivery*.
+
+Troubleshooting (GitHub → webhook → **Recent Deliveries** → pick a delivery → **Response**):
+
+| Response | Meaning |
+|----------|---------|
+| `202` / `200` | Accepted (`200` is the ping). |
+| `204` | Ignored on purpose, e.g. an unannounced event type. A pushed tag is announced through the *branch or tag creation* event. |
+| `401` | Wrong secret: the one on GitHub differs from the one saved in the dashboard. |
+| `404` | The repo is not tracked, or is not in webhook mode (check the owner/repo spelling). |
+| `503` | Tracker disabled, no secret saved, the bot is not connected to IRC, or too many deliveries are queued. Use **Redeliver** later: webhooks are never re-polled. |
+| `413` | Payload larger than 1 MiB (a very large push). |
+| timeout / connection error | The dashboard is not reachable from the internet. |
+
+Notes: a repo uses polling **or** a webhook, never both (it would be announced twice). Webhook repos show `hook` instead of the status dot and never appear in the public activity feed, since they need no token and may be private. A redelivered event is ignored if it was already announced.
 
 ### Web Dashboard Security
 
