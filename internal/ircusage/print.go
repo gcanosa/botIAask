@@ -51,6 +51,7 @@ var userLines = []line{
 	{cmd: "!peso", desc: "Argentine peso rate view"},
 	{cmd: "!convert <amount> <from> <to>", desc: "Convert between currencies, e.g. !convert 100 USD ARS"},
 	{cmd: "!crypto", desc: "Crypto market view"},
+	{cmd: "!stock <name|ticker> [period]", desc: "Price from Yahoo Finance for a stock, ETF, index, crypto, future or currency pair, found by company name or ticker: change today, day and 52-week range, market open/closed. Period 1d|3d|5d|1m|3m|6m|1y instead shows start → now, % change, average, low/high and a sparkline (e.g. !stock nvidia, !stock apple 1m, !stock ^GSPC 1y, !stock bitcoin 5d)"},
 	{cmd: "!ping", desc: "Measure your round-trip lag to the bot (CTCP PING)"},
 	{cmd: "!ping <host>", desc: "Single probe: RTT in ms, or unreachable"},
 	{cmd: "!reminder ...", desc: "add <time> <note> (time e.g. 30m/2h/3d, 0=on next join) | del <id> | list | read <id>"},

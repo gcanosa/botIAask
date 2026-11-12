@@ -912,6 +912,15 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		return
 	}
 
+	// Handle !stock <name|ticker> [now|1d|3d|5d|1m|3m|6m|1y] (Yahoo Finance: stocks, ETFs, indices, crypto, forex)
+	if f := strings.Fields(message); len(f) > 0 && f[0] == b.pfx()+"stock" {
+		if b.rateLimited(target, sender) {
+			return
+		}
+		b.handleStockCommand(target, sender, strings.Join(f[1:], " "))
+		return
+	}
+
 	// Handle !flight <IATA> [YYYY-MM-DD] (AirLabs v9; api_key; date queries /schedules instead of live /flight)
 	if strings.HasPrefix(message, b.pfx()+"flight") {
 		if b.rateLimited(target, sender) {
