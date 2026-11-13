@@ -14,6 +14,7 @@ type Row struct {
 // about holds an optional one-line explanation shown first by "!help <cmd>" for commands
 // whose rows alone don't say what the feature is.
 var about = map[string]string{
+	"reddit": "Follows subreddits and announces each new post once, oldest first, in the channels chosen per subreddit (public feed, no API key). Admin session required; the dashboard Reddit panel edits the same list.",
 	"gh":     "Tracks GitHub repos and announces pushes, PRs, releases, issues and branch/tag events in IRC channels.",
 	"ticket": "Approve or cancel pending upload tickets (files/pastes waiting for staff approval).",
 }

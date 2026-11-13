@@ -430,6 +430,7 @@ function showPanel(panelId) {
     if (panelId === 'todos') fetchProgrammerTodos();
     if (panelId === 'changelog') loadChangelog();
     if (panelId === 'github') fetchGitHubRepos();
+    if (panelId === 'reddit') fetchReddit();
 
     closeSidebarIfMobile();
 }
@@ -570,6 +571,7 @@ async function fetchStatus() {
         updateNewsStatus(data.rss_enabled, data.is_admin);
         updateStatsStatus(data.stats_enabled, data.is_admin);
         updateGitHubStatus(data.github_enabled, data.is_admin);
+        setFeatureSwitch('reddit', !!data.reddit_enabled);
         const actEmpty = document.getElementById('activity-chart-empty');
         if (activityChart && actEmpty && !actEmpty.classList.contains('hidden') && currentTimeframe) {
             setActivityChartEmptyHint(currentTimeframe, activityChart.data.labels.length);
@@ -5268,4 +5270,143 @@ async function ircCert(action) {
     if (pemEl) pemEl.value = '';
     await fetchIRCNetworks();
     ircAuthRender();
+}
+
+
+// Reddit (admin panel): followed subreddits and the channels each one is announced in.
+let redditTargets = [];
+
+async function toggleReddit() {
+    try {
+        const res = await fetch('/api/reddit/toggle', { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        setFeatureSwitch('reddit', !!(await res.json()).reddit_enabled);
+    } catch (e) { console.error('Failed to toggle Reddit', e); }
+}
+
+// redditChannelBoxes renders one checkbox per channel: every configured channel plus any
+// target already saved for this sub (so a channel missing from the network list stays visible).
+function redditChannelBoxes(selected, sub) {
+    const all = [...redditTargets];
+    (selected || []).forEach((c) => { if (!all.some((t) => t.toLowerCase() === c.toLowerCase())) all.push(c); });
+    if (!all.length) return '<span style="color: var(--text-muted); font-size: 0.8rem;">No channels configured.</span>';
+    const on = new Set((selected || []).map((c) => c.toLowerCase()));
+    const handler = sub == null ? '' : ` onchange="saveRedditChannels('${jsq(sub)}', this)"`;
+    return all.map((c) => `<label style="margin-right: 0.9rem; cursor: pointer; white-space: nowrap; font-size: 0.8rem;"><input type="checkbox" value="${financeEscapeHtml(c)}"${on.has(c.toLowerCase()) ? ' checked' : ''}${handler} style="width: auto;"> ${financeEscapeHtml(c)}</label>`).join(' ');
+}
+
+function redditChecked(container) {
+    return Array.from(container.querySelectorAll('input[type=checkbox]:checked')).map((el) => el.value);
+}
+
+async function fetchReddit() {
+    try {
+        const res = await fetch('/api/reddit');
+        if (!res.ok) return;
+        const data = await res.json();
+        redditTargets = data.targets || [];
+        document.getElementById('reddit-enabled').checked = !!data.enabled;
+        document.getElementById('reddit-interval').value = data.interval_minutes;
+        const newBox = document.getElementById('reddit-new-channels');
+        newBox.innerHTML = redditChannelBoxes(redditChecked(newBox), null);
+        renderRedditSubs(data.subreddits || [], data.status || []);
+    } catch (e) { console.error('Failed to fetch Reddit settings', e); }
+}
+
+function renderRedditSubs(subs, status) {
+    const tbody = document.getElementById('reddit-sub-list');
+    if (!subs.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: var(--text-muted);">No subreddits followed yet.</td></tr>';
+        return;
+    }
+    const st = {};
+    status.forEach((x) => { st[x.name.toLowerCase()] = x; });
+    tbody.innerHTML = subs.map((r) => {
+        const s = st[r.name.toLowerCase()] || {};
+        const led = s.ok
+            ? `<span title="${financeEscapeHtml(s.last_polled_at ? 'polled ' + new Date(s.last_polled_at).toLocaleString() : 'ok')}" style="color: var(--success);">●</span>`
+            : `<span title="${financeEscapeHtml(s.error || 'not yet polled')}" style="color: var(--error);">●</span> <span style="font-size: 0.7rem; color: var(--text-muted);">${financeEscapeHtml(s.error || 'not yet polled')}</span>`;
+        return `<tr>
+            <td style="padding: 1rem;"><a href="${safeHref('https://www.reddit.com/r/' + encodeURIComponent(r.name) + '/new/')}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: inherit;">r/${financeEscapeHtml(r.name)}</a></td>
+            <td style="padding: 1rem;">${redditChannelBoxes(r.channels, r.name)}</td>
+            <td style="padding: 1rem;"><input type="checkbox" aria-label="Allow NSFW"${r.nsfw ? ' checked' : ''} onchange="saveRedditNSFW('${jsq(r.name)}', this)" style="width: auto;"></td>
+            <td style="padding: 1rem;">${led}</td>
+            <td style="padding: 1rem; text-align: right;"><button class="btn btn-ghost" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; color: var(--error);" onclick="deleteRedditSub('${jsq(r.name)}')">Remove</button></td>
+        </tr>`;
+    }).join('');
+}
+
+async function redditRequest(method, url, body) {
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (!res.ok) throw new Error(await res.text());
+}
+
+async function saveRedditSettings() {
+    const status = document.getElementById('reddit-settings-status');
+    try {
+        await redditRequest('POST', '/api/reddit', {
+            enabled: document.getElementById('reddit-enabled').checked,
+            interval_minutes: parseInt(document.getElementById('reddit-interval').value, 10) || 0,
+        });
+        status.textContent = '✓ Saved and applied';
+        status.style.color = 'var(--success)';
+        fetchStatus();
+    } catch (e) {
+        status.textContent = '✕ ' + e.message;
+        status.style.color = 'var(--error)';
+    }
+}
+
+async function addRedditSub() {
+    const status = document.getElementById('reddit-add-status');
+    const nameEl = document.getElementById('reddit-new-name');
+    const name = nameEl.value.trim();
+    if (!name) return;
+    status.textContent = 'Adding...';
+    status.style.color = 'var(--text-muted)';
+    try {
+        await redditRequest('POST', '/api/reddit/subs', {
+            name,
+            channels: redditChecked(document.getElementById('reddit-new-channels')),
+            nsfw: document.getElementById('reddit-new-nsfw').checked,
+        });
+        status.textContent = '✓ Following';
+        status.style.color = 'var(--success)';
+        nameEl.value = '';
+        document.getElementById('reddit-new-nsfw').checked = false;
+        document.querySelectorAll('#reddit-new-channels input').forEach((el) => { el.checked = false; });
+        fetchReddit();
+    } catch (e) {
+        status.textContent = '✕ ' + e.message;
+        status.style.color = 'var(--error)';
+    }
+}
+
+async function saveRedditChannels(name, box) {
+    name = decodeURIComponent(name);
+    try {
+        await redditRequest('PATCH', '/api/reddit/subs', { name, channels: redditChecked(box.closest('td')) });
+    } catch (e) {
+        alert('Failed to update: ' + e.message);
+        fetchReddit();
+    }
+}
+
+async function saveRedditNSFW(name, box) {
+    name = decodeURIComponent(name);
+    try {
+        await redditRequest('PATCH', '/api/reddit/subs', { name, nsfw: box.checked });
+    } catch (e) {
+        alert('Failed to update: ' + e.message);
+        fetchReddit();
+    }
+}
+
+async function deleteRedditSub(name) {
+    name = decodeURIComponent(name);
+    if (!confirm(`Stop following r/${name}?`)) return;
+    try {
+        await redditRequest('DELETE', '/api/reddit/subs?' + new URLSearchParams({ name }));
+        fetchReddit();
+    } catch (e) { alert('Failed to remove: ' + e.message); }
 }

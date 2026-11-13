@@ -26,6 +26,7 @@ import (
 	"botIAask/logger"
 	"botIAask/meta"
 	"botIAask/progtodo"
+	"botIAask/reddit"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/uploads"
@@ -365,6 +366,16 @@ func main() {
 		guard.Go("github tracker", githubFetcher.Start)
 	}
 
+	// Initialize the Reddit announcer (followed subreddits -> IRC)
+	redditDB, err := reddit.NewDatabase("data/reddit_seen.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize Reddit database: %v", err)
+	}
+	defer redditDB.Close()
+	redditFetcher := reddit.NewFetcher(cfg, bot, redditDB)
+	bot.SetRedditFetcher(redditFetcher)
+	redditFetcher.SetEnabled(cfg.Reddit.Enabled)
+
 	rstate := &rehashState{
 		configPath:    configPath,
 		aiClient:      aiClient,
@@ -373,6 +384,7 @@ func main() {
 		statsTracker:  statsTracker,
 		rssDB:         rssDB,
 		githubFetcher: githubFetcher,
+		redditFetcher: redditFetcher,
 		webMu:         &webServerMu,
 		webRef:        &webServerRef,
 		// CLI flags are in-memory only; re-apply after every reload so a rehash/SIGHUP doesn't

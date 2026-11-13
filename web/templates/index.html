@@ -101,6 +101,12 @@
                         </a>
                     </div>
                     <div class="nav-item">
+                        <a href="#reddit" class="nav-link" onclick="showPanel('reddit')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="14" r="7"></circle><circle cx="18.5" cy="5" r="1.5"></circle><path d="M12 7l1.5-4 5 2"></path><circle cx="9.5" cy="13.5" r="0.8" fill="currentColor"></circle><circle cx="14.5" cy="13.5" r="0.8" fill="currentColor"></circle><path d="M9.5 16.5c1.4 1 3.6 1 5 0"></path></svg>
+                            Reddit
+                        </a>
+                    </div>
+                    <div class="nav-item">
                         <a href="#admin" class="nav-link" onclick="showPanel('admin')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                             Administration
@@ -273,6 +279,15 @@
                                 </div>
                                 <button type="button" id="github-toggle" onclick="toggleGitHub()" class="switch" role="switch" aria-checked="false" aria-label="GitHub Monitor">
                                     <span class="switch__state" id="github-indicator">--</span>
+                                </button>
+                            </li>
+                                                    <li class="feature-row">
+                                <div class="feature-row__text">
+                                    <span class="feature-row__name">Reddit</span>
+                                    <span class="feature-row__desc">Announces new posts of followed subreddits</span>
+                                </div>
+                                <button type="button" id="reddit-toggle" onclick="toggleReddit()" class="switch" role="switch" aria-checked="false" aria-label="Reddit">
+                                    <span class="switch__state" id="reddit-indicator">--</span>
                                 </button>
                             </li>
                         </ul>
@@ -885,6 +900,70 @@
                                 </tr>
                             </thead>
                             <tbody id="github-repo-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Reddit Panel (admin) -->
+            <section id="panel-reddit" class="panel">
+                <div class="section-header">
+                    <h1 class="section-title">Reddit</h1>
+                    <p class="section-subtitle">Followed subreddits announce each new post once, oldest first, to the channels ticked for them.</p>
+                </div>
+
+                <div class="card" style="margin-bottom: 2rem;">
+                    <div class="grid grid-2" style="margin-bottom: 1rem;">
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7; display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                <input type="checkbox" id="reddit-enabled" style="width: auto; margin: 0;">
+                                Enabled
+                            </label>
+                        </div>
+                        <div>
+                            <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;" for="reddit-interval">Poll Interval (Minutes, min 2)</label>
+                            <input type="number" id="reddit-interval" min="2" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button onclick="saveRedditSettings()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Apply Changes</button>
+                        <div id="reddit-settings-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom: 2rem;">
+                    <h3 class="card-title" style="margin-bottom: 1rem;">Follow a Subreddit</h3>
+                    <div style="margin-bottom: 1rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7;" for="reddit-new-name">Subreddit</label>
+                        <input type="text" id="reddit-new-name" placeholder="golang" class="btn btn-ghost" style="width: 100%; text-align: left; cursor: text; margin-top: 0.25rem; background: rgba(0,0,0,0.2);">
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label class="card-title" style="font-size: 0.7rem; opacity: 0.7; display: block; margin-bottom: 0.5rem;">Announce in</label>
+                        <div id="reddit-new-channels"></div>
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <label style="cursor: pointer;"><input type="checkbox" id="reddit-new-nsfw" style="width: auto;"> Allow NSFW subreddit</label>
+                    </div>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <button onclick="addRedditSub()" class="btn btn-primary" style="padding: 0.6rem 2rem;">Follow</button>
+                        <div id="reddit-add-status" class="mono" style="font-size: 0.7rem;"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title" style="margin-bottom: 1.5rem;">Followed Subreddits</h3>
+                    <div class="data-table-wrap" style="overflow-x: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="text-align: left; padding: 1rem;">SUBREDDIT</th>
+                                    <th style="text-align: left; padding: 1rem;">CHANNELS</th>
+                                    <th style="text-align: left; padding: 1rem;">NSFW</th>
+                                    <th style="text-align: left; padding: 1rem;">STATUS</th>
+                                    <th style="text-align: right; padding: 1rem;">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reddit-sub-list"></tbody>
                         </table>
                     </div>
                 </div>

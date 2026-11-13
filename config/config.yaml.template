@@ -157,6 +157,15 @@ github_tracker:
         #   webhook: false                  # true = GitHub pushes events (instant, in order) instead of polling
         #   # token_encrypted is set by the web dashboard (AES-256-GCM, key auto-generated
         #   # at data/github_secret.key on first run) — never hand-edit a plaintext token here.
+# reddit: announces each new post of the followed subreddits once, oldest first (public
+# /r/<sub>/new/.rss feed, no API key). Edit from the dashboard Reddit panel or !reddit.
+reddit:
+    enabled: false
+    interval_minutes: 30           # min 2
+    subreddits:
+        # - name: golang           # bare name, no "r/"
+        #   channels: ['libera:#go']   # "network:#channel" entries
+        #   nsfw: false            # true to allow an NSFW (over18) subreddit
 stats:
     enabled: true
     interval: 60

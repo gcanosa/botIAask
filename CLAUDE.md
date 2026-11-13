@@ -22,6 +22,7 @@ botIAask is a feature-rich IRC bot written in Go. It connects to IRC via `ergoch
 | `uploads/` | Paste and file upload DB + disk storage |
 | `rss/` | RSS feed fetching, deduplication, IRC announcements |
 | `github/` | GitHub repo activity tracking (pushes/PRs/releases via the Events API), PAT encryption, IRC announcements |
+| `reddit/` | Followed subreddits → IRC: public `/r/<sub>/new/.rss` (gofeed, no key), dedup by post id, announce oldest first |
 | `crypto/` | CoinGecko price fetching, market history DB |
 | `stats/` | Activity tracking, SQLite persistence |
 | `bookmarks/` | URL bookmark DB |
@@ -57,6 +58,8 @@ All configuration lives in `config/config.yaml` (active) and `config/config.yaml
 
 **Flood guard** (`irc/guard_cmd.go`): per network `irc.networks[].guard: [{channel, joins 1-50, moderate, interval 5-600s (0 = 30)}]` (`config.NormalizeGuard`), edited by admin `!guard [#chan] on [joins]|off` (always `moderate: true`, also voices the caller) or the dashboard "Channel flood guard" card (`/api/irc/guard` GET/PUT whole list, `handleIRCGuard`). `syncGuards` reconciles the running loops with config on rehash (`ApplyLiveConfig`) and on 366 for a (re)joined channel: `+m` if moderate, `+l members+joins` re-set every `interval` (`!guard on` keeps an existing interval); removing an entry sends `-l`/`-ml`. How +l moves is `irc.networks[].guard_settings` (`grace_seconds` 180, `min_limit` 30 (per channel `guard[].min_limit`), `lower_delay_seconds` 300, `threshold` 2; 0 = default, negative = off), decided by the pure `guardRun.next` (tested on a virtual clock in `TestGuardRestartNeverLocksOut`): a forced sync (366 after a (re)join) sends `-l` and sets no +l during the grace period, so an ircd restart's reconnect wave never gets 471; raises at once (+threshold headroom), lowers only after the delay in steps > threshold; every change is logged old -> new with the reason.
 
+**Reddit** (`reddit/`, `config/reddit.go`): `reddit: {enabled, interval_minutes (30, min 2), subreddits: [{name, channels: ['net:#chan'], nsfw}]}`. Polls each sub's public `/new/.rss` (2s apart, UA `botIAask/<version>`), a 403/429 ends that cycle; posts announced oldest first across subs, max 10 per cycle, link `https://redd.it/<id>`; a newly followed sub announces only its newest 3. NSFW: checked once on add via `about.json` (`irc.AllowRedditSub`, a blocked check allows); the feed has no per-post NSFW flag. Edited by admin `!reddit list|add|del` (`irc/reddit_admin.go`) and the admin dashboard Reddit panel (`/api/reddit` GET/POST settings, `/api/reddit/toggle`, `/api/reddit/subs` POST/PATCH/DELETE, `web/reddit_api.go`); every edit rehashes. The fetcher lives on the bot (`Bot.RedditFetcher()`), so the web server reaches it through `s.bot`.
+
 **Config reload** at runtime: send `SIGHUP` to the process, call `!rehash` in IRC, or use the `/api/rehash` web endpoint.
 
 ---
@@ -76,6 +79,7 @@ All SQLite databases are created at first run in `data/`. Each subsystem owns it
 | `prog_todos.db` | `progtodo` package |
 | `web_auth.db` | `web` package (auth, sessions, CSRF tokens) |
 | `github_seen.db` | `github` package (event dedup, per-repo ETag cache) |
+| `reddit_seen.db` | `reddit` package (post ids; `last_seen` refreshed while a post is still in `/new`, pruned after 14 days unseen) |
 
 The `db/` package provides shared `OpenDB()` with connection pooling and WAL-mode pragmas.
 

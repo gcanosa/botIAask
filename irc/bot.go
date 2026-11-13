@@ -19,6 +19,7 @@ import (
 	"botIAask/config"
 	"botIAask/crypto"
 	"botIAask/github"
+	"botIAask/reddit"
 	"botIAask/internal/guard"
 	"botIAask/internal/sysinfo"
 	"botIAask/logger"
@@ -102,6 +103,9 @@ type Bot struct {
 
 	// GitHub repo activity tracker, for !gh commands.
 	githubFetcher *github.Fetcher
+
+	// Subreddit announcer, for !reddit (and the dashboard via RedditFetcher).
+	redditFetcher *reddit.Fetcher
 
 	// pendingGHTokens tracks an in-flight "!gh add --private" PM token request, keyed like
 	// adminSessionKey(network, nick). Guarded by ghTokenMu, not loginsMu — unrelated state.
@@ -728,7 +732,7 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 		// !kick, and !akick / !aop / !avoice (channel access lists in config, applied on JOIN)
 		if f := strings.Fields(message); len(f) > 0 && strings.HasPrefix(f[0], b.pfx()) {
 			cmd := strings.TrimPrefix(f[0], b.pfx())
-			if _, isAccess := accessCmds[cmd]; isAccess || cmd == "kick" || cmd == "topic" || cmd == "guard" || cmd == "youtube" {
+			if _, isAccess := accessCmds[cmd]; isAccess || cmd == "kick" || cmd == "topic" || cmd == "guard" || cmd == "youtube" || cmd == "reddit" {
 				if b.tracker != nil {
 					b.tracker.LogAdminCommand(b.name)
 				}
@@ -741,6 +745,8 @@ func (b *ircNetwork) handleCommand(target, message, sender, source string) {
 					b.handleGuardCommand(target, sender, f[1:])
 				case "youtube":
 					b.handleYouTubeCommand(target, f[1:])
+				case "reddit":
+					b.handleRedditCommand(target, sender, f[1:])
 				default:
 					b.handleAccessCommand(target, sender, cmd, f[1:])
 				}

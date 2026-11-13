@@ -33,6 +33,7 @@ type Config struct {
 	HamQTH        HamQTHConfig        `yaml:"hamqth,omitempty"`
 	GitHub        GitHubConfig        `yaml:"github,omitempty"`
 	GitHubTracker GitHubTrackerConfig `yaml:"github_tracker,omitempty"`
+	Reddit        RedditConfig        `yaml:"reddit,omitempty"`
 	Backup        BackupConfig        `yaml:"backup,omitempty"`
 	ShortLinks    ShortLinksConfig    `yaml:"short_links,omitempty"`
 }
@@ -272,6 +273,7 @@ func LoadConfig(path string) (*Config, error) {
 	applyFlightDefaults(&cfg)
 	applyOMDBDefaults(&cfg)
 	applyGitHubTrackerDefaults(&cfg)
+	applyRedditDefaults(&cfg)
 
 	sawPlain, err := decryptSecrets(&cfg)
 	if err != nil {

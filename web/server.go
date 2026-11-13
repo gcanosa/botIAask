@@ -224,6 +224,9 @@ func (s *Server) newServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/github/settings", s.handleGitHubTrackerSettings)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubTrackerRepos)
 	mux.HandleFunc("/api/github/repos/edit", s.handleGitHubTrackerRepoEdit)
+	mux.HandleFunc("/api/reddit", s.handleReddit)
+	mux.HandleFunc("/api/reddit/toggle", s.handleRedditToggle)
+	mux.HandleFunc("/api/reddit/subs", s.handleRedditSubs)
 	mux.HandleFunc("/api/rehash", s.handleRehash)
 	mux.HandleFunc("/api/irc/channels/reveal", s.handleIRCChannelReveal)
 	mux.HandleFunc("/api/irc/channels/announce", s.handleIRCChannelAnnounce)
@@ -436,6 +439,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"rss_enabled":             s.rssFetcher.IsEnabled(),
 		"stats_enabled":           s.statsTracker.IsEnabled(),
 		"github_enabled":          s.githubFetcher.IsEnabled(),
+		"reddit_enabled":          s.redditEnabled(),
 		"stats_interval_seconds":  interval,
 		"weather_refresh_minutes": weatherMin,
 		"start_time":              s.bot.GetStartTime().Format(time.RFC3339),

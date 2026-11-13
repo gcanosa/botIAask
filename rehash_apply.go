@@ -14,6 +14,7 @@ import (
 	"botIAask/internal/securefs"
 	"botIAask/irc"
 	"botIAask/logger"
+	"botIAask/reddit"
 	"botIAask/rss"
 	"botIAask/stats"
 	"botIAask/web"
@@ -28,6 +29,7 @@ type rehashState struct {
 	statsTracker  *stats.Tracker
 	rssDB         *rss.Database
 	githubFetcher *github.Fetcher
+	redditFetcher *reddit.Fetcher
 	webMu         *sync.Mutex
 	webRef        **web.Server
 	startWeb      func(cfg *config.Config)
@@ -57,6 +59,7 @@ func doApplyRehash(s *rehashState, source string, fromWeb bool) error {
 	s.bot.ApplyLiveConfig(newCfg)
 	s.rssFetcher.ApplyConfig(newCfg)
 	s.githubFetcher.ApplyConfig(newCfg)
+	s.redditFetcher.ApplyConfig(newCfg)
 	s.statsTracker.ApplyConfig(newCfg)
 	if err := s.rssDB.RepairEmptySourceHackerNewsWhenSingleHNFeed(newCfg.RSS.FeedURLs); err != nil {
 		log.Printf("RSS: repair source column after rehash: %v", err)

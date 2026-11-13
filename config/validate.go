@@ -34,6 +34,9 @@ func ValidateConfig(cfg *Config) error {
 	if err := validateGitHubTracker(cfg.GitHubTracker); err != nil {
 		return err
 	}
+	if err := validateReddit(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
