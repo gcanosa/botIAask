@@ -3594,6 +3594,7 @@ function renderIRCGuard(data) {
     const rows = (data.known || []).slice();
     guards.forEach((g) => { if (!rows.some((r) => r.toLowerCase() === g.channel.toLowerCase())) rows.push(g.channel); });
     window._ircGuardRows = rows;
+    window._ircGuardList = guards; // keeps config-only fields (min_limit) on save
     window._ircGuardDefault = def;
     if (!rows.length) {
         tbody.innerHTML = '<tr><td colspan="5" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>';
@@ -3636,6 +3637,7 @@ async function saveIRCGuard(extra) {
             joins: parseInt(document.getElementById('irc-guard-joins-' + i)?.value, 10) || 0,
             moderate: !!document.getElementById('irc-guard-mod-' + i)?.checked,
             interval: parseInt(document.getElementById('irc-guard-every-' + i)?.value, 10) || 0,
+            min_limit: ((window._ircGuardList || []).find((g) => g.channel.toLowerCase() === c.toLowerCase()) || {}).min_limit || 0,
         });
     });
     if (extra) guards.push(extra);

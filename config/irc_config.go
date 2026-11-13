@@ -47,6 +47,46 @@ type IRCNetworkConfig struct {
 	// Guard lists the channels under the flood guard: +l kept at members+joins (re-set every
 	// 30s), plus +m when Moderate. Edited by !guard and the dashboard "Channel flood guard" card.
 	Guard []ChannelGuard `yaml:"guard,omitempty"`
+	// GuardSettings tunes how the guard moves +l (grace after a (re)join, floor, lowering).
+	GuardSettings GuardSettings `yaml:"guard_settings,omitempty"`
+}
+
+// GuardSettings: 0 = default for every field; a negative value turns that knob off (0).
+type GuardSettings struct {
+	// GraceSeconds after the bot (re)joins a channel during which +l is removed and never set,
+	// so a server restart's reconnect wave isn't refused with 471. Default 180.
+	GraceSeconds int `yaml:"grace_seconds,omitempty"`
+	// MinLimit is the lowest +l ever set (ChannelGuard.MinLimit overrides it). Default 30.
+	MinLimit int `yaml:"min_limit,omitempty"`
+	// LowerDelaySeconds the limit must have been higher than needed before it is lowered. Default 300.
+	LowerDelaySeconds int `yaml:"lower_delay_seconds,omitempty"`
+	// Threshold: +l is lowered only when it is more than this above what's needed, and a raise
+	// adds this much headroom, so +l doesn't flap on every join/part. Default 2.
+	Threshold int `yaml:"threshold,omitempty"`
+}
+
+// Guard tuning defaults (GuardSettings).
+const (
+	GuardDefaultGrace      = 180
+	GuardDefaultMinLimit   = 30
+	GuardDefaultLowerDelay = 300
+	GuardDefaultThreshold  = 2
+)
+
+// Resolved returns s with defaults filled in (0 = default, negative = 0).
+func (s GuardSettings) Resolved() GuardSettings {
+	pick := func(v, def int) int {
+		if v == 0 {
+			return def
+		}
+		return max(v, 0)
+	}
+	return GuardSettings{
+		GraceSeconds:      pick(s.GraceSeconds, GuardDefaultGrace),
+		MinLimit:          pick(s.MinLimit, GuardDefaultMinLimit),
+		LowerDelaySeconds: pick(s.LowerDelaySeconds, GuardDefaultLowerDelay),
+		Threshold:         pick(s.Threshold, GuardDefaultThreshold),
+	}
 }
 
 // Flood guard join allowance per 30s: default and maximum.
@@ -65,6 +105,7 @@ type ChannelGuard struct {
 	Joins    int    `yaml:"joins" json:"joins"`
 	Moderate bool   `yaml:"moderate,omitempty" json:"moderate"`
 	Interval int    `yaml:"interval,omitempty" json:"interval"` // seconds between +l re-checks, 0 = default
+	MinLimit int    `yaml:"min_limit,omitempty" json:"min_limit"` // lowest +l for this channel, 0 = guard_settings.min_limit
 }
 
 // NormalizeGuard validates a guard list: #/& channel names, joins 1-GuardMaxJoins (0 = default),
@@ -87,6 +128,9 @@ func NormalizeGuard(in []ChannelGuard) ([]ChannelGuard, error) {
 		}
 		if g.Interval != 0 && (g.Interval < GuardMinInterval || g.Interval > GuardMaxInterval) {
 			return nil, fmt.Errorf("interval for %s must be %d-%d seconds", g.Channel, GuardMinInterval, GuardMaxInterval)
+		}
+		if g.MinLimit < 0 {
+			return nil, fmt.Errorf("min_limit for %s must be >= 0", g.Channel)
 		}
 		if g.Interval == GuardDefaultInterval {
 			g.Interval = 0

@@ -2,6 +2,7 @@ package irc
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,16 @@ import (
 )
 
 // guardNetwork is a capture network whose config edits are saved to a temp file and synced,
-// like the real rehash does (ApplyLiveConfig -> syncGuards).
+// like the real rehash does (ApplyLiveConfig -> syncGuards). Grace, floor, threshold and
+// lowering delay are off, so +l is exactly members+joins (the tests below the knobs).
 func guardNetwork(t *testing.T) (*ircNetwork, *sink) {
+	n, out := guardNetworkTuned(t, config.GuardSettings{GraceSeconds: -1, MinLimit: -1, LowerDelaySeconds: -1, Threshold: -1})
+	return n, out
+}
+
+func guardNetworkTuned(t *testing.T, gs config.GuardSettings) (*ircNetwork, *sink) {
 	n, out := accessNetwork(t, nil)
+	n.getCfg().IRC.Networks[0].GuardSettings = gs
 	n.quit = make(chan struct{})
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	n.configPath = path
@@ -54,8 +62,9 @@ func TestGuardCommand(t *testing.T) {
 	}
 }
 
-// Config edits (the dashboard path): unchanged entries are left alone, a dropped +m sends -m,
-// a removed limit-only guard sends -l, and a forced sync (366 after a rejoin) re-sends the modes.
+// Config edits (the dashboard path): unchanged entries are left alone, a dropped +m sends -m
+// (the +l already set is kept), a removed limit-only guard sends -l, and a forced sync (366
+// after a rejoin) re-sends the modes.
 func TestSyncGuards(t *testing.T) {
 	n, out := guardNetwork(t)
 	n.addNames("#c", "bot alice")
@@ -68,7 +77,7 @@ func TestSyncGuards(t *testing.T) {
 	set(config.ChannelGuard{Channel: "#c", Joins: 2})                 // +l only now
 	n.syncGuards("#C")                                                // rejoin
 	set()
-	want := "MODE #c +m\nMODE #c +l 4\nMODE #c -m\nMODE #c +l 4\nMODE #c +l 4\nMODE #c -l"
+	want := "MODE #c +m\nMODE #c +l 4\nMODE #c -m\nMODE #c +l 4\nMODE #c -l"
 	if got := strings.Join(out.all(), "\n"); got != want {
 		t.Fatalf("got:\n%s", got)
 	}
@@ -102,6 +111,94 @@ func TestGuardLimitFollowsMembers(t *testing.T) {
 	n.membersMu.Unlock()
 	waitFor("MODE #c +l 6")
 	n.handleGuardCommand("#c", "alice", []string{"off"})
+}
+
+// simGuard drives one guard on a virtual clock: join adds users (failing the test if the +l the
+// bot set would refuse them with 471), tick runs the 30s check.
+type simGuard struct {
+	t    *testing.T
+	n    *ircNetwork
+	run  *guardRun
+	now  time.Time
+	next int // user counter
+}
+
+func (s *simGuard) advance(d time.Duration) {
+	for end := s.now.Add(d); !s.now.After(end); s.now = s.now.Add(time.Second) {
+		if s.now.Sub(time.Time{})%(30*time.Second) == 0 {
+			s.n.guardMu.Lock()
+			s.n.applyGuardLimit(s.run, s.now)
+			s.n.guardMu.Unlock()
+		}
+	}
+}
+
+// join tries count users spread over d; returns how many the +l refused.
+func (s *simGuard) join(count int, d time.Duration) (refused int) {
+	for range count {
+		s.advance(d / time.Duration(count))
+		if s.run.cur > 0 && s.n.memberCount("#c") >= s.run.cur {
+			refused++
+			continue
+		}
+		s.next++
+		s.n.addNames("#c", "u"+strconv.Itoa(s.next))
+	}
+	return refused
+}
+
+// The ircd-restart case: the bot rejoins an empty channel, then 20 users reconnect within
+// 10s. Nobody may be refused; after the grace period +l comes back at the floor, follows a
+// real flood (refusing past the margin) and later steps back down in large-enough steps.
+func TestGuardRestartNeverLocksOut(t *testing.T) {
+	n, out := guardNetworkTuned(t, config.GuardSettings{})
+	n.addNames("#c", "bot ChanServ")
+	n.getCfg().IRC.Networks[0].Guard = []config.ChannelGuard{{Channel: "#c", Joins: 5}}
+	n.syncGuards("#c") // 366 after the rejoin
+	s := &simGuard{t: t, n: n, run: n.guards["#c"], now: time.Time{}.Add(30 * time.Second)}
+	s.run.graceUntil = s.now.Add(180 * time.Second) // syncGuards used the wall clock
+	t.Cleanup(func() { n.syncGuards("") })
+
+	s.advance(9 * time.Second)
+	if r := s.join(20, 10*time.Second); r != 0 {
+		t.Fatalf("%d of 20 reconnecting users refused (+l %d)", r, s.run.cur)
+	}
+	if got := strings.Join(out.all(), "\n"); got != "MODE #c -l" {
+		t.Fatalf("during grace, got:\n%s", got)
+	}
+	s.advance(200 * time.Second) // grace over: 22 members, floor 30
+	if s.run.cur != 30 {
+		t.Fatalf("+l after grace = %d, want floor 30", s.run.cur)
+	}
+	if r := s.join(40, 10*time.Second); r == 0 {
+		t.Fatalf("join flood: nobody refused, +l %d", s.run.cur)
+	}
+	s.advance(30 * time.Second)
+	if m := n.memberCount("#c"); s.run.cur < m+5 || s.run.cur > m+5+2 {
+		t.Fatalf("+l after flood tick = %d, want %d members + 5 joins (+2 headroom)", s.run.cur, m)
+	}
+	high := s.run.cur
+	n.membersMu.Lock()
+	for i := 21; i <= s.next; i++ { // the bots get kicked: 22 members again
+		delete(n.channelMembers["#c"], "u"+strconv.Itoa(i))
+	}
+	n.membersMu.Unlock()
+	s.advance(4 * time.Minute)
+	if s.run.cur != high {
+		t.Fatalf("lowered before the delay: +l %d -> %d", high, s.run.cur)
+	}
+	s.advance(5 * time.Minute)
+	if s.run.cur != 30 {
+		t.Fatalf("+l after lowering = %d, want floor 30", s.run.cur)
+	}
+	prev := 0
+	for _, l := range out.all()[1:] { // every +l move is more than the threshold (2)
+		v, _ := strconv.Atoi(strings.TrimPrefix(l, "MODE #c +l "))
+		if d := v - prev; d >= -2 && d <= 2 {
+			t.Fatalf("+l moved by %d: %v", d, out.all())
+		}
+		prev = v
+	}
 }
 
 // Logged-in admins get adminBurstFactor times the burst; everyone else keeps the configured one.

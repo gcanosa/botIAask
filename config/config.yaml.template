@@ -54,8 +54,18 @@ irc:
           # moderate: true also sets +m. IRC: "!guard [#chan] on [joins]|off"; dashboard IRC tab.
           # guard:
           #   - channel: '#mychannel'
-          #     joins: 5
+          #     joins: 5          # margin: free slots kept above the member count
           #     moderate: false
+          #     min_limit: 0      # per-channel floor, 0 = guard_settings.min_limit
+          # How +l moves (0 = default, negative = off). After the bot (re)joins a channel it sends -l
+          # and sets no +l for grace_seconds, so a server restart's reconnect wave isn't refused (471).
+          # +l is raised at once (plus threshold headroom), never set below min_limit, and lowered
+          # only after standing more than threshold too high for lower_delay_seconds.
+          # guard_settings:
+          #   grace_seconds: 180
+          #   min_limit: 30
+          #   lower_delay_seconds: 300
+          #   threshold: 2
         # Second network example (delete or uncomment/edit as needed):
         # - name: OtherNet
         #   enabled: false
