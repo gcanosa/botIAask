@@ -23,11 +23,12 @@ func TestIRCGuardHandler(t *testing.T) {
 		s.handleIRCGuard(rec, req)
 		return rec
 	}
-	if rec := do(http.MethodPut, "/api/irc/guard", `{"network":"LIBERA","guards":[{"channel":"#a","joins":3,"moderate":true},{"channel":"#x"}]}`); rec.Code != 200 ||
-		!strings.Contains(rec.Body.String(), `"guards":[{"channel":"#a","joins":3,"moderate":true,"interval":0,"min_limit":0},{"channel":"#x","joins":5,"moderate":false,"interval":0,"min_limit":0}]`) {
+	if rec := do(http.MethodPut, "/api/irc/guard", `{"network":"LIBERA","guards":[{"channel":"#a","joins":3,"moderate":true},{"channel":"#x","min_limit":50}]}`); rec.Code != 200 ||
+		!strings.Contains(rec.Body.String(), `"guards":[{"channel":"#a","joins":3,"moderate":true,"interval":0,"min_limit":0},{"channel":"#x","joins":5,"moderate":false,"interval":0,"min_limit":50}]`) ||
+		!strings.Contains(rec.Body.String(), `"default_min_limit":30`) {
 		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, bad := range []string{`[{"channel":"#a b"}]`, `[{"channel":"*"}]`, `[{"channel":"#a","joins":51}]`, `[{"channel":"#a","interval":2}]`} {
+	for _, bad := range []string{`[{"channel":"#a b"}]`, `[{"channel":"*"}]`, `[{"channel":"#a","joins":51}]`, `[{"channel":"#a","interval":2}]`, `[{"channel":"#a","min_limit":-1}]`} {
 		if rec := do(http.MethodPut, "/api/irc/guard", `{"network":"libera","guards":`+bad+`}`); rec.Code != 400 {
 			t.Fatalf("%s accepted: %d", bad, rec.Code)
 		}

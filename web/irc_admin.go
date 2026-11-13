@@ -958,5 +958,6 @@ func (s *Server) handleIRCGuard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{"network": netCfg.Name, "guards": guards, "known": known,
 		"default_joins": config.GuardDefaultJoins, "max_joins": config.GuardMaxJoins,
-		"default_interval": config.GuardDefaultInterval, "min_interval": config.GuardMinInterval, "max_interval": config.GuardMaxInterval})
+		"default_min_limit": netCfg.GuardSettings.Resolved().MinLimit,
+		"default_interval":  config.GuardDefaultInterval, "min_interval": config.GuardMinInterval, "max_interval": config.GuardMaxInterval})
 }

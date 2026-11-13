@@ -3590,14 +3590,14 @@ function renderIRCGuard(data) {
     const max = data.max_joins || 50;
     const def = data.default_joins || 5;
     const defEvery = data.default_interval || 30;
+    const defMin = data.default_min_limit ?? 30;
     const find = (c) => guards.find((g) => g.channel.toLowerCase() === c.toLowerCase());
     const rows = (data.known || []).slice();
     guards.forEach((g) => { if (!rows.some((r) => r.toLowerCase() === g.channel.toLowerCase())) rows.push(g.channel); });
     window._ircGuardRows = rows;
-    window._ircGuardList = guards; // keeps config-only fields (min_limit) on save
     window._ircGuardDefault = def;
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>';
         return;
     }
     const esc = financeEscapeHtml;
@@ -3608,6 +3608,7 @@ function renderIRCGuard(data) {
             <td style="padding: 0.5rem 0.75rem;"><input type="checkbox" id="irc-guard-on-${i}" ${g ? 'checked' : ''} onchange="saveIRCGuard()" aria-label="Guard ${esc(c)}"></td>
             <td style="padding: 0.5rem 0.75rem;"><input type="number" id="irc-guard-joins-${i}" min="1" max="${max}" value="${g ? g.joins : def}" class="btn btn-ghost" style="width: 5.5rem; padding: 0.4rem 0.5rem; text-align: left; cursor: text; margin: 0;" onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Joins per interval for ${esc(c)}"></td>
             <td style="padding: 0.5rem 0.75rem;"><input type="number" id="irc-guard-every-${i}" min="${data.min_interval || 5}" max="${data.max_interval || 600}" value="${g && g.interval ? g.interval : defEvery}" class="btn btn-ghost" style="width: 5.5rem; padding: 0.4rem 0.5rem; text-align: left; cursor: text; margin: 0;" onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Check interval in seconds for ${esc(c)}"></td>
+            <td style="padding: 0.5rem 0.75rem;"><input type="number" id="irc-guard-min-${i}" min="0" value="${g && g.min_limit ? g.min_limit : ''}" placeholder="${defMin}" class="btn btn-ghost" style="width: 5.5rem; padding: 0.4rem 0.5rem; text-align: left; cursor: text; margin: 0;" onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Minimum +l for ${esc(c)} (empty = network default)"></td>
             <td style="padding: 0.5rem 0.75rem;"><input type="checkbox" id="irc-guard-mod-${i}" ${g && g.moderate ? 'checked' : ''} onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Moderate ${esc(c)}"></td>
         </tr>`;
     }).join('');
@@ -3637,7 +3638,7 @@ async function saveIRCGuard(extra) {
             joins: parseInt(document.getElementById('irc-guard-joins-' + i)?.value, 10) || 0,
             moderate: !!document.getElementById('irc-guard-mod-' + i)?.checked,
             interval: parseInt(document.getElementById('irc-guard-every-' + i)?.value, 10) || 0,
-            min_limit: ((window._ircGuardList || []).find((g) => g.channel.toLowerCase() === c.toLowerCase()) || {}).min_limit || 0,
+            min_limit: parseInt(document.getElementById('irc-guard-min-' + i)?.value, 10) || 0,
         });
     });
     if (extra) guards.push(extra);
