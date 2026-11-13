@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,10 +27,10 @@ const (
 	maxAnnouncePerCycle = 10 // the rest stays unseen and goes out next cycle
 	firstPollAnnounce   = 3  // a newly followed sub announces only its newest posts
 	maxBody             = 2 << 20
-	requestGap          = 2 * time.Second // between subreddit requests and between announcements
+	requestGap          = 2 * time.Second // between announcements
 )
 
-// errBlocked: Reddit answered 403/429, so the rest of this cycle is skipped.
+// errBlocked: Reddit answered 403/429 or its HTML bot check; retried next cycle.
 var errBlocked = errors.New("blocked or rate limited by Reddit, retrying next cycle")
 
 // BotInterface is what the fetcher needs from *irc.Bot.
@@ -192,23 +193,36 @@ func (f *Fetcher) Fetch() {
 	defer f.fetchMu.Unlock()
 	cfg := f.config()
 
+	subs := cfg.Reddit.Subreddits
+	if len(subs) == 0 {
+		return
+	}
+	// One request for every followed sub (/r/a+b+c): Reddit rate-limits anonymous clients per
+	// IP, and one request per sub got the second one refused.
+	names := make([]string, len(subs))
+	for i, s := range subs {
+		names[i] = s.Name
+	}
+	posts, err := f.fetchFeed(names)
+	for _, s := range subs {
+		f.setStatus(s.Name, err)
+	}
+	if err != nil {
+		log.Printf("[REDDIT] %s: %v", strings.Join(names, "+"), err)
+		return
+	}
+	bySub := map[string][]Post{}
+	for _, p := range posts {
+		if i := config.FindRedditSub(subs, p.Sub); i >= 0 {
+			p.Sub = subs[i].Name
+			bySub[strings.ToLower(p.Sub)] = append(bySub[strings.ToLower(p.Sub)], p)
+		}
+	}
 	var fresh []Post
-	for i, sub := range cfg.Reddit.Subreddits {
-		if i > 0 {
-			time.Sleep(f.gap)
-		}
-		posts, err := f.fetchSub(sub.Name)
-		f.setStatus(sub.Name, err)
+	for _, s := range subs {
+		unseen, err := f.unseen(s.Name, bySub[strings.ToLower(s.Name)])
 		if err != nil {
-			log.Printf("[REDDIT] r/%s: %v", sub.Name, err)
-			if errors.Is(err, errBlocked) {
-				break
-			}
-			continue
-		}
-		unseen, err := f.unseen(sub.Name, posts)
-		if err != nil {
-			log.Printf("[REDDIT] r/%s: %v", sub.Name, err)
+			log.Printf("[REDDIT] r/%s: %v", s.Name, err)
 			continue
 		}
 		fresh = append(fresh, unseen...)
@@ -281,12 +295,12 @@ func (f *Fetcher) get(path string) (*http.Response, error) {
 		// Reddit's bot check answers 200 with an HTML page instead of the feed/JSON.
 		if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 			resp.Body.Close()
-			return nil, errBlocked
+			return nil, fmt.Errorf("%w (bot check page)", errBlocked)
 		}
 		return resp, nil
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		resp.Body.Close()
-		return nil, errBlocked
+		return nil, fmt.Errorf("%w (HTTP %d)", errBlocked, resp.StatusCode)
 	case http.StatusNotFound:
 		resp.Body.Close()
 		return nil, errors.New("subreddit not found")
@@ -296,8 +310,14 @@ func (f *Fetcher) get(path string) (*http.Response, error) {
 	}
 }
 
-func (f *Fetcher) fetchSub(name string) ([]Post, error) {
-	resp, err := f.get("/r/" + name + "/new/.rss?limit=25")
+// postSubRe takes the subreddit out of a post link (.../r/<sub>/comments/<id>/...).
+var postSubRe = regexp.MustCompile(`/r/([A-Za-z0-9_]+)/comments/`)
+
+// fetchFeed reads the newest 100 posts of all subs in one combined listing.
+// ponytail: more than 100 posts across all subs within one interval drops the overflow;
+// shorten the interval (or split into several requests) if that happens.
+func (f *Fetcher) fetchFeed(names []string) ([]Post, error) {
+	resp, err := f.get("/r/" + strings.Join(names, "+") + "/new/.rss?limit=100")
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +332,11 @@ func (f *Fetcher) fetchSub(name string) ([]Post, error) {
 		if id == "" || it.GUID == id { // not a post (t3_) entry
 			continue
 		}
-		p := Post{Sub: name, ID: it.GUID, Title: it.Title, Link: "https://redd.it/" + id}
+		m := postSubRe.FindStringSubmatch(it.Link)
+		if m == nil {
+			continue
+		}
+		p := Post{Sub: m[1], ID: it.GUID, Title: it.Title, Link: "https://redd.it/" + id}
 		if len(it.Authors) > 0 && it.Authors[0] != nil {
 			p.Author = strings.TrimPrefix(strings.TrimPrefix(it.Authors[0].Name, "/"), "u/")
 		}

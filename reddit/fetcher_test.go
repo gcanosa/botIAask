@@ -28,9 +28,10 @@ func (b *fakeBot) IsConnected() bool { return b.connected }
 
 // fakeReddit serves an Atom feed per sub; posts[sub] is a list of ids, minute = publish order.
 type fakeReddit struct {
-	mu     sync.Mutex
-	posts  map[string][]int // id n => published at base + n minutes
-	status int
+	mu       sync.Mutex
+	posts    map[string][]int // id n => published at base + n minutes
+	status   int
+	requests int
 }
 
 func (r *fakeReddit) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -44,12 +45,14 @@ func (r *fakeReddit) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprint(w, `{"data":{"over18":true}}`)
 		return
 	}
-	sub := strings.Split(req.URL.Path, "/")[2]
+	r.requests++
 	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>r</title>`)
-	for _, n := range r.posts[sub] {
-		fmt.Fprintf(w, `<entry><id>t3_%s%d</id><title>%s post %d &amp; more</title><author><name>/u/bob</name></author><link href="https://www.reddit.com/r/%s/comments/x/"/><published>%s</published><updated>%s</updated></entry>`,
-			sub, n, sub, n, sub, base.Add(time.Duration(n)*time.Minute).Format(time.RFC3339), base.Format(time.RFC3339))
+	for _, sub := range strings.Split(strings.Split(req.URL.Path, "/")[2], "+") { // one combined listing
+		for _, n := range r.posts[sub] {
+			fmt.Fprintf(w, `<entry><id>t3_%s%d</id><title>%s post %d &amp; more</title><author><name>/u/bob</name></author><link href="https://www.reddit.com/r/%s/comments/%s%d/slug/"/><published>%s</published><updated>%s</updated></entry>`,
+				sub, n, sub, n, strings.ToUpper(sub), sub, n, base.Add(time.Duration(n)*time.Minute).Format(time.RFC3339), base.Format(time.RFC3339))
+		}
 	}
 	fmt.Fprint(w, `</feed>`)
 }
@@ -101,6 +104,10 @@ func TestFetchDedupOrderAndCaps(t *testing.T) {
 		t.Fatalf("routing/format: %q", got)
 	}
 
+	if fr.requests != 1 {
+		t.Fatalf("%d requests for 2 subs, want 1 combined", fr.requests)
+	}
+
 	// Nothing new: nothing announced.
 	f.Fetch()
 	if got := bot.take(); len(got) != 0 {
@@ -136,7 +143,7 @@ func TestFetchBlockedStopsCycle(t *testing.T) {
 	fr.status = http.StatusTooManyRequests
 	f.Fetch()
 	st := f.Statuses()
-	if st[0].OK || !strings.Contains(st[0].Error, "rate limited") || st[1].Error != "not yet polled" {
+	if st[0].OK || st[1].OK || !strings.Contains(st[1].Error, "HTTP 429") {
 		t.Fatalf("statuses: %+v", st)
 	}
 	if len(bot.take()) != 0 {
