@@ -1345,7 +1345,7 @@
                     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 1rem;">
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Network</label>
-                            <select id="irc-guard-network" class="btn btn-ghost" style="min-width: 9rem; margin: 0;" onchange="fetchIRCGuard()" aria-label="Network"></select>
+                            <select id="irc-guard-network" class="btn btn-ghost" style="min-width: 9rem; margin: 0;" onchange="fetchIRCGuard(true)" aria-label="Network"></select>
                         </div>
                         <div>
                             <label class="card-title" style="display: block; margin-bottom: 0.25rem;">Other channel</label>
@@ -1365,7 +1365,7 @@
                                     <th style="padding: 0.5rem 0.75rem;" title="Moderate: only voiced users and above can talk">+m</th>
                                 </tr>
                             </thead>
-                            <tbody id="irc-guard-list"></tbody>
+                            <tbody id="irc-guard-list" data-keep-edits></tbody>
                         </table>
                     </div>
                     <p id="irc-guard-status" class="mono" style="font-size: 0.7rem; margin-top: 0.5rem; color: var(--text-muted);"></p>

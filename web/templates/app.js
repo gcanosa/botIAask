@@ -3576,6 +3576,22 @@ function addIRCYouTube() {
     saveIRCYouTube((window._ircYouTubeEnabled || []).concat([c]));
 }
 
+// The 5s status poll re-runs fetchIRCNetworks, which re-fetches and re-renders every admin card, so a
+// card with editable inputs must not be rebuilt under the admin's hands: mark its container
+// data-keep-edits and render through setHTMLKeepEdits. A poll render is skipped once the admin typed
+// in it; a save/network switch passes force=true. A skipped render must not touch any state tied to
+// the DOM (row index lists, etc.): only update it when this returns true.
+document.addEventListener('input', (e) => {
+    const box = e.target.closest?.('[data-keep-edits]');
+    if (box) box.dataset.dirty = '1';
+});
+function setHTMLKeepEdits(el, html, force) {
+    if (!force && el.dataset.dirty) return false;
+    delete el.dataset.dirty;
+    el.innerHTML = html;
+    return true;
+}
+
 function ircGuardSetStatus(msg, isErr) {
     const el = document.getElementById('irc-guard-status');
     if (!el) return;
@@ -3585,7 +3601,7 @@ function ircGuardSetStatus(msg, isErr) {
 
 // One row per configured channel plus any extra guarded one; unguarded rows keep their inputs
 // (default joins, +m off) so ticking "Guard" saves what is shown.
-function renderIRCGuard(data) {
+function renderIRCGuard(data, force) {
     const tbody = document.getElementById('irc-guard-list');
     if (!tbody) return;
     const guards = data.guards || [];
@@ -3596,14 +3612,8 @@ function renderIRCGuard(data) {
     const find = (c) => guards.find((g) => g.channel.toLowerCase() === c.toLowerCase());
     const rows = (data.known || []).slice();
     guards.forEach((g) => { if (!rows.some((r) => r.toLowerCase() === g.channel.toLowerCase())) rows.push(g.channel); });
-    window._ircGuardRows = rows;
-    window._ircGuardDefault = def;
-    if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>';
-        return;
-    }
     const esc = financeEscapeHtml;
-    tbody.innerHTML = rows.map((c, i) => {
+    const html = !rows.length ? '<tr><td colspan="6" style="padding: 0.75rem; color: var(--text-muted);">No channels configured on this network.</td></tr>' : rows.map((c, i) => {
         const g = find(c);
         return `<tr style="border-top: 1px solid var(--glass-border);">
             <td style="padding: 0.5rem 0.75rem;">${esc(c)}</td>
@@ -3614,15 +3624,18 @@ function renderIRCGuard(data) {
             <td style="padding: 0.5rem 0.75rem;"><input type="checkbox" id="irc-guard-mod-${i}" ${g && g.moderate ? 'checked' : ''} onchange="if (document.getElementById('irc-guard-on-${i}').checked) saveIRCGuard()" aria-label="Moderate ${esc(c)}"></td>
         </tr>`;
     }).join('');
+    if (!setHTMLKeepEdits(tbody, html, force)) return;
+    window._ircGuardRows = rows;
+    window._ircGuardDefault = def;
 }
 
-async function fetchIRCGuard() {
+async function fetchIRCGuard(force) {
     const network = document.getElementById('irc-guard-network')?.value || '';
     if (!network) return;
     try {
         const res = await fetch('/api/irc/guard?network=' + encodeURIComponent(network));
         if (!res.ok) throw new Error(await res.text());
-        renderIRCGuard(await res.json());
+        renderIRCGuard(await res.json(), force);
         ircGuardSetStatus('');
     } catch (e) {
         ircGuardSetStatus(String(e), true);
@@ -3648,10 +3661,10 @@ async function saveIRCGuard(extra) {
         const res = await fetch('/api/irc/guard', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ network, guards }) });
         if (!res.ok) {
             const msg = (await res.text()) || 'Save failed';
-            await fetchIRCGuard(); // reload the saved state first: it clears the status line
+            await fetchIRCGuard(true); // reload the saved state first: it clears the status line
             return ircGuardSetStatus(msg, true);
         }
-        renderIRCGuard(await res.json());
+        renderIRCGuard(await res.json(), true);
         ircGuardSetStatus('Saved to config and applied.');
     } catch (e) {
         ircGuardSetStatus(String(e), true);
