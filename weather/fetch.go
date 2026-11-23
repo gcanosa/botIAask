@@ -23,38 +23,38 @@ type LocationLabel struct {
 
 // Current is right-now conditions.
 type Current struct {
-	TempC      float64 `json:"temp_c"`
-	ApparentC  float64 `json:"apparent_c"`
-	Code       int     `json:"code"`
-	Summary    string  `json:"summary"`
-	Icon       string  `json:"icon"`
-	WindKmh    float64 `json:"wind_kmh"`
-	Humidity   int     `json:"humidity"`
-	IsDay      int     `json:"is_day"`
+	TempC     float64 `json:"temp_c"`
+	ApparentC float64 `json:"apparent_c"`
+	Code      int     `json:"code"`
+	Summary   string  `json:"summary"`
+	Icon      string  `json:"icon"`
+	WindKmh   float64 `json:"wind_kmh"`
+	Humidity  int     `json:"humidity"`
+	IsDay     int     `json:"is_day"`
 }
 
 // Day is one calendar row in the daily forecast.
 type Day struct {
-	Date     string  `json:"date"`
-	Weekday  string  `json:"weekday"`
-	Code     int     `json:"code"`
-	Summary  string  `json:"summary"`
-	Icon     string  `json:"icon"`
-	MaxC     float64 `json:"max_c"`
-	MinC     float64 `json:"min_c"`
-	PoP      int     `json:"pop"`
+	Date    string  `json:"date"`
+	Weekday string  `json:"weekday"`
+	Code    int     `json:"code"`
+	Summary string  `json:"summary"`
+	Icon    string  `json:"icon"`
+	MaxC    float64 `json:"max_c"`
+	MinC    float64 `json:"min_c"`
+	PoP     int     `json:"pop"`
 }
 
 // Snapshot is the API payload for the web panel.
 type Snapshot struct {
-	OK         bool     `json:"ok"`
-	Message    string   `json:"message,omitempty"`
-	Location   string   `json:"location,omitempty"`
-	Timezone   string   `json:"timezone,omitempty"`
-	FetchedAt  string   `json:"fetched_at,omitempty"`
-	Current    *Current `json:"current,omitempty"`
-	Daily      []Day    `json:"daily,omitempty"`
-	Attribution string `json:"attribution"`
+	OK          bool     `json:"ok"`
+	Message     string   `json:"message,omitempty"`
+	Location    string   `json:"location,omitempty"`
+	Timezone    string   `json:"timezone,omitempty"`
+	FetchedAt   string   `json:"fetched_at,omitempty"`
+	Current     *Current `json:"current,omitempty"`
+	Daily       []Day    `json:"daily,omitempty"`
+	Attribution string   `json:"attribution"`
 }
 
 // FetchSnapshot resolves query (e.g. "Barcelona, Spain") and loads forecast from Open-Meteo.
@@ -82,20 +82,44 @@ func FetchSnapshot(ctx context.Context, client *http.Client, query string) (*Sna
 	return snap, nil
 }
 
-type geoResp struct {
-	Results []struct {
-		Name      string  `json:"name"`
-		Latitude  float64 `json:"latitude"`
-		Longitude float64 `json:"longitude"`
-		Country   string  `json:"country"`
-		Admin1    string  `json:"admin1"`
-	} `json:"results"`
+type geoPlace struct {
+	Name        string  `json:"name"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"country_code"`
+	Admin1      string  `json:"admin1"`
 }
 
-func geocode(ctx context.Context, client *http.Client, name string) (*LocationLabel, error) {
+type geoResp struct {
+	Results []geoPlace `json:"results"`
+}
+
+// geoAlias maps country spellings Open-Meteo's search does not know to ISO codes.
+// ponytail: four common ones; add more when someone hits another.
+var geoAlias = map[string]string{"czech republic": "cz", "uk": "gb", "usa": "us", "turkey": "tr"}
+
+// preferHint moves the first place whose country, country code or region equals one of the
+// comma-separated parts of hint to the front.
+func preferHint(res []geoPlace, hint string) {
+	for _, part := range strings.Split(hint, ",") {
+		h := strings.ToLower(strings.TrimSpace(part))
+		if a, ok := geoAlias[h]; ok {
+			h = a
+		}
+		for i, r := range res {
+			if strings.EqualFold(r.Country, h) || strings.EqualFold(r.CountryCode, h) || strings.EqualFold(r.Admin1, h) {
+				res[0], res[i] = res[i], res[0]
+				return
+			}
+		}
+	}
+}
+
+func geoSearch(ctx context.Context, client *http.Client, name string, count int) ([]geoPlace, error) {
 	u := "https://geocoding-api.open-meteo.com/v1/search?" + url.Values{
-		"name":    {name},
-		"count":   {"1"},
+		"name":     {name},
+		"count":    {strconv.Itoa(count)},
 		"language": {"en"},
 	}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -116,10 +140,28 @@ func geocode(ctx context.Context, client *http.Client, name string) (*LocationLa
 	if err := json.NewDecoder(res.Body).Decode(&g); err != nil {
 		return nil, err
 	}
-	if len(g.Results) == 0 {
-		return nil, nil
+	return g.Results, nil
+}
+
+func geocode(ctx context.Context, client *http.Client, name string) (*LocationLabel, error) {
+	results, err := geoSearch(ctx, client, name, 1)
+	if err != nil {
+		return nil, err
 	}
-	r := g.Results[0]
+	if len(results) == 0 {
+		// The search only understands some "City, Qualifier" forms ("Berlin, Germany" works,
+		// "Prague, Czech Republic" does not: it knows the country as "Czechia"). Retry on the
+		// city alone and let the qualifier pick among the candidates.
+		city, hint, ok := strings.Cut(name, ",")
+		if !ok {
+			return nil, nil
+		}
+		if results, err = geoSearch(ctx, client, strings.TrimSpace(city), 10); err != nil || len(results) == 0 {
+			return nil, err
+		}
+		preferHint(results, hint)
+	}
+	r := results[0]
 	var display string
 	if r.Country != "" {
 		if r.Admin1 != "" && r.Admin1 != r.Name {
@@ -155,11 +197,11 @@ type fcCurrent struct {
 }
 
 type fcDaily struct {
-	Time                    []string   `json:"time"`
-	WeatherCode             []int      `json:"weather_code"`
-	Temperature2mMax        []float64  `json:"temperature_2m_max"`
-	Temperature2mMin        []float64  `json:"temperature_2m_min"`
-	PrecipitationProbMax    []int      `json:"precipitation_probability_max"`
+	Time                 []string  `json:"time"`
+	WeatherCode          []int     `json:"weather_code"`
+	Temperature2mMax     []float64 `json:"temperature_2m_max"`
+	Temperature2mMin     []float64 `json:"temperature_2m_min"`
+	PrecipitationProbMax []int     `json:"precipitation_probability_max"`
 }
 
 func forecast(ctx context.Context, client *http.Client, loc *LocationLabel) (*Snapshot, error) {
@@ -262,12 +304,12 @@ func forecast(ctx context.Context, client *http.Client, loc *LocationLabel) (*Sn
 	}
 
 	out := &Snapshot{
-		OK:         true,
-		Location:   locName,
-		Timezone:   tzName,
-		FetchedAt:  time.Now().UTC().Format(time.RFC3339),
-		Current:    &cur,
-		Daily:      days,
+		OK:          true,
+		Location:    locName,
+		Timezone:    tzName,
+		FetchedAt:   time.Now().UTC().Format(time.RFC3339),
+		Current:     &cur,
+		Daily:       days,
 		Attribution: "open-meteo.com",
 	}
 	return out, nil

@@ -303,7 +303,8 @@ func (f *Fetcher) get(path string) (*http.Response, error) {
 		return nil, fmt.Errorf("%w (HTTP %d)", errBlocked, resp.StatusCode)
 	case http.StatusNotFound:
 		resp.Body.Close()
-		return nil, errors.New("subreddit not found")
+		// Since 2026-11-13 Reddit answers every .rss URL (real subs too) with this 404 Atom feed.
+		return nil, errors.New("feed not found (Reddit ended RSS support on 2026-11-13)")
 	default:
 		resp.Body.Close()
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
