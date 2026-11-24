@@ -14,16 +14,15 @@ import (
 )
 
 // webhookEventTypes maps X-GitHub-Event names to the Events API type names ExtractAnnouncement
-// understands. The payloads match (push aside, see extractPush), so one code path serves both.
+// understands. The payloads match (push aside, see webhookPush), so one code path serves both.
 var webhookEventTypes = map[string]string{
 	"push": "PushEvent", "pull_request": "PullRequestEvent", "release": "ReleaseEvent",
 	"issues": "IssuesEvent", "create": "CreateEvent", "delete": "DeleteEvent",
 }
 
 type webhookJob struct {
-	repo  config.GitHubTrackerRepoConfig
-	token string
-	ev    RawEvent
+	repo config.GitHubTrackerRepoConfig
+	ev   RawEvent
 }
 
 // HandleWebhook verifies (HMAC-SHA256 over the raw body) and queues one webhook delivery,
@@ -76,16 +75,12 @@ func (f *Fetcher) HandleWebhook(event, delivery, signature string, body []byte) 
 	if !f.bot.IsConnected() {
 		return http.StatusServiceUnavailable
 	}
-	token, err := f.cryptor.Decrypt(repo.TokenEncrypted)
-	if err != nil {
-		token = "" // only used to look up a missing commit title; the announcement still goes out
-	}
 	ev := RawEvent{ID: delivery, Type: typ, Payload: body, CreatedAt: time.Now()}
 	ev.Actor.Login, ev.Repo.Name = p.Sender.Login, p.Repository.FullName
 
 	f.hookOnce.Do(func() { guard.Go("github webhook", f.hookWorker) })
 	select {
-	case f.hooks <- webhookJob{repo, token, ev}:
+	case f.hooks <- webhookJob{repo, ev}:
 		return http.StatusAccepted
 	default: // ponytail: bounded queue, 64 pending deliveries; a flood gets 503 (GitHub redelivers)
 		return http.StatusServiceUnavailable
@@ -94,6 +89,6 @@ func (f *Fetcher) HandleWebhook(event, delivery, signature string, body []byte) 
 
 func (f *Fetcher) hookWorker() {
 	for j := range f.hooks {
-		f.announceNewEvents(j.repo, j.token, -1, []RawEvent{j.ev})
+		f.announce(j.repo, eventAnnouncements(j.repo, []RawEvent{j.ev}), false)
 	}
 }

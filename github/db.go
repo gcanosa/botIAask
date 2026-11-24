@@ -56,7 +56,52 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("github: create repo_etags: %w", err)
 	}
 
+	// Last announced head per branch: the poller announces only what is new since this SHA.
+	_, err = sqldb.Exec(`
+		CREATE TABLE IF NOT EXISTS branch_heads (
+			repo TEXT NOT NULL,
+			branch TEXT NOT NULL,
+			sha TEXT NOT NULL,
+			PRIMARY KEY (repo, branch)
+		)
+	`)
+	if err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("github: create branch_heads: %w", err)
+	}
+
 	return &Database{db: sqldb}, nil
+}
+
+// BranchHeads returns branch -> head SHA for repo (empty before the repo's first poll).
+func (d *Database) BranchHeads(repo string) (map[string]string, error) {
+	rows, err := d.db.Query(`SELECT branch, sha FROM branch_heads WHERE repo = ?`, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var branch, sha string
+		if err := rows.Scan(&branch, &sha); err != nil {
+			return nil, err
+		}
+		out[branch] = sha
+	}
+	return out, rows.Err()
+}
+
+func (d *Database) SetBranchHead(repo, branch, sha string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO branch_heads (repo, branch, sha) VALUES (?, ?, ?)
+		ON CONFLICT(repo, branch) DO UPDATE SET sha = excluded.sha
+	`, repo, branch, sha)
+	return err
+}
+
+func (d *Database) DeleteBranchHead(repo, branch string) error {
+	_, err := d.db.Exec(`DELETE FROM branch_heads WHERE repo = ? AND branch = ?`, repo, branch)
+	return err
 }
 
 // EventKey builds the stable dedup key for a repo+event ID pair.

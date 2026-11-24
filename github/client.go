@@ -61,12 +61,10 @@ func newAPIRequest(ctx context.Context, url, token string) (*http.Request, error
 	return req, nil
 }
 
-// FetchRepoEvents polls GitHub's repo Events API. When etag is non-empty it's sent as
-// If-None-Match; a 304 response short-circuits with NotModified=true and no further
-// parsing, costing nothing against the rate limit. token, when non-empty, is sent as a
-// Bearer credential (works for both classic and fine-grained PATs).
-func FetchRepoEvents(ctx context.Context, owner, repo, token, etag string) (*FetchResult, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/events", apiBase, owner, repo)
+// conditionalGet does one GET with If-None-Match and decodes a 200 body into out. A 304
+// short-circuits with NotModified=true (free against the rate limit). token, when non-empty,
+// is sent as a Bearer credential (works for both classic and fine-grained PATs).
+func conditionalGet(ctx context.Context, url, token, etag string, out any) (*FetchResult, error) {
 	req, err := newAPIRequest(ctx, url, token)
 	if err != nil {
 		return nil, err
@@ -100,10 +98,61 @@ func FetchRepoEvents(ctx context.Context, owner, repo, token, etag string) (*Fet
 		return result, fmt.Errorf("github: unexpected status %d: %s", resp.StatusCode, body)
 	}
 
-	if err := httpx.DecodeJSON(resp.Body, httpx.MaxBody, &result.Events); err != nil {
-		return result, fmt.Errorf("github: decode events: %w", err)
+	if err := httpx.DecodeJSON(resp.Body, httpx.MaxBody, out); err != nil {
+		return result, fmt.Errorf("github: decode: %w", err)
 	}
 	return result, nil
+}
+
+// FetchRepoEvents polls GitHub's repo Events API (PRs, issues, releases, branch/tag
+// create/delete; pushes come from FetchBranches/FetchCommits, the Events API lags them).
+func FetchRepoEvents(ctx context.Context, owner, repo, token, etag string) (*FetchResult, error) {
+	var events []RawEvent
+	result, err := conditionalGet(ctx, fmt.Sprintf("%s/repos/%s/%s/events", apiBase, owner, repo), token, etag, &events)
+	if result != nil {
+		result.Events = events
+	}
+	return result, err
+}
+
+// Branch is one entry of GET /repos/{owner}/{repo}/branches: a name and its head SHA.
+type Branch struct {
+	Name   string `json:"name"`
+	Commit struct {
+		SHA string `json:"sha"`
+	} `json:"commit"`
+}
+
+// FetchBranches lists branch heads, the real-time signal that something was pushed.
+// ponytail: first 100 branches only (alphabetical), page when a repo really has more.
+func FetchBranches(ctx context.Context, owner, repo, token, etag string) (*FetchResult, []Branch, error) {
+	var branches []Branch
+	result, err := conditionalGet(ctx, fmt.Sprintf("%s/repos/%s/%s/branches?per_page=100", apiBase, owner, repo), token, etag, &branches)
+	return result, branches, err
+}
+
+// Commit is one entry of GET /repos/{owner}/{repo}/commits.
+type Commit struct {
+	SHA    string `json:"sha"`
+	Commit struct {
+		Message string `json:"message"`
+		Author  struct {
+			Name string `json:"name"`
+		} `json:"author"`
+		Committer struct {
+			Date time.Time `json:"date"`
+		} `json:"committer"`
+	} `json:"commit"`
+	Author *struct { // null when the commit email is not linked to a GitHub account
+		Login string `json:"login"`
+	} `json:"author"`
+}
+
+// FetchCommits returns up to n commits reachable from sha, newest first (nil on 404).
+func FetchCommits(ctx context.Context, owner, repo, token, sha string, n int) ([]Commit, error) {
+	var commits []Commit
+	err := fetchOne(ctx, fmt.Sprintf("%s/repos/%s/%s/commits?sha=%s&per_page=%d", apiBase, owner, repo, sha, n), token, &commits)
+	return commits, err
 }
 
 func parseRateRemaining(s string) int {

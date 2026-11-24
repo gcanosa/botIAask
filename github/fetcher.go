@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,7 +34,7 @@ const seenEventRetentionDays = 90
 
 // announcePace is the delay between consecutive IRC broadcasts within one Fetch() cycle,
 // avoiding a flood when a repo has queued up many events since the last successful poll.
-const announcePace = 2 * time.Second
+var announcePace = 2 * time.Second // var: tests zero it
 
 type Fetcher struct {
 	cfg     *config.Config
@@ -264,6 +266,19 @@ func (f *Fetcher) pollRepo(r config.GitHubTrackerRepoConfig) (stop bool) {
 		return false
 	}
 
+	// Commits come from branch heads (real time, one line per commit); the Events API only
+	// lags them by minutes to hours, so it is used for everything else.
+	var anns []Announcement
+	if allowedEventTypeSet(r.EventTypes)("PushEvent") {
+		pushes, rate, err := f.pollBranches(ctx, r, token)
+		if err != nil {
+			log.Printf("[GITHUB] Failed to poll branches for %s: %v", repoKey, err)
+			f.setRepoStatus(repoKey, RepoStatus{OK: false, Error: err.Error(), RateRemaining: rate})
+			return false
+		}
+		anns = pushes
+	}
+
 	result, err := FetchRepoEvents(ctx, r.Owner, r.Repo, token, etag)
 	if err != nil {
 		log.Printf("[GITHUB] Failed to fetch events for %s: %v", repoKey, err)
@@ -280,13 +295,12 @@ func (f *Fetcher) pollRepo(r config.GitHubTrackerRepoConfig) (stop bool) {
 			log.Printf("[GITHUB] Failed to store ETag for %s: %v", repoKey, err)
 		}
 	}
-
-	if result.NotModified {
-		f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
-		return false
+	if !result.NotModified {
+		anns = append(anns, eventAnnouncements(r, result.Events)...)
 	}
 
-	f.announceNewEvents(r, token, result.RateRemaining, result.Events)
+	// No stored ETag = the repo's first poll: record its history without printing it.
+	f.announce(r, anns, etag == "")
 	f.setRepoStatus(repoKey, RepoStatus{OK: true, RateRemaining: result.RateRemaining})
 
 	// The poll interval is the backoff: stop working through the rest of the repo
@@ -298,25 +312,104 @@ func (f *Fetcher) pollRepo(r config.GitHubTrackerRepoConfig) (stop bool) {
 	return false
 }
 
+// pollBranches turns branch moves into one announcement per new commit. While nothing moved
+// it costs one conditional request (a 304 is free against the rate limit); each moved
+// branch costs one more. The branch list's ETag is stored only once every moved branch was
+// handled, so a failed fetch is retried instead of being hidden behind a 304.
+// ponytail: a branch seen for the first time is only remembered (its create event announces
+// it) and the first poll of a repo only records heads, so the commits of a new branch's first
+// push are not listed.
+func (f *Fetcher) pollBranches(ctx context.Context, r config.GitHubTrackerRepoConfig, token string) (anns []Announcement, rate int, err error) {
+	repoKey := r.FullName()
+	etagKey := repoKey + "/branches"
+	etag, _ := f.db.GetETag(etagKey)
+	res, branches, err := FetchBranches(ctx, r.Owner, r.Repo, token, etag)
+	rate = -1
+	if res != nil {
+		rate = res.RateRemaining
+	}
+	if err != nil || res.NotModified {
+		return nil, rate, err
+	}
+	heads, err := f.db.BranchHeads(repoKey)
+	if err != nil {
+		return nil, rate, err
+	}
+
+	complete := true
+	live := make(map[string]bool, len(branches))
+	for _, b := range branches {
+		live[b.Name] = true
+		old, known := heads[b.Name]
+		if old == b.Commit.SHA {
+			continue
+		}
+		if known {
+			commits, err := FetchCommits(ctx, r.Owner, r.Repo, token, b.Commit.SHA, 20)
+			if err != nil {
+				log.Printf("[GITHUB] Failed to fetch commits of %s:%s: %v", repoKey, b.Name, err)
+				complete = false
+				continue
+			}
+			anns = append(anns, branchAnnouncements(repoKey, b.Name, old, commits)...)
+		}
+		if err := f.db.SetBranchHead(repoKey, b.Name, b.Commit.SHA); err != nil {
+			log.Printf("[GITHUB] Failed to store head of %s:%s: %v", repoKey, b.Name, err)
+			complete = false
+		}
+	}
+	for name := range heads {
+		if !live[name] {
+			_ = f.db.DeleteBranchHead(repoKey, name)
+		}
+	}
+	if complete && res.ETag != "" {
+		if err := f.db.SetETag(etagKey, res.ETag); err != nil {
+			log.Printf("[GITHUB] Failed to store branch ETag for %s: %v", repoKey, err)
+		}
+	}
+	return anns, rate, nil
+}
+
 // DB exposes the fetcher's database for "!gh search" (irc/ has no other path to it —
 // Fetcher.db is otherwise private).
 func (f *Fetcher) DB() *Database { return f.db }
 
-func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, token string, rateRemaining int, events []RawEvent) {
-	repoKey := r.FullName()
+// eventAnnouncements turns raw events into announcements, oldest first as GitHub sends
+// them newest first.
+func eventAnnouncements(r config.GitHubTrackerRepoConfig, events []RawEvent) []Announcement {
 	meta := RepoMeta{CachedDescription: r.CachedDescription}
-	eventTypeAllowed := allowedEventTypeSet(r.EventTypes)
-
-	// GitHub returns newest-first; walk oldest-first so seen-marking and the collapsed
-	// summaries below both read chronologically (same reversal rss/fetcher.go does for
-	// feed entries).
-	var toAnnounce []Announcement
+	allowed := allowedEventTypeSet(r.EventTypes)
+	var out []Announcement
 	for i := len(events) - 1; i >= 0; i-- {
 		ev := events[i]
-		if !eventTypeAllowed(ev.Type) {
+		if !allowed(ev.Type) {
 			continue
 		}
-		key := EventKey(r.Owner, r.Repo, ev.ID)
+		if ev.Type == "PushEvent" { // webhook deliveries carry commits; polled pushes carry none
+			out = append(out, webhookPush(ev)...)
+			continue
+		}
+		if ann, ok := ExtractAnnouncement(ev, meta); ok {
+			ann.ID, ann.At = ev.ID, ev.CreatedAt
+			out = append(out, ann)
+		}
+	}
+	return out
+}
+
+// maxLines caps what one repo prints per cycle; the rest is summed up in one line.
+const maxLines = 5
+
+// announce prints what is new, oldest first. Everything new is recorded (so a commit seen on
+// one branch is not repeated when another branch merges it) but at most maxLines are printed.
+// silent records without printing.
+func (f *Fetcher) announce(r config.GitHubTrackerRepoConfig, anns []Announcement, silent bool) {
+	sort.SliceStable(anns, func(i, j int) bool { return anns[i].At.Before(anns[j].At) })
+	repoKey := r.FullName()
+	var fresh []Announcement
+	for _, ann := range anns {
+		key := EventKey(r.Owner, r.Repo, ann.ID)
 		seen, err := f.db.EventSeen(key)
 		if err != nil {
 			log.Printf("[GITHUB] DB error checking seen state for %s: %v", key, err)
@@ -325,55 +418,32 @@ func (f *Fetcher) announceNewEvents(r config.GitHubTrackerRepoConfig, token stri
 		if seen {
 			continue
 		}
-		ann, ok := ExtractAnnouncement(ev, meta)
-		if !ok {
-			continue
-		}
-
 		// Mark seen BEFORE broadcasting so a failed broadcast doesn't cause a retry storm
-		// (same ordering as rss/fetcher.go's MarkSeen-before-Broadcast). Store the
-		// pre-collapse RefID/Message (not the collapsed/suffixed broadcast text) so
-		// "!gh search" sees one row per real event even though broadcast collapses bursts.
-		if err := f.db.MarkEventSeen(key, repoKey, ann.Kind, ann.RefID, ann.Message, ev.CreatedAt); err != nil {
+		// (same ordering as rss/fetcher.go's MarkSeen-before-Broadcast).
+		if err := f.db.MarkEventSeen(key, repoKey, ann.Kind, ann.RefID, ann.Message, ann.At); err != nil {
 			log.Printf("[GITHUB] Failed to mark event seen for %s: %v", key, err)
 			continue
 		}
-
-		toAnnounce = append(toAnnounce, ann)
+		fresh = append(fresh, ann)
+	}
+	if silent || len(fresh) == 0 {
+		return
 	}
 
-	// The Events API no longer carries commit messages, so fetch the title of the newest
-	// push (the only one that survives collapsing) — one extra call per repo per cycle.
-	// Best-effort: any failure, or a nearly spent rate budget, keeps the title-less line.
-	if rateRemaining < 0 || rateRemaining > 5 {
-		for i := len(toAnnounce) - 1; i >= 0; i-- {
-			if toAnnounce[i].Kind != "push" {
-				continue
-			}
-			if enrich := toAnnounce[i].Enrich; enrich != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				ci, err := FetchCommit(ctx, r.Owner, r.Repo, token, toAnnounce[i].HeadSHA)
-				cancel()
-				if err == nil && ci != nil && ci.Message != "" {
-					toAnnounce[i].Message = enrich(ci.Message)
-				}
-			}
-			break
-		}
-	}
-
-	// Collapse to at most one line per event kind so a burst of activity (several pushes
-	// in a session, or a first-time catch-up) doesn't flood the channel one line per event.
-	// Shortening happens here, AFTER collapsing (not inside ExtractAnnouncement), so a
-	// burst of many raw events costs at most 3 shortener calls per repo per cycle instead
-	// of one per raw event — the URL shortener is a network call to a third-party service
-	// with its own multi-service fallback chain, unbounded by Fetch()'s own context.
+	// Shortening happens here, after the cap, so a burst costs at most maxLines shortener
+	// calls (a network call to a third-party service with its own fallback chain).
 	f.mu.Lock()
 	shortener := f.cfg.RSS.URLShortener
 	f.mu.Unlock()
-	for _, ann := range CollapseForBroadcast(toAnnounce) {
+	if extra := len(fresh) - maxLines; extra > 0 {
+		f.bot.Broadcast(r.Channels, colorize("14", "("+repoKey+")")+fmt.Sprintf(" +%d earlier updates not shown", extra))
+		fresh = fresh[extra:]
+	}
+	for i, ann := range fresh {
+		if i > 0 {
+			time.Sleep(announcePace)
+		}
 		f.bot.Broadcast(r.Channels, shortenAnnouncementLink(ann, shortener))
-		time.Sleep(announcePace)
 	}
 }
 

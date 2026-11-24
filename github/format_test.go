@@ -6,7 +6,7 @@ import (
 )
 
 func TestFormatPush_ShowsShortSHAOnce(t *testing.T) {
-	msg := formatPush("owner/repo", "alice", "main", 1, "", "", "https://github.com/owner/repo/commit/abcd1234", "abcd123")
+	msg := formatPush("owner/repo", "alice", "main", "fix it", "https://github.com/owner/repo/commit/abcd1234", "abcd123")
 	if !strings.Contains(msg, "[PUSH]") || strings.Count(msg, "abcd123") != 2 { // body + link URL
 		t.Fatalf("expected plain PUSH tag and SHA in body, got %q", msg)
 	}

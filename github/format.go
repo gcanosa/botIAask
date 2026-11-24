@@ -56,18 +56,12 @@ func prefix(tag, repoFullName, who string) string {
 	return tag + " " + colorize("14", "("+repoFullName+")") + " " + author(who)
 }
 
-func formatPush(repoFullName, pusher, branch string, size int, headline, more, link, shortSHA string) string {
-	base := prefix(ircTag("09", "PUSH", ""), repoFullName, pusher) + " pushed " + sha(shortSHA) + " to " + ref(branch)
-	if headline == "" {
-		// GitHub's Events API didn't include a commit list for this push, so there's no
-		// message to show — just the fact that something landed, and a link to it.
-		return base + sprintfLink(link)
-	}
-	return base + ": " + headline + more + sprintfLink(link)
+func formatPush(repoFullName, who, branch, title, link, shortSHA string) string {
+	return prefix(ircTag("09", "PUSH", ""), repoFullName, who) + " pushed " + sha(shortSHA) + " to " + ref(branch) + ": " + title + sprintfLink(link)
 }
 
 func formatPullRequest(repoFullName, who, action, refID, title, link string) string {
-	return prefix(ircTag("12", "PR", refID), repoFullName, who) + " " + action + ": " + title + sprintfLink(link)
+	return prefix(ircTag("12", "PR", refID), repoFullName, who) + " " + action + ": " + clip(title, maxTitle) + sprintfLink(link)
 }
 
 func formatRelease(repoFullName, who, tag, name, link string) string {
@@ -79,7 +73,7 @@ func formatRelease(repoFullName, who, tag, name, link string) string {
 }
 
 func formatIssue(repoFullName, who, action, refID, title, link string) string {
-	return prefix(ircTag("08", "ISSUE", refID), repoFullName, who) + " " + action + " issue: " + title + sprintfLink(link)
+	return prefix(ircTag("08", "ISSUE", refID), repoFullName, who) + " " + action + " issue: " + clip(title, maxTitle) + sprintfLink(link)
 }
 
 func formatCreate(repoFullName, who, refType, refID, link string) string {

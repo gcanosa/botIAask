@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func rawEvent(id, typ, actor, repo, payload string) RawEvent {
@@ -13,48 +14,98 @@ func rawEvent(id, typ, actor, repo, payload string) RawEvent {
 	return ev
 }
 
-func TestExtractAnnouncement_Push(t *testing.T) {
-	ev := rawEvent("1", "PushEvent", "alice", "owner/repo", `{
-		"ref": "refs/heads/main",
-		"size": 2,
-		"head": "abcd1234",
-		"before": "9876fedc",
-		"commits": [
-			{"sha": "9876fedc", "message": "earlier commit"},
-			{"sha": "abcd1234", "message": "fix: handle nil ptr\n\nlonger body"}
-		]
-	}`)
-	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
-	if !ok {
-		t.Fatal("expected push to be announced")
-	}
-	if ann.Kind != "push" {
-		t.Fatalf("expected kind push, got %q", ann.Kind)
-	}
-	if !strings.Contains(ann.Message, "alice") || !strings.Contains(ann.Message, "main") ||
-		!strings.Contains(ann.Message, "fix: handle nil ptr") || !strings.Contains(ann.Message, "+1 more") {
-		t.Fatalf("unexpected push message: %q", ann.Message)
-	}
-	if !strings.Contains(ann.Message, "compare/9876fedc...abcd1234") {
-		t.Fatalf("expected compare link for multi-commit push, got %q", ann.Message)
+// Pushes never come out of ExtractAnnouncement: the Events API lags them by up to hours,
+// so branch polling (and webhooks) own commits.
+func TestExtractAnnouncement_PushSkipped(t *testing.T) {
+	ev := rawEvent("1", "PushEvent", "alice", "owner/repo", `{"ref":"refs/heads/main","head":"abcd1234","before":"9876fedc"}`)
+	if _, ok := ExtractAnnouncement(ev, RepoMeta{}); ok {
+		t.Fatal("expected PushEvent to be skipped")
 	}
 }
 
-// TestExtractAnnouncement_PushTrimmedPayload covers the shape GitHub's public Events API
-// actually returns today: no "size"/"commits" fields at all.
-func TestExtractAnnouncement_PushTrimmedPayload(t *testing.T) {
-	ev := rawEvent("1b", "PushEvent", "alice", "owner/repo", `{
+func TestWebhookPush_OneLinePerCommitOldestFirst(t *testing.T) {
+	ev := rawEvent("d1", "PushEvent", "alice", "owner/repo", `{
 		"ref": "refs/heads/main",
-		"head": "abcd1234",
-		"before": "9876fedc"
+		"commits": [
+			{"id": "1111111aaaa", "message": "first\n\nbody", "timestamp": "2026-11-24T10:00:00Z", "author": {"name": "Alice A", "username": "alice"}},
+			{"id": "2222222bbbb", "message": "second", "timestamp": "2026-11-24T10:01:00Z", "author": {"name": "Bob B"}}
+		]
 	}`)
-	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
-	if !ok {
-		t.Fatal("expected trimmed push to still be announced")
+	anns := webhookPush(ev)
+	if len(anns) != 2 {
+		t.Fatalf("want 2 lines, got %d: %v", len(anns), anns)
 	}
-	if !strings.Contains(ann.Message, "alice") || !strings.Contains(ann.Message, "main") ||
-		!strings.Contains(ann.Message, "compare/9876fedc...abcd1234") {
-		t.Fatalf("unexpected trimmed push message: %q", ann.Message)
+	if !strings.Contains(anns[0].Message, "alice") || !strings.Contains(anns[0].Message, ": first") || strings.Contains(anns[0].Message, "body") {
+		t.Errorf("first line: %q", anns[0].Message)
+	}
+	if !strings.Contains(anns[1].Message, "Bob B") || !strings.Contains(anns[1].Message, "/commit/2222222bbbb") {
+		t.Errorf("second line: %q", anns[1].Message)
+	}
+	if anns[0].ID != "1111111aaaa" || anns[0].Kind != "push" || anns[0].RefID != "1111111" {
+		t.Errorf("unexpected id/kind/ref: %+v", anns[0])
+	}
+}
+
+func TestWebhookPush_IgnoresTagsAndEventsAPIPayloads(t *testing.T) {
+	tag := rawEvent("d2", "PushEvent", "alice", "owner/repo", `{"ref":"refs/tags/v1","commits":[{"id":"abc","message":"x"}]}`)
+	api := rawEvent("d3", "PushEvent", "alice", "owner/repo", `{"ref":"refs/heads/main","head":"abc","commits":[{"sha":"abc","message":"x"}]}`)
+	if len(webhookPush(tag)) != 0 || len(webhookPush(api)) != 0 {
+		t.Fatal("tag pushes and Events API commit lists must not announce")
+	}
+}
+
+func commitOf(sha, msg, login string, at string) Commit {
+	var c Commit
+	c.SHA, c.Commit.Message = sha, msg
+	c.Commit.Committer.Date, _ = time.Parse(time.RFC3339, at)
+	if login != "" {
+		c.Author = &struct {
+			Login string `json:"login"`
+		}{login}
+	} else {
+		c.Commit.Author.Name = "Plain Name"
+	}
+	return c
+}
+
+func TestBranchAnnouncements_StopsAtOldHeadOldestFirst(t *testing.T) {
+	commits := []Commit{ // newest first, as the API returns them
+		commitOf("ccc3333", "third", "alice", "2026-11-24T10:02:00Z"),
+		commitOf("bbb2222", "second", "", "2026-11-24T10:01:00Z"),
+		commitOf("aaa1111", "already announced", "alice", "2026-11-24T10:00:00Z"),
+		commitOf("000", "ancient", "alice", "2026-11-24T09:00:00Z"),
+	}
+	anns := branchAnnouncements("owner/repo", "main", "aaa1111", commits)
+	if len(anns) != 2 || anns[0].ID != "bbb2222" || anns[1].ID != "ccc3333" {
+		t.Fatalf("want [bbb2222 ccc3333], got %+v", anns)
+	}
+	if !strings.Contains(anns[0].Message, "Plain Name") || !strings.Contains(anns[1].Message, "alice") {
+		t.Errorf("author fallback wrong: %q / %q", anns[0].Message, anns[1].Message)
+	}
+}
+
+func TestBranchAnnouncements_UnknownOldHeadTakesEverything(t *testing.T) { // force push
+	commits := []Commit{commitOf("bbb", "b", "a", "2026-11-24T10:01:00Z"), commitOf("aaa", "a", "a", "2026-11-24T10:00:00Z")}
+	if n := len(branchAnnouncements("o/r", "main", "gone", commits)); n != 2 {
+		t.Fatalf("want 2, got %d", n)
+	}
+}
+
+// An amended/rebased chain can have a child dated before its parent; the lines must keep
+// chain order after the chronological sort in announce().
+func TestBranchAnnouncements_ChainOrderSurvivesBackwardsDates(t *testing.T) {
+	commits := []Commit{commitOf("child", "c", "a", "2026-11-24T09:00:00Z"), commitOf("parent", "p", "a", "2026-11-24T10:00:00Z")}
+	anns := branchAnnouncements("o/r", "main", "none", commits)
+	if anns[0].ID != "parent" || anns[1].At.Before(anns[0].At) {
+		t.Fatalf("chain order broken: %+v", anns)
+	}
+}
+
+func TestCommitAnnouncement_ClipsLongTitle(t *testing.T) {
+	long := strings.Repeat("é", 400) // multibyte: must clip on runes, not bytes
+	ann := commitAnnouncement("o/r", "a", "main", "abcdef1234", long, time.Time{})
+	if n := strings.Count(ann.Message, "é"); n != maxTitle-1 || !strings.Contains(ann.Message, "…") {
+		t.Fatalf("want %d runes + ellipsis, got %d: %q", maxTitle-1, n, ann.Message)
 	}
 }
 
@@ -170,52 +221,6 @@ func TestExtractAnnouncement_UnknownTypeSkipped(t *testing.T) {
 	}
 }
 
-func TestCollapseForBroadcast_MultiplePushesFoldToOneLine(t *testing.T) {
-	anns := []Announcement{
-		{RepoFullName: "owner/repo", Kind: "push", Message: "push 1"},
-		{RepoFullName: "owner/repo", Kind: "push", Message: "push 2 (latest)"},
-	}
-	out := CollapseForBroadcast(anns)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 collapsed line, got %d: %v", len(out), out)
-	}
-	if !strings.Contains(out[0].Message, "push 2 (latest)") || !strings.Contains(out[0].Message, "+1 more pushes") {
-		t.Fatalf("unexpected collapsed message: %q", out[0].Message)
-	}
-}
-
-// A kind first seen early but updated late must not print before a kind whose latest event is
-// older: lines follow the chronology of the events actually shown.
-func TestCollapseForBroadcast_OrderedByLatestEvent(t *testing.T) {
-	anns := []Announcement{
-		{Kind: "push", Message: "push old"},
-		{Kind: "release", Message: "release mid"},
-		{Kind: "push", Message: "push newest"},
-	}
-	out := CollapseForBroadcast(anns)
-	if len(out) != 2 || out[0].Kind != "release" || out[1].Kind != "push" {
-		t.Fatalf("want release then push, got %v", out)
-	}
-}
-
-func TestCollapseForBroadcast_DifferentKindsEachGetALine(t *testing.T) {
-	anns := []Announcement{
-		{RepoFullName: "owner/repo", Kind: "push", Message: "push 1"},
-		{RepoFullName: "owner/repo", Kind: "pull_request", Message: "pr opened"},
-		{RepoFullName: "owner/repo", Kind: "pull_request", Message: "pr merged"},
-	}
-	out := CollapseForBroadcast(anns)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 collapsed lines (push, pull_request), got %d: %v", len(out), out)
-	}
-	if out[0].Message != "push 1" {
-		t.Fatalf("expected single push line unchanged, got %q", out[0].Message)
-	}
-	if !strings.Contains(out[1].Message, "pr merged") || !strings.Contains(out[1].Message, "+1 more PR updates") {
-		t.Fatalf("unexpected pull_request line: %q", out[1].Message)
-	}
-}
-
 func TestExtractAnnouncement_Issue_OpenedAndClosed(t *testing.T) {
 	for _, action := range []string{"opened", "closed"} {
 		ev := rawEvent("8", "IssuesEvent", "dave", "owner/repo", fmt.Sprintf(`{
@@ -290,25 +295,6 @@ func TestExtractAnnouncement_Delete_Tag(t *testing.T) {
 	}
 }
 
-func TestCollapseForBroadcast_NewKindsEachGetALine(t *testing.T) {
-	anns := []Announcement{
-		{RepoFullName: "owner/repo", Kind: "issues", Message: "issue 1"},
-		{RepoFullName: "owner/repo", Kind: "issues", Message: "issue 2 (latest)"},
-		{RepoFullName: "owner/repo", Kind: "create", Message: "branch created"},
-		{RepoFullName: "owner/repo", Kind: "delete", Message: "branch deleted"},
-	}
-	out := CollapseForBroadcast(anns)
-	if len(out) != 3 {
-		t.Fatalf("expected 3 collapsed lines (issues, create, delete), got %d: %v", len(out), out)
-	}
-	if !strings.Contains(out[0].Message, "issue 2 (latest)") || !strings.Contains(out[0].Message, "+1 more issues") {
-		t.Fatalf("unexpected issues line: %q", out[0].Message)
-	}
-	if out[1].Message != "branch created" || out[2].Message != "branch deleted" {
-		t.Fatalf("unexpected create/delete lines: %q / %q", out[1].Message, out[2].Message)
-	}
-}
-
 func TestEventKey_StableAcrossReruns(t *testing.T) {
 	k1 := EventKey("owner", "repo", "123")
 	k2 := EventKey("owner", "repo", "123")
@@ -317,18 +303,5 @@ func TestEventKey_StableAcrossReruns(t *testing.T) {
 	}
 	if k1 != "owner/repo#123" {
 		t.Fatalf("unexpected key shape: %q", k1)
-	}
-}
-
-func TestExtractPush_TrimmedPayloadEnrichesTitle(t *testing.T) {
-	ev := RawEvent{ID: "1", Type: "PushEvent", Repo: struct {
-		Name string `json:"name"`
-	}{Name: "o/r"}, Payload: []byte(`{"ref":"refs/heads/main","head":"cd272faaaaaaaa","before":"0000000"}`)}
-	ann, ok := ExtractAnnouncement(ev, RepoMeta{})
-	if !ok || ann.Enrich == nil || ann.HeadSHA != "cd272faaaaaaaa" {
-		t.Fatalf("expected enrichable push, got ok=%v %+v", ok, ann)
-	}
-	if got := ann.Enrich("Fix thing"); !strings.Contains(got, ": Fix thing") {
-		t.Errorf("title missing: %q", got)
 	}
 }

@@ -2,10 +2,9 @@ package github
 
 import (
 	"encoding/json"
-	"fmt"
-	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RepoMeta is display metadata attached to an announcement, sourced from cached config
@@ -27,19 +26,19 @@ type Announcement struct {
 	// see shortenAnnouncementLink.
 	Link    string
 	Message string
-	// Enrich (push only, set when the Events API gave no commit list) re-renders Message
-	// with a commit title fetched separately via FetchCommit(HeadSHA); see fetcher.go.
-	HeadSHA string
-	Enrich  func(title string) string
+	// ID is the dedup id inside the repo: the event id, or the commit SHA for a push line
+	// (so a commit is announced once however it arrives: poll, webhook, or another branch).
+	ID string
+	// At orders lines chronologically within one cycle (commit or event time).
+	At time.Time
 }
 
 // ExtractAnnouncement turns a raw Events API entry into an Announcement, or ok=false if
 // the event type/action isn't one we announce (unknown type, a PR "synchronize", a
-// release that isn't newly published, etc).
+// release that isn't newly published, etc). Pushes are not handled here: see webhookPush
+// and branchAnnouncements.
 func ExtractAnnouncement(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	switch ev.Type {
-	case "PushEvent":
-		return extractPush(ev, meta)
 	case "PullRequestEvent":
 		return extractPullRequest(ev, meta)
 	case "ReleaseEvent":
@@ -55,65 +54,95 @@ func ExtractAnnouncement(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	}
 }
 
-type pushPayload struct {
-	Ref     string `json:"ref"`
-	Size    int    `json:"size"`
-	Head    string `json:"head"`
-	After   string `json:"after"` // webhook name for Head
-	Before  string `json:"before"`
-	Commits []struct {
-		SHA     string `json:"sha"`
-		Message string `json:"message"`
-	} `json:"commits"`
+// commitAnnouncement is the one-line announcement of a single commit: title only (first
+// line, clipped) and a link to the commit itself, so its preview shows that commit.
+func commitAnnouncement(repo, who, branch, sha, message string, at time.Time) Announcement {
+	short := sha
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	link := "https://github.com/" + repo + "/commit/" + sha
+	return Announcement{
+		RepoFullName: repo,
+		Kind:         "push",
+		RefID:        short,
+		Link:         link,
+		ID:           sha,
+		At:           at,
+		Message:      formatPush(repo, who, branch, clip(firstLine(message), maxTitle), link, short),
+	}
 }
 
-func extractPush(ev RawEvent, meta RepoMeta) (Announcement, bool) {
-	var p pushPayload
-	if err := json.Unmarshal(ev.Payload, &p); err != nil {
-		return Announcement{}, false
+// branchAnnouncements lists what a branch gained since its previous head. commits is
+// newest first (GET /commits?sha=head); the walk stops at old. If old is not among them
+// (a force push, or more than len(commits) new commits) everything fetched counts as new.
+func branchAnnouncements(repo, branch, old string, commits []Commit) []Announcement {
+	var out []Announcement
+	for _, c := range commits {
+		if c.SHA == old {
+			break
+		}
+		who := c.Commit.Author.Name
+		if c.Author != nil && c.Author.Login != "" {
+			who = c.Author.Login
+		}
+		out = append(out, commitAnnouncement(repo, who, branch, c.SHA, c.Commit.Message, c.Commit.Committer.Date))
 	}
-	if p.Head == "" { // webhook delivery: "after" and a real commit list instead of head/size
-		p.Head, p.Size = p.After, len(p.Commits)
+	// Oldest first. Commit dates are not monotonic along a chain (amend, rebase), so lift
+	// each to its parent's: the time sort in announce() then never reorders a chain.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
-	if p.Head == "" {
-		return Announcement{}, false
-	}
-	branch := strings.TrimPrefix(p.Ref, "refs/heads/")
-
-	// GitHub's public Events API stopped populating "commits"/"size" on PushEvent payloads
-	// (confirmed empirically against github.com in 2026-09; still checked here in case a
-	// GitHub Enterprise instance or a future API version restores it). Without it we can
-	// only report that a push happened, not what was in it.
-	var headline, more string
-	if len(p.Commits) > 0 {
-		headline = firstLine(p.Commits[len(p.Commits)-1].Message)
-		if p.Size > 1 {
-			more = " (+" + strconv.Itoa(p.Size-1) + " more)"
+	for i := 1; i < len(out); i++ {
+		if out[i].At.Before(out[i-1].At) {
+			out[i].At = out[i-1].At
 		}
 	}
+	return out
+}
 
-	link := "https://github.com/" + ev.Repo.Name + "/commit/" + p.Head
-	if p.Before != "" && p.Before != p.Head && p.Size != 1 {
-		link = "https://github.com/" + ev.Repo.Name + "/compare/" + p.Before + "..." + p.Head
+// webhookPush turns a push webhook delivery into one announcement per commit it carries
+// (GitHub lists up to 20, oldest first). Events API pushes carry no commit list and are
+// skipped: branch polling announces those in real time.
+func webhookPush(ev RawEvent) []Announcement {
+	var p struct {
+		Ref     string `json:"ref"`
+		Commits []struct {
+			ID        string    `json:"id"`
+			Message   string    `json:"message"`
+			Timestamp time.Time `json:"timestamp"`
+			Author    struct {
+				Name     string `json:"name"`
+				Username string `json:"username"`
+			} `json:"author"`
+		} `json:"commits"`
 	}
-	shortSHA := p.Head
-	if len(shortSHA) > 7 {
-		shortSHA = shortSHA[:7]
+	if json.Unmarshal(ev.Payload, &p) != nil {
+		return nil
 	}
-	ann := Announcement{
-		RepoFullName: ev.Repo.Name,
-		Kind:         "push",
-		RefID:        shortSHA,
-		Link:         link,
-		Message:      formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, headline, more, link, shortSHA),
+	branch, ok := strings.CutPrefix(p.Ref, "refs/heads/")
+	if !ok {
+		return nil
 	}
-	if headline == "" {
-		ann.HeadSHA = p.Head
-		ann.Enrich = func(title string) string {
-			return formatPush(ev.Repo.Name, ev.Actor.Login, branch, p.Size, title, "", link, shortSHA)
+	var out []Announcement
+	for _, c := range p.Commits {
+		if c.ID == "" { // an Events API commit list (key "sha"): not a webhook
+			continue
 		}
+		who := c.Author.Username
+		if who == "" {
+			who = c.Author.Name
+		}
+		if who == "" {
+			who = ev.Actor.Login
+		}
+		at := c.Timestamp
+		if at.IsZero() {
+			at = ev.CreatedAt
+		}
+		out = append(out, commitAnnouncement(ev.Repo.Name, who, branch, c.ID, c.Message, at))
 	}
-	return ann, true
+	return out
 }
 
 type pullRequestPayload struct {
@@ -303,64 +332,15 @@ func extractDelete(ev RawEvent, meta RepoMeta) (Announcement, bool) {
 	}, true
 }
 
-// CollapseForBroadcast reduces the announcements gathered from one poll cycle to at most
-// one line per event kind: the most recent item of that kind, noting how many more were
-// folded in. Without this, a burst of activity (several pushes during one dev session, or
-// the one-time catch-up when a repo is first tracked) would flood the channel with one
-// line per raw event. anns must be ordered oldest-to-newest.
-func CollapseForBroadcast(anns []Announcement) []Announcement {
-	type group struct {
-		latest Announcement
-		at     int // index of latest in anns, so lines come out in the order of what they show
-		count  int
-	}
-	groups := make(map[string]*group, 3)
-	for i, ann := range anns {
-		g, ok := groups[ann.Kind]
-		if !ok {
-			g = &group{}
-			groups[ann.Kind] = g
-		}
-		g.latest, g.at = ann, i // oldest-to-newest input means the last write is the latest
-		g.count++
-	}
+// maxTitle bounds the title part of a line: a pasted essay of a commit message would
+// otherwise wrap over many IRC lines.
+const maxTitle = 150
 
-	// Order by the shown (latest) event, not by when the kind first appeared: otherwise an old
-	// release prints after a newer push just because a push was seen earlier in the window.
-	sorted := make([]*group, 0, len(groups))
-	for _, g := range groups {
-		sorted = append(sorted, g)
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].at < sorted[j].at })
-
-	out := make([]Announcement, 0, len(sorted))
-	for _, g := range sorted {
-		ann := g.latest
-		if g.count > 1 {
-			ann.Message += fmt.Sprintf(" (+%d more %s)", g.count-1, kindLabel(ann.Kind))
-		}
-		out = append(out, ann)
-	}
-	return out
-}
-
-func kindLabel(kind string) string {
-	switch kind {
-	case "push":
-		return "pushes"
-	case "pull_request":
-		return "PR updates"
-	case "release":
-		return "releases"
-	case "issues":
-		return "issues"
-	case "create":
-		return "refs created"
-	case "delete":
-		return "refs deleted"
-	default:
-		return kind
-	}
+	return s
 }
 
 func firstLine(s string) string {
